@@ -1,0 +1,36 @@
+.shell-main {
+  width: min(100%, var(--wp-page-max));
+  margin-inline: auto;
+  padding: var(--wp-space-4);
+}
+
+@media (min-width: 768px) {
+  .shell-main {
+    padding: var(--wp-space-6);
+  }
+}
+
+@media (min-width: 1280px) {
+  .shell-main {
+    padding: var(--wp-space-8);
+  }
+}
+
+.affiliate-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wp-space-2);
+  margin-bottom: var(--wp-space-4);
+}
+
+.affiliate-nav a {
+  text-decoration: none;
+  padding: var(--wp-space-2) var(--wp-space-3);
+  border-radius: var(--wp-radius-md);
+  border: 1px solid var(--wp-color-border);
+}
+
+.affiliate-nav a[aria-current='page'] {
+  background: var(--wp-color-surface-muted);
+  font-weight: 600;
+}

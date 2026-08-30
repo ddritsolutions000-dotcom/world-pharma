@@ -1,0 +1,30 @@
+{
+  "name": "web-lab",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-lab",
+  "projectType": "application",
+  "tags": ["type:app", "scope:lab"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-lab dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-lab",
+        "env": { "NODE_ENV": "production" }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-lab/tsconfig.json"
+      }
+    }
+  }
+}

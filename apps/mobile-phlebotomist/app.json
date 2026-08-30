@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "World Pharma Phlebotomist",
+    "slug": "world-pharma-phlebotomist",
+    "scheme": "worldpharmaphlebotomist",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android"]
+  }
+}

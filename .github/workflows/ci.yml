@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_ENV: test
+  CI: 'true'
+  DATABASE_URL: postgresql://worldpharma:worldpharma@127.0.0.1:5432/worldpharma?schema=public
+  REDIS_URL: redis://127.0.0.1:6379
+  JWT_ACCESS_SECRET: ci-access-secret-must-be-32-chars-min
+  OTP_PEPPER: test-otp-pepper-must-be-32-chars-minx
+  JWT_ISSUER: world-pharma
+  CORS_ALLOWED_ORIGINS: http://localhost:3000
+  AUTH_DEV_REVEAL_OTP: 'false'
+  GIT_SHA: ${{ github.sha }}
+  APP_VERSION: '0.0.0'
+
+jobs:
+  ci:
+    name: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: worldpharma
+          POSTGRES_PASSWORD: worldpharma
+          POSTGRES_DB: worldpharma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U worldpharma -d worldpharma"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma validate
+        run: pnpm prisma:validate
+
+      - name: Prisma generate
+        run: pnpm prisma:generate
+
+      - name: Migration integrity (schema vs migrations)
+        run: node scripts/ci/check-migrations.mjs
+
+      - name: Apply migrations to CI database
+        run: pnpm prisma migrate deploy --schema packages/database/prisma/schema.prisma
+
+      - name: Lint
+        run: pnpm exec nx run-many -t lint --skip-nx-cache
+
+      - name: Typecheck
+        run: pnpm exec nx run-many -t typecheck --skip-nx-cache
+
+      - name: Test with coverage
+        run: pnpm exec nx run-many -t test --skip-nx-cache --coverage --coverageReporters=text --coverageReporters=text-summary
+
+      - name: Build API
+        run: pnpm exec nx build api --skip-nx-cache
+
+      - name: Build design-system playground
+        run: pnpm exec nx build ds-web --skip-nx-cache
+
+      - name: Build customer web shell
+        run: pnpm exec nx build web-customer --skip-nx-cache
+
+      - name: Build admin web shell
+        run: pnpm exec nx build web-admin --skip-nx-cache
+
+      - name: Typecheck mobile shell
+        run: pnpm exec nx typecheck mobile --skip-nx-cache
+
+      - name: Redis 7 probe
+        run: |
+          version="$(redis-cli -h 127.0.0.1 -p 6379 INFO server | sed -n 's/^redis_version://p' | tr -d '\r')"
+          echo "redis_version=${version}"
+          echo "${version}" | grep -E '^7\.'
+
+      - name: Dependency audit
+        run: node scripts/ci/audit.mjs
+
+      - name: Secret scan
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 detect --source=/repo --verbose --no-git --config /repo/.gitleaks.toml

@@ -1,0 +1,3 @@
+-- R9-E: PRESCRIPTION_STRUCTURED enum (separate txn for PG enum safety).
+
+ALTER TYPE "HealthArtifactType" ADD VALUE IF NOT EXISTS 'PRESCRIPTION_STRUCTURED';

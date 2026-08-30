@@ -1,0 +1,32 @@
+.admin-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.admin-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.admin-main {
+  flex: 1;
+  padding: var(--wp-space-4);
+}
+
+@media (min-width: 768px) {
+  .admin-content {
+    flex-direction: row;
+  }
+
+  .admin-main {
+    padding: var(--wp-space-6);
+  }
+}
+
+@media (max-width: 767px) {
+  .wp-nav-side {
+    width: 100%;
+  }
+}

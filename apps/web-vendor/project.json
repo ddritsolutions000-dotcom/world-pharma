@@ -1,0 +1,30 @@
+{
+  "name": "web-vendor",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-vendor",
+  "projectType": "application",
+  "tags": ["type:app", "scope:vendor"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-vendor dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-vendor",
+        "env": { "NODE_ENV": "production" }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-vendor/tsconfig.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "web-affiliate",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-affiliate",
+  "projectType": "application",
+  "tags": ["type:app", "scope:affiliate"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-affiliate dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-affiliate",
+        "env": {
+          "NODE_ENV": "production"
+        }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-affiliate/tsconfig.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+# compiled
+dist
+tmp
+out-tsc
+coverage
+.next
+tmp-audit*.json
+
+# deps
+node_modules
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# prisma generated (client lives in node_modules)
+packages/database/src/generated
+
+# docker volumes (if ever bind-mounted into repo)
+data/postgres
+data/redis
+var/
+
+# nx
+.nx/cache
+.nx/workspace-data
+.nx/migrate-runs
+
+# logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log
+
+# IDE
+.idea
+.project
+.classpath
+*.sublime-workspace
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+Thumbs.db

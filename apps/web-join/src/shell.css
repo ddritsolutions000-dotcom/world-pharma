@@ -1,0 +1,11 @@
+.shell-main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.wp-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}

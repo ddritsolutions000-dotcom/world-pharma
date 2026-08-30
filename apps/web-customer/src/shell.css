@@ -1,0 +1,17 @@
+.shell-main {
+  width: min(100%, var(--wp-page-max));
+  margin-inline: auto;
+  padding: var(--wp-space-4);
+}
+
+@media (min-width: 768px) {
+  .shell-main {
+    padding: var(--wp-space-6);
+  }
+}
+
+@media (min-width: 1280px) {
+  .shell-main {
+    padding: var(--wp-space-8);
+  }
+}

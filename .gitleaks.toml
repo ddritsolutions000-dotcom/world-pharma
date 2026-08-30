@@ -1,0 +1,17 @@
+title = "world-pharma"
+
+[allowlist]
+description = "Local placeholders and lockfiles — not production secrets"
+paths = [
+  '''\.env$''',
+  '''\.env\.example$''',
+  '''pnpm-lock\.yaml$''',
+  '''scripts/ci/known-advisories\.json$''',
+  '''tmp-audit.*\.json$''',
+]
+regexes = [
+  '''local-dev-access-secret-change-me-32ch''',
+  '''test-otp-pepper-must-be-32-chars-minx''',
+  '''ci-access-secret-must-be-32-chars-min''',
+  '''test-access-secret-must-be-32-chars-min''',
+]

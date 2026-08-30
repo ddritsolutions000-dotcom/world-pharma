@@ -1,0 +1,63 @@
+# Local data plane only. Does not start the API by default.
+# Redis 7 is required for BullMQ. Host Redis 3.x on 6379 is never used.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: world-pharma-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-worldpharma}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-worldpharma}
+      POSTGRES_DB: ${POSTGRES_DB:-worldpharma}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - world-pharma-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-worldpharma} -d ${POSTGRES_DB:-worldpharma}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: world-pharma-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-56379}:6379"
+    volumes:
+      - world-pharma-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: world-pharma-api
+    profiles: ['app']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-worldpharma}:${POSTGRES_PASSWORD:-worldpharma}@postgres:5432/${POSTGRES_DB:-worldpharma}?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-dev-access-secret-change-me-32ch}
+      OTP_PEPPER: ${OTP_PEPPER:-test-otp-pepper-must-be-32-chars-minx}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      AUTH_DEV_REVEAL_OTP: 'false'
+      GIT_SHA: ${GIT_SHA:-local}
+      APP_VERSION: ${APP_VERSION:-0.0.0}
+    ports:
+      - "${API_PORT:-4000}:4000"
+
+volumes:
+  world-pharma-pgdata:
+  world-pharma-redisdata:

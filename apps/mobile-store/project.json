@@ -1,0 +1,13 @@
+{
+  "name": "mobile-store",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/mobile-store/src",
+  "projectType": "application",
+  "tags": ["type:app", "scope:store"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "tsc --noEmit -p apps/mobile-store/tsconfig.json" }
+    }
+  }
+}

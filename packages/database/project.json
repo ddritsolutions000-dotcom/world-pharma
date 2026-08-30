@@ -1,0 +1,33 @@
+{
+  "name": "database",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/database/src",
+  "projectType": "library",
+  "tags": ["type:lib", "scope:data"],
+  "targets": {
+    "prisma-generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "prisma generate --schema packages/database/prisma/schema.prisma"
+      }
+    },
+    "prisma-validate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "prisma validate --schema packages/database/prisma/schema.prisma"
+      }
+    },
+    "prisma-migrate-status": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "prisma migrate status --schema packages/database/prisma/schema.prisma"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p packages/database/tsconfig.json"
+      }
+    }
+  }
+}

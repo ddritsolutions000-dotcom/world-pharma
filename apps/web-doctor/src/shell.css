@@ -1,0 +1,26 @@
+.doctor-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.doctor-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.doctor-main {
+  flex: 1;
+  padding: var(--wp-space-4);
+}
+
+@media (min-width: 768px) {
+  .doctor-content {
+    flex-direction: row;
+  }
+
+  .doctor-main {
+    padding: var(--wp-space-6);
+  }
+}

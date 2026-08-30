@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "World Pharma Store",
+    "slug": "world-pharma-store",
+    "scheme": "worldpharmastore",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.worldpharma.store" },
+    "android": { "package": "com.worldpharma.store" }
+  }
+}

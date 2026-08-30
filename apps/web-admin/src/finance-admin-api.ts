@@ -1,0 +1,198 @@
+'use client';
+
+import { apiBaseUrl } from '@world-pharma/shell-core';
+
+export type FinanceBreakAction = {
+  id: string;
+  action: string;
+  actor_person_id: string | null;
+  note: string | null;
+  idempotency_key: string;
+  created_at: string;
+};
+
+export type FinanceBreakRow = {
+  id: string;
+  domain: string;
+  status: string;
+  workflow_status: string;
+  break_type: string;
+  classification: string | null;
+  source_kind: string | null;
+  source_ref: string | null;
+  country_id: string | null;
+  internal_ref: string | null;
+  external_ref: string | null;
+  amount_minor: string | null;
+  currency: string | null;
+  detail: string;
+  investigated_by: string | null;
+  investigated_at: string | null;
+  resolution_note: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  close_note: string | null;
+  closed_by: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  sandbox: boolean;
+  live_psp: boolean;
+  actions?: FinanceBreakAction[];
+};
+
+export type FinanceBreakListQuery = {
+  country_id?: string;
+  workflow_status?: string;
+  classification?: string;
+  source_kind?: string;
+  domain?: string;
+  include_closed?: boolean;
+  limit?: number;
+};
+
+export const BREAK_WORKFLOW_STATUSES = ['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED'] as const;
+
+export const BREAK_SOURCE_KINDS = [
+  'SETTLEMENT_IMPORT',
+  'PAYOUT',
+  'PSP',
+  'CARRIER',
+  'MANUAL',
+] as const;
+
+function breaksUrl(query: FinanceBreakListQuery = {}): string {
+  const params = new URLSearchParams();
+  if (query.country_id) {
+    params.set('country_id', query.country_id);
+  }
+  if (query.workflow_status) {
+    params.set('workflow_status', query.workflow_status);
+  }
+  if (query.classification) {
+    params.set('classification', query.classification);
+  }
+  if (query.source_kind) {
+    params.set('source_kind', query.source_kind);
+  }
+  if (query.domain) {
+    params.set('domain', query.domain);
+  }
+  if (query.include_closed) {
+    params.set('include_closed', 'true');
+  }
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit));
+  }
+  const qs = params.toString();
+  return `${apiBaseUrl()}/api/v1/admin/finance/breaks${qs ? `?${qs}` : ''}`;
+}
+
+export async function fetchFinanceBreaks(token: string, query: FinanceBreakListQuery = {}) {
+  return fetch(breaksUrl(query), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function fetchFinanceBreakDetail(token: string, breakId: string) {
+  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function investigateFinanceBreak(
+  token: string,
+  breakId: string,
+  idempotencyKey: string,
+  note?: string,
+) {
+  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}/investigate`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idempotency_key: idempotencyKey, note }),
+  });
+}
+
+export async function resolveFinanceBreak(
+  token: string,
+  breakId: string,
+  idempotencyKey: string,
+  note?: string,
+) {
+  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}/resolve`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idempotency_key: idempotencyKey, note }),
+  });
+}
+
+export async function closeFinanceBreak(
+  token: string,
+  breakId: string,
+  idempotencyKey: string,
+  note?: string,
+) {
+  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}/close`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idempotency_key: idempotencyKey, note }),
+  });
+}
+
+export type FinanceScheduleRow = {
+  id: string;
+  country_id: string;
+  country_iso2: string | null;
+  provider_code: string;
+  currency: string;
+  enabled: boolean;
+  worker_poll_ms: number;
+  last_run: { status: string; completed_at: string | null } | null;
+};
+
+export async function fetchFinanceSchedules(token: string, countryId?: string) {
+  const params = new URLSearchParams();
+  if (countryId) {
+    params.set('country_id', countryId);
+  }
+  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-schedules?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res;
+}
+
+export async function createFinanceSchedule(
+  token: string,
+  body: { country_id: string; provider_code: string; currency: string; enabled?: boolean },
+) {
+  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-schedules`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res;
+}
+
+export async function updateFinanceSchedule(
+  token: string,
+  scheduleId: string,
+  body: { currency?: string; enabled?: boolean },
+) {
+  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-schedules/${scheduleId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res;
+}
+
+export async function fetchFinanceWorkerRuns(token: string, countryId?: string) {
+  const params = new URLSearchParams();
+  if (countryId) {
+    params.set('country_id', countryId);
+  }
+  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-worker/runs?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res;
+}

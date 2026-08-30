@@ -1,0 +1,32 @@
+{
+  "name": "ds-web",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/ds-web",
+  "projectType": "application",
+  "tags": ["type:app", "scope:ds"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/ds-web dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/ds-web",
+        "env": {
+          "NODE_ENV": "production"
+        }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/ds-web/tsconfig.json"
+      }
+    }
+  }
+}

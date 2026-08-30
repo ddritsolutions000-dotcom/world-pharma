@@ -1,0 +1,16 @@
+.shell-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.wp-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.path-body {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f8f6ff 0%, #f0eef8 100%);
+}

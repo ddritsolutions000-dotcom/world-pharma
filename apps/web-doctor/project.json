@@ -1,0 +1,32 @@
+{
+  "name": "web-doctor",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-doctor",
+  "projectType": "application",
+  "tags": ["type:app", "scope:doctor"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-doctor dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-doctor",
+        "env": {
+          "NODE_ENV": "production"
+        }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-doctor/tsconfig.json"
+      }
+    }
+  }
+}

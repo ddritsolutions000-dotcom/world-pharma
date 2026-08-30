@@ -1,0 +1,32 @@
+{
+  "name": "web-customer",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-customer",
+  "projectType": "application",
+  "tags": ["type:app", "scope:customer"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-customer dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-customer",
+        "env": {
+          "NODE_ENV": "production"
+        }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-customer/tsconfig.json"
+      }
+    }
+  }
+}

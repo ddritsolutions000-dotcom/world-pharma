@@ -1,0 +1,20 @@
+{
+  "name": "mobile-doctor",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/mobile-doctor/src",
+  "projectType": "application",
+  "tags": ["type:app", "scope:doctor"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/mobile-doctor/tsconfig.json"
+      }
+    },
+    "test": {
+      "options": {
+        "passWithNoTests": true
+      }
+    }
+  }
+}

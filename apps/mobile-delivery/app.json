@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "World Pharma Delivery",
+    "slug": "world-pharma-delivery",
+    "scheme": "worldpharmadelivery",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.worldpharma.delivery" },
+    "android": { "package": "com.worldpharma.delivery" }
+  }
+}

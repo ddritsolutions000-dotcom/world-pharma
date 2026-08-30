@@ -1,0 +1,30 @@
+{
+  "name": "web-radiologist",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-radiologist",
+  "projectType": "application",
+  "tags": ["type:app", "scope:radiologist"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-radiologist dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-radiologist",
+        "env": { "NODE_ENV": "production" }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-radiologist/tsconfig.json"
+      }
+    }
+  }
+}

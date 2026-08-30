@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.github
+.nx
+.next
+apps/ds-web/.next
+coverage
+.env
+.env.local
+*.md
+docs
+tmp
+data
+var

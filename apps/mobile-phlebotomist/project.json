@@ -1,0 +1,13 @@
+{
+  "name": "mobile-phlebotomist",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/mobile-phlebotomist/src",
+  "projectType": "application",
+  "tags": ["type:app", "scope:phlebotomist"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "tsc --noEmit -p apps/mobile-phlebotomist/tsconfig.json" }
+    }
+  }
+}

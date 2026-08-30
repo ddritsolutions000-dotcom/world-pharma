@@ -1,0 +1,93 @@
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../app/prisma.service';
+import { Errors } from '../common/problem';
+import { PolicyResolver } from '../policy/resolver';
+
+export type RouteInput = {
+  countryIso2: string;
+  originIso2: string;
+  destIso2: string;
+  international: boolean;
+  rx: boolean;
+  temperature: string;
+  serviceLevel: string;
+  excludeCarrierId?: string | null;
+};
+
+@Injectable()
+export class CarrierRouter {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policy: PolicyResolver,
+  ) {}
+
+  async choose(input: RouteInput) {
+    const pack = await this.policy.resolvePublished(input.countryIso2);
+    if (!pack) {
+      throw Errors.problem(
+        409,
+        'SHIPPING_POLICY_DENIED',
+        'Shipping denied',
+        'LEGAL/COMPLIANCE REVIEW REQUIRED: Country Policy is missing. Shipping fails closed.',
+      );
+    }
+    const shipping = (pack.document as { shipping?: { domestic?: boolean; international?: boolean; rx?: boolean } }).shipping;
+    if (input.international) {
+      if (shipping?.international !== true) {
+        throw Errors.problem(
+          409,
+          'SHIPPING_POLICY_DENIED',
+          'Shipping denied',
+          'LEGAL/COMPLIANCE REVIEW REQUIRED: international shipping is not enabled in Country Policy.',
+        );
+      }
+    } else if (shipping?.domestic !== true) {
+      throw Errors.problem(
+        409,
+        'SHIPPING_POLICY_DENIED',
+        'Shipping denied',
+        'LEGAL/COMPLIANCE REVIEW REQUIRED: domestic shipping is not enabled in Country Policy.',
+      );
+    }
+    if (input.rx && shipping?.rx !== true) {
+      throw Errors.problem(409, 'REGULATED_SHIP_DENIED', 'Regulated shipping denied', 'LEGAL/COMPLIANCE REVIEW REQUIRED.');
+    }
+    const carriers = await this.prisma.carrier.findMany({
+      where: { active: true, environment: 'sandbox' },
+      include: { accounts: true, capabilities: true, coverages: true, health: true, services: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const ranked = carriers.filter((carrier) => {
+      if (input.excludeCarrierId && carrier.id === input.excludeCarrierId) {
+        return false;
+      }
+      if (carrier.health?.circuitOpen) {
+        return false;
+      }
+      const cov = carrier.coverages.some(
+        (row) =>
+          row.active &&
+          (row.originIso2 === '*' || row.originIso2 === input.originIso2) &&
+          (row.destIso2 === '*' || row.destIso2 === input.destIso2) &&
+          (!input.international || row.international),
+      );
+      const caps = new Set(carrier.capabilities.filter((c) => c.enabled).map((c) => c.name));
+      if (input.temperature !== 'AMBIENT' && !caps.has('temperature_controlled')) {
+        return false;
+      }
+      return cov && caps.has('create_shipment');
+    });
+    ranked.sort((a, b) => (a.accounts[0]?.priority ?? 100) - (b.accounts[0]?.priority ?? 100));
+    const chosen = ranked[0];
+    if (!chosen) {
+      throw Errors.problem(409, 'NO_CARRIER', 'No carrier', 'No sandbox carrier matches this shipment.');
+    }
+    return {
+      carrierId: chosen.id,
+      carrierCode: chosen.code,
+      accountId: chosen.accounts[0]?.id ?? null,
+      reason: 'priority_sandbox',
+      candidates: ranked.map((c) => c.code),
+    };
+  }
+}

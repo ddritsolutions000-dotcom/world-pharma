@@ -1,0 +1,30 @@
+{
+  "name": "web-radiology",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-radiology",
+  "projectType": "application",
+  "tags": ["type:app", "scope:radiology"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-radiology dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-radiology",
+        "env": { "NODE_ENV": "production" }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-radiology/tsconfig.json"
+      }
+    }
+  }
+}

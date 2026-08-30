@@ -1,0 +1,98 @@
+[
+  {
+    "id": "GHSA-ggr8-5vv4-36mx",
+    "module": "deepmerge-ts",
+    "severity": "high",
+    "path": "prisma -> @prisma/config -> deepmerge-ts",
+    "reason": "Transitive via Prisma 6 CLI config. No Prisma 6.x line advertises a patched deepmerge-ts. Forcing 8.x is an untested CLI override.",
+    "runtime_reachable": false,
+    "mitigation": "Do not feed untrusted objects to Prisma CLI config. Re-check on Prisma 6.x/7 upgrades.",
+    "owner": "eng",
+    "release_blocker": "review-before-prod",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-qx2v-qp2m-jg93",
+    "module": "postcss",
+    "severity": "moderate",
+    "path": "next -> postcss",
+    "reason": "Bundled with Next 15.5.24. A Next minor bump is required; not done in this task.",
+    "runtime_reachable": false,
+    "mitigation": "ds-web is a local playground, not a public CSS processor.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-6g55-p6wh-862q",
+    "module": "postcss",
+    "severity": "high",
+    "path": "next -> postcss",
+    "reason": "Same Next 15.5.24 pin.",
+    "runtime_reachable": false,
+    "mitigation": "Do not pass untrusted CSS through the playground.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-fxqj-rqcc-2cmp",
+    "module": "postcss",
+    "severity": "moderate",
+    "path": "next -> postcss",
+    "reason": "Incomplete PostCSS sourceMappingURL fix; still via Next 15.5.24.",
+    "runtime_reachable": false,
+    "mitigation": "Same as other PostCSS items.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-r28c-9q8g-f849",
+    "module": "postcss",
+    "severity": "high",
+    "path": "next -> postcss",
+    "reason": "PostCSS path traversal via sourceMappingURL; still via Next 15.5.24.",
+    "runtime_reachable": false,
+    "mitigation": "Same as other PostCSS items.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-rgw5-rvv9-x895",
+    "module": "brace-expansion",
+    "severity": "high",
+    "path": "nx -> brace-expansion",
+    "reason": "Nx 23.1.1 CLI/devtool path. Not the API request path.",
+    "runtime_reachable": false,
+    "mitigation": "Keep Nx 23.1.1. Track Nx patch releases.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-w3rx-r6r6-pgpr",
+    "module": "image-size",
+    "severity": "high",
+    "path": "@nx/webpack -> less; react-native metro",
+    "reason": "Dev/build toolchain. Advisory lists no usable patched version.",
+    "runtime_reachable": false,
+    "mitigation": "Do not parse untrusted images in Metro/Less.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  },
+  {
+    "id": "GHSA-5p2g-fcmc-qvqq",
+    "module": "image-size",
+    "severity": "high",
+    "path": "@nx/webpack -> less; react-native metro",
+    "reason": "Same image-size toolchain issue (JXL/HEIF parsers).",
+    "runtime_reachable": false,
+    "mitigation": "Same as GHSA-w3rx-r6r6-pgpr.",
+    "owner": "eng",
+    "release_blocker": "no",
+    "safe_upgrade_now": false
+  }
+]

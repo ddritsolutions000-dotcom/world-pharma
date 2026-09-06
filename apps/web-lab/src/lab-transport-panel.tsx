@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card, EmptyState, Heading, LoadingState, Text } from '@world-pharma/ui-kit/web';
 import { fetchLabTransport, receiveLabSample, type LabTransportRow } from './lab-api';
+import { labOpsStatusLabel } from './lab-ops-labels';
 
 export function LabTransportPanel({
   organizationId,
@@ -15,6 +16,7 @@ export function LabTransportPanel({
 }) {
   const [rows, setRows] = useState<LabTransportRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,17 +48,22 @@ export function LabTransportPanel({
       {rows.map((row) => (
         <Card key={row.id}>
           <Text>
-            {row.test_title} · {row.coc_status ?? row.status}
+            {row.test_title} · {labOpsStatusLabel(row.coc_status ?? row.status)}
           </Text>
-          <Text size="caption">Job {row.status} · barcode {row.container_barcode ?? '—'}</Text>
+          <Text size="caption">Job {labOpsStatusLabel(row.status)} · barcode {row.container_barcode ?? '—'}</Text>
           {row.lab_sample_id && row.coc_status === 'HANDED_OVER' ? (
             <Button
               size="sm"
-              onClick={() =>
-                void receiveLabSample(token, organizationId, row.lab_sample_id!, `recv-${row.id}`).then(load)
-              }
+              disabled={busy === row.id}
+              onClick={() => {
+                setBusy(row.id);
+                void receiveLabSample(token, organizationId, row.lab_sample_id!, `recv-${row.id}`)
+                  .then(load)
+                  .catch(onError)
+                  .finally(() => setBusy(null));
+              }}
             >
-              Receive at lab (on-site)
+              {busy === row.id ? 'Receiving…' : 'Receive at lab (on-site)'}
             </Button>
           ) : null}
         </Card>

@@ -73,3 +73,35 @@ export function failJob(token: string, jobId: string, exceptionCode: string) {
     body: JSON.stringify({ exception_code: exceptionCode }),
   });
 }
+
+export type PhlebotomistSupportTicket = {
+  id: string;
+  subject: string;
+  status: string;
+};
+
+export function fetchPhlebotomistSupportTickets(token: string) {
+  return call<{ data: PhlebotomistSupportTicket[] }>('api/v1/support/tickets', token);
+}
+
+export function createPhlebotomistSupportTicket(token: string, input: { subject: string; body: string }) {
+  return call('api/v1/support/tickets', token, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export type PhlebotomistInboxItem = {
+  id: string;
+  title: string;
+  body: string;
+  read: boolean;
+};
+
+export function fetchPhlebotomistInbox(token: string) {
+  return call<{ data: PhlebotomistInboxItem[] }>('api/v1/me/notifications/inbox', token);
+}
+
+export function markPhlebotomistInboxRead(token: string, id: string) {
+  return call(`api/v1/me/notifications/inbox/${id}/read`, token, { method: 'POST' });
+}

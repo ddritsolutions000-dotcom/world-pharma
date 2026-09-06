@@ -4,8 +4,12 @@ import { RedisService } from '../app/redis.service';
 import { AuthController } from './auth.controller';
 import { CompanyAuthorityController } from './company-authority.controller';
 import { SecurityEventsController } from './security-events.controller';
+import { AdminStaffController, SessionController } from './admin-staff.controller';
+import { MfaController } from './mfa.controller';
 import { CompanyAuthorityService } from './company-authority.service';
+import { AdminStaffService } from './admin-staff.service';
 import { AuthService } from './auth.service';
+import { MfaService } from './mfa.service';
 import { ConsoleOtpAdapter } from './console-otp.adapter';
 import { AudienceGuard } from './audience.guard';
 import { JwtAuthGuard } from './jwt.guard';
@@ -21,11 +25,20 @@ import { TokenService } from './token.service';
 
 @Module({
   imports: [EventsModule, MetricsModule],
-  controllers: [AuthController, CompanyAuthorityController, SecurityEventsController],
+  controllers: [
+    AuthController,
+    MfaController,
+    SessionController,
+    AdminStaffController,
+    CompanyAuthorityController,
+    SecurityEventsController,
+  ],
   providers: [
     PrismaService,
     RedisService,
     AuthService,
+    MfaService,
+    AdminStaffService,
     SessionService,
     TokenService,
     RbacService,
@@ -45,6 +58,10 @@ import { TokenService } from './token.service';
     TokenService,
     SecurityEventsService,
     CompanyAuthorityService,
+    AdminStaffService,
+    MfaService,
+    RateLimitService,
+    AuthService,
   ],
 })
 export class IdentityModule {}

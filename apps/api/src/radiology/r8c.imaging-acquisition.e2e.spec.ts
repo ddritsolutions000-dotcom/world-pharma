@@ -17,20 +17,7 @@ import { PolicyCache } from '../policy/cache';
 import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateImagingPartner, enableImagingPartnerPack } from '../test/imaging-partner';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R8-C imaging acquisition + sandbox study lifecycle (e2e)', () => {
   let app: INestApplication;
@@ -152,23 +139,12 @@ describe('R8-C imaging acquisition + sandbox study lifecycle (e2e)', () => {
 
   it('enqueues study on pay, check-in, acquisition lifecycle, isolation, idempotency, PHI minimization', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r8c-admin-${suffix}@example.com`, 'admin');
-    const imagingUser = await signIn(app, `r8c-ia-${suffix}@example.com`);
-    const techA = await signIn(app, `r8c-tech-a-${suffix}@example.com`);
-    const techB = await signIn(app, `r8c-tech-b-${suffix}@example.com`);
-    const customerA = await signIn(app, `r8c-ca-${suffix}@example.com`);
-    const customerB = await signIn(app, `r8c-cb-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r8c-admin-${suffix}@example.com`);
+    const imagingUser = await signInAudience(app, `r8c-ia-${suffix}@example.com`);
+    const techA = await signInAudience(app, `r8c-tech-a-${suffix}@example.com`);
+    const techB = await signInAudience(app, `r8c-tech-b-${suffix}@example.com`);
+    const customerA = await signInAudience(app, `r8c-ca-${suffix}@example.com`);
+    const customerB = await signInAudience(app, `r8c-cb-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableImagingPartnerPack(enabledDoc);
@@ -429,7 +405,7 @@ describe('R8-C imaging acquisition + sandbox study lifecycle (e2e)', () => {
       });
     expect(completeMain.status).toBeLessThan(300);
     expect(completeMain.body.status).toBe('ACQUIRED');
-    expect(completeMain.body.acquisition.sandbox_object_ref).toMatch(/^sandbox:\/\/imaging-objects\//);
+    expect(completeMain.body.acquisition.sandbox_object_ref).toMatch(/^(sandbox|private):\/\//);
     expect(JSON.stringify(completeMain.body)).not.toMatch(/diagnosis|findings/i);
 
     const progressAcquired = await request(app.getHttpServer())

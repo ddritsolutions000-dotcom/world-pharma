@@ -19,6 +19,7 @@ import { PolicyCache } from '../policy/cache';
 import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateLabPartner, enableLabPartnerPack } from '../test/lab-partner';
+import { bootstrapSuperAdminByEmail } from '../test/sign-in';
 
 async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
   const requested = await request(app.getHttpServer())
@@ -160,24 +161,13 @@ describe('R9-A health record kernel (e2e)', () => {
   }
 
   async function publishLabReportForCustomer(suffix: string) {
-    const admin = await signIn(app, `r9a-admin-${suffix}@example.com`, 'admin');
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r9a-admin-${suffix}@example.com`);
     const labUser = await signIn(app, `r9a-lab-${suffix}@example.com`);
     const labStaff = await signIn(app, `r9a-staff-${suffix}@example.com`);
     const pathologist = await signIn(app, `r9a-path-${suffix}@example.com`);
     const customerA = await signIn(app, `r9a-ca-${suffix}@example.com`);
     const customerB = await signIn(app, `r9a-cb-${suffix}@example.com`);
     const rider = await signIn(app, `r9a-rider-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
 
     const enabledDoc = emptyPolicyDocument();
     enableLabPartnerPack(enabledDoc, { home: true, center: true });

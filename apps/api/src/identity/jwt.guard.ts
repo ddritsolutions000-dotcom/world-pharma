@@ -8,6 +8,7 @@ import { Principal } from './current-principal';
 import { SecurityEventsService } from './security-events.service';
 import { TokenService } from './token.service';
 import { authTenantContext } from '../tenancy/build-tenant-context';
+import { parseCookieHeader, readAccessTokenFromRequest } from './auth-cookies';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -20,12 +21,12 @@ export class JwtAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request & { principal?: Principal }>();
-    const header = request.header('authorization');
-    if (!header?.startsWith('Bearer ')) {
+    const cookies = parseCookieHeader(request.header('cookie'));
+    const token = readAccessTokenFromRequest(request.header('authorization'), cookies);
+    if (!token) {
       this.metrics.increment('auth_failure_total', { reason: 'missing' });
       throw Errors.unauthorized();
     }
-    const token = header.slice('Bearer '.length).trim();
     let claims;
     try {
       claims = this.tokens.verifyAccess(token);

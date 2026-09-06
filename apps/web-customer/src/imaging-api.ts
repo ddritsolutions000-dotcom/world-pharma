@@ -193,16 +193,107 @@ export function fetchImagingProgress(token: string, bookingId: string) {
     progress: string;
     study_status: string | null;
     accession_number: string | null;
+    study_instance_uid?: string | null;
+    modality_code?: string | null;
+    study_description?: string | null;
+    series_count?: number;
+    instance_count?: number;
     slot_starts_at: string | null;
     note: string;
+    viewer_note?: string;
     boundary: {
       acquisition: boolean;
       interpretation: boolean;
       report: boolean;
       dicom: boolean;
       pacs: boolean;
+      viewer?: boolean;
     };
   }>(`/api/v1/me/imaging/bookings/${bookingId}/progress`, { token });
+}
+
+export function fetchImagingStudyMetadata(token: string, bookingId: string) {
+  return call<{
+    imaging_booking_id: string;
+    study_available: boolean;
+    study_instance_uid?: string;
+    accession_number?: string;
+    modality_code?: string | null;
+    study_description?: string | null;
+    study_status?: string;
+    viewer?: {
+      available: boolean;
+      reason: string;
+      certified_diagnostic_workstation?: boolean;
+      mode?: string;
+    };
+    storage?: { sandbox: boolean; production_pacs: boolean; note: string };
+  }>(`/api/v1/me/imaging/bookings/${bookingId}/study`, { token });
+}
+
+export function fetchImagingViewerSession(token: string, bookingId: string) {
+  return call<{
+    imaging_study_id: string;
+    imaging_booking_id: string;
+    study_instance_uid: string;
+    accession_number: string;
+    modality_code: string | null;
+    study_description: string | null;
+    study_date_time: string | null;
+    sandbox: boolean;
+    viewer: {
+      available: boolean;
+      certified_diagnostic_workstation: boolean;
+      note: string;
+      report_separate_from_viewer?: boolean;
+    };
+    series: Array<{
+      series_id: string;
+      series_instance_uid: string;
+      series_number: number;
+      modality_code: string | null;
+      description: string | null;
+      frame_count: number;
+      instance_count: number;
+    }>;
+    capabilities: {
+      zoom: boolean;
+      pan: boolean;
+      rotate: boolean;
+      reset: boolean;
+      fit_to_screen: boolean;
+      series_navigation: boolean;
+      slice_navigation: boolean;
+      fullscreen: boolean;
+    };
+  }>(`/api/v1/me/imaging/bookings/${bookingId}/viewer`, { token });
+}
+
+export async function fetchImagingViewerFrameBlob(
+  token: string,
+  bookingId: string,
+  seriesId: string,
+  frameIndex: number,
+): Promise<Blob> {
+  const headers = new Headers({ Accept: 'image/png', Authorization: `Bearer ${token}` });
+  let res: Response;
+  try {
+    res = await fetch(
+      `${base()}/api/v1/me/imaging/bookings/${bookingId}/viewer/series/${seriesId}/frames/${frameIndex}`,
+      { headers },
+    );
+  } catch {
+    throw new ImagingCustomerApiError('network_failure', 0);
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ImagingCustomerApiError(
+      (body as { detail?: string }).detail ?? 'frame_request_failed',
+      res.status,
+      (body as { code?: string }).code,
+    );
+  }
+  return res.blob();
 }
 
 export function cancelImagingBooking(token: string, id: string) {
@@ -229,6 +320,9 @@ export type ImagingCustomerReport = {
   imaging_booking_id: string;
   imaging_report_id: string;
   accession_number: string | null;
+  study_instance_uid?: string | null;
+  modality_code?: string | null;
+  study_description?: string | null;
   version_number: number;
   published_at: string | null;
   amendment_reason?: string | null;
@@ -240,6 +334,7 @@ export type ImagingCustomerReport = {
     severity_code?: string | null;
   }>;
   sandbox: boolean;
+  viewer?: { available: boolean; reason: string };
   note?: string;
 };
 

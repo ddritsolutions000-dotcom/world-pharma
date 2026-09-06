@@ -7,6 +7,7 @@ import {
 import { uuidv7 } from '@world-pharma/shared';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
+import { RateLimitService } from '../identity/rate-limit.service';
 import { SecurityEventsService } from '../identity/security-events.service';
 import {
   MalwareScanner,
@@ -44,6 +45,7 @@ export class HealthUploadService {
     private readonly scanner: MalwareScanner,
     private readonly timeline: HealthTimelineService,
     private readonly events: SecurityEventsService,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   async uploadDocument(input: {
@@ -68,6 +70,10 @@ export class HealthUploadService {
     }
     if (!input.originalName?.trim()) {
       throw Errors.validation('original_name is required');
+    }
+    const uploadHit = await this.rateLimit.hit(`upload:health:${input.personId}`, 40, 900);
+    if (!uploadHit.allowed) {
+      throw Errors.rateLimited(uploadHit.retryAfter);
     }
 
     const idempotencyKey = input.idempotencyKey?.trim() || undefined;

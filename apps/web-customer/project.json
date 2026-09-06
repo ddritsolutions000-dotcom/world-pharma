@@ -9,7 +9,8 @@
       "continuous": true,
       "executor": "nx:run-commands",
       "options": {
-        "command": "pnpm --filter @world-pharma/web-customer dev"
+        "command": "next dev --port 3000",
+        "cwd": "apps/web-customer"
       }
     },
     "build": {
@@ -26,6 +27,17 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "tsc --noEmit -p apps/web-customer/tsconfig.json"
+      }
+    },
+    "browser-test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node ./node_modules/@playwright/test/cli.js test -c playwright.config.ts",
+        "cwd": "apps/web-customer",
+        "env": {
+          "AUTH_DEV_REVEAL_OTP": "true",
+          "DEV_SANDBOX_SEED": "true"
+        }
       }
     }
   }

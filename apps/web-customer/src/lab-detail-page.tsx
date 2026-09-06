@@ -1,13 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useCountries, useSession } from '@world-pharma/shell-web';
+import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
   FormField,
-  Heading,
   LoadingState,
   NetworkErrorState,
   PermissionDeniedState,
@@ -15,7 +12,6 @@ import {
   Text,
 } from '@world-pharma/ui-kit/web';
 import { fetchAddresses, type CustomerAddress } from './account-api';
-import { CustomerShell } from './customer-shell';
 import {
   createLabBooking,
   fetchLabCatalogItem,
@@ -25,6 +21,10 @@ import {
   payLabBooking,
   type LabCatalogItem,
 } from './lab-api';
+import { formatMoney } from './format-money';
+import { useSelectedCountry } from './use-selected-country';
+import { MgBtn, MgCard, MgBackLink, Page, PageIntro, ServiceHero } from './ui/mg-ui';
+import { showDevTools } from '@world-pharma/shell-web';
 
 function newIdempotencyKey(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -32,13 +32,11 @@ function newIdempotencyKey(prefix: string) {
 
 export function LabDetailScreen({ slug }: { slug: string }) {
   const { session, getAccessToken, signOut, expire } = useSession();
-  const { countries } = useCountries();
+  const { country: selectedCountry } = useSelectedCountry();
   const country =
     (typeof window !== 'undefined'
       ? new URLSearchParams(window.location.search).get('country')
-      : null) ??
-    countries[0]?.iso_alpha2 ??
-    'XX';
+      : null) ?? selectedCountry;
 
   const [item, setItem] = useState<LabCatalogItem | null>(null);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
@@ -53,8 +51,15 @@ export function LabDetailScreen({ slug }: { slug: string }) {
   const [error, setError] = useState<'network' | 'forbidden' | 'notfound' | 'generic' | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
 
-  const offer = item?.offers[0] ?? null;
+  const rankedOffers = useMemo(() => {
+    if (!item) return [];
+    return [...item.offers].sort(
+      (a, b) => Number(a.price?.sell_minor ?? Number.POSITIVE_INFINITY) - Number(b.price?.sell_minor ?? Number.POSITIVE_INFINITY),
+    );
+  }, [item]);
+  const offer = (item?.offers.find((row) => row.id === selectedOfferId) ?? rankedOffers[0]) ?? null;
   const homeOk = offer?.lab_eligibility?.lab_home_enabled ?? true;
   const centerOk = offer?.lab_eligibility?.lab_center_enabled ?? false;
 
@@ -95,7 +100,11 @@ export function LabDetailScreen({ slug }: { slug: string }) {
     try {
       const detail = await fetchLabCatalogItem(token, slug, country);
       setItem(detail);
-      const first = detail.offers[0];
+      const cheapest = [...detail.offers].sort(
+        (a, b) => Number(a.price?.sell_minor ?? Number.POSITIVE_INFINITY) - Number(b.price?.sell_minor ?? Number.POSITIVE_INFINITY),
+      )[0];
+      const first = cheapest ?? detail.offers[0];
+      setSelectedOfferId(first?.id ?? null);
       if (first) {
         const [addrRes, locs, slotRes] = await Promise.all([
           fetchAddresses({ token }),
@@ -145,6 +154,19 @@ export function LabDetailScreen({ slug }: { slug: string }) {
       .catch(() => setSlots([]));
   }, [country, getAccessToken, mode, offer]);
 
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token || !offer) {
+      return;
+    }
+    void fetchLabLocations(token, offer.seller_org_id, country)
+      .then((locs) => {
+        setLocations(locs.data);
+        setLocationId(locs.data[0]?.id ?? '');
+      })
+      .catch(() => setLocations([]));
+  }, [country, getAccessToken, offer]);
+
   const canSubmit = useMemo(() => {
     if (!offer || !slotStarts) {
       return false;
@@ -191,123 +213,138 @@ export function LabDetailScreen({ slug }: { slug: string }) {
     return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
   }
 
+  if (session.status !== 'authenticated') {
+    return (
+      <Page>
+        <MgBackLink href="/lab">← All lab tests</MgBackLink>
+        <ServiceHero
+          kicker="Home collection"
+          title="Book lab test"
+          subtitle="Sign in to schedule home collection or center visit."
+          tone="lab"
+          compact
+        />
+        <PageIntro>
+          <p>Home phlebotomist collection where available. Digital reports appear in your health timeline when ready.</p>
+        </PageIntro>
+        <EmptyState title="Sign in required" description="Login to book this lab test." action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }} />
+      </Page>
+    );
+  }
+
   return (
-    <CustomerShell apiReachable={true} countryLabel={country}>
-      <Button variant="tertiary" size="sm" onClick={() => (window.location.href = '/lab')}>
-        Back to lab catalog
-      </Button>
-      {loading ? <LoadingState label="Loading lab test details…" /> : null}
+    <Page>
+      <MgBackLink href="/lab">← All lab tests</MgBackLink>
+      {loading ? <LoadingState label="Loading lab test" /> : null}
       {error === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} /> : null}
       {error === 'forbidden' ? <PermissionDeniedState /> : null}
       {error === 'notfound' ? (
-        <EmptyState title="Test not found" description="This lab test is unpublished or not bookable here." />
+        <EmptyState title="Test not found" description="This lab test is not available in your area." />
       ) : null}
       {error === 'generic' ? <EmptyState title="Unable to load" description="Try again shortly." /> : null}
       {!loading && !error && item && offer ? (
         <>
-          <Heading level={2}>{item.title}</Heading>
-          <Text tone="secondary">{item.description || 'Commercial catalog description only.'}</Text>
-          <Text size="caption">{item.note}</Text>
-          <Card>
-            <Text>{offer.seller_display_name}</Text>
-            <Text>
-              {offer.price ? `${offer.currency} ${offer.price.sell_minor}` : 'Price unavailable'}
-            </Text>
-            <Text size="caption">Sandbox payment only. No specimen collection in this step.</Text>
-          </Card>
-          <Heading level={3}>Book collection</Heading>
-          <FormField label="Collection mode">
-            {({ id }) => (
-              <select
-                id={id}
-                className="wp-input"
-                value={mode}
-                onChange={(e) => setMode(e.target.value as 'HOME' | 'CENTER')}
-              >
-                {homeOk ? <option value="HOME">Home collection</option> : null}
-                {centerOk ? <option value="CENTER">Lab center</option> : null}
-              </select>
-            )}
-          </FormField>
-          {mode === 'HOME' ? (
-            <FormField label="Home address">
-              {({ id }) => (
-                <select
-                  id={id}
-                  className="wp-input"
-                  value={addressId}
-                  onChange={(e) => setAddressId(e.target.value)}
-                >
-                  {!addresses.length ? <option value="">No saved addresses</option> : null}
-                  {addresses.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {(row.recipient_name ?? row.recipientName ?? 'Address') + ` — ${row.line1}`}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </FormField>
-          ) : (
-            <FormField label="Lab center location">
-              {({ id }) => (
-                <select
-                  id={id}
-                  className="wp-input"
-                  value={locationId}
-                  onChange={(e) => setLocationId(e.target.value)}
-                >
-                  {!locations.length ? <option value="">No active LAB locations</option> : null}
-                  {locations.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {row.name}
-                      {row.city ? ` · ${row.city}` : ''}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </FormField>
-          )}
-          <FormField label="Preferred slot">
-            {({ id }) => (
-              <select
-                id={id}
-                className="wp-input"
-                value={slotStarts}
-                onChange={(e) => setSlotStarts(e.target.value)}
-              >
-                {!slots.length ? <option value="">No slots</option> : null}
-                {slots.map((slot) => (
-                  <option key={slot.starts_at} value={slot.starts_at}>
-                    {new Date(slot.starts_at).toLocaleString()}
-                  </option>
+          <ServiceHero
+            kicker="Home collection"
+            title={item.title}
+            subtitle={item.description || 'Home sample collection where available.'}
+            tone="lab"
+            compact
+          />
+          <MgCard>
+            <p className="mg-list-meta">{offer.seller_display_name}</p>
+            <p className="mg-lab-price">
+              {offer.price ? formatMoney(offer.price.sell_minor, offer.currency) : 'Price on request'}
+            </p>
+            <p className="mg-lab-badge">NABL-certified partner lab · reports in health timeline</p>
+          </MgCard>
+          {rankedOffers.length > 1 ? (
+            <MgCard>
+              <h2 className="mg-section-title">Compare labs</h2>
+              <ul className="mg-order-list">
+                {rankedOffers.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      className={row.id === offer.id ? 'mg-chip is-active' : 'mg-chip'}
+                      onClick={() => setSelectedOfferId(row.id)}
+                    >
+                      {row.seller_display_name} ·{' '}
+                      {row.price ? formatMoney(row.price.sell_minor, row.currency) : 'Price on request'}
+                    </button>
+                  </li>
                 ))}
-              </select>
+              </ul>
+            </MgCard>
+          ) : null}
+          <MgCard>
+            <h2 className="mg-section-title">Book collection</h2>
+            <FormField label="Collection mode">
+              {({ id }) => (
+                <select id={id} className="mg-select" value={mode} onChange={(e) => setMode(e.target.value as 'HOME' | 'CENTER')}>
+                  {homeOk ? <option value="HOME">Home collection</option> : null}
+                  {centerOk ? <option value="CENTER">Lab center</option> : null}
+                </select>
+              )}
+            </FormField>
+            {mode === 'HOME' ? (
+              <FormField label="Home address">
+                {({ id }) => (
+                  <select id={id} className="mg-select" value={addressId} onChange={(e) => setAddressId(e.target.value)}>
+                    {!addresses.length ? <option value="">No saved addresses</option> : null}
+                    {addresses.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {(row.recipient_name ?? row.recipientName ?? 'Address') + ` — ${row.line1}`}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </FormField>
+            ) : (
+              <FormField label="Lab center">
+                {({ id }) => (
+                  <select id={id} className="mg-select" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                    {!locations.length ? <option value="">No locations</option> : null}
+                    {locations.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name}
+                        {row.city ? ` · ${row.city}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </FormField>
             )}
-          </FormField>
-          {formError ? <Text>{formError}</Text> : null}
-          {busy ? <LoadingState label="Confirming sandbox lab booking…" /> : null}
-          <Button disabled={!canSubmit || busy} onClick={() => void bookAndPay('success')}>
-            Book & pay (sandbox success)
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={!canSubmit || busy}
-            onClick={() => void bookAndPay('failed')}
-          >
-            Simulate sandbox payment failure
-          </Button>
-          {successId ? (
-            <Button variant="tertiary" onClick={() => (window.location.href = `/lab/bookings/${successId}`)}>
-              Open booking
-            </Button>
-          ) : null}
-          {!addresses.length && mode === 'HOME' ? (
-            <Button variant="tertiary" onClick={() => (window.location.href = '/account/addresses')}>
-              Add an address first
-            </Button>
-          ) : null}
+            <FormField label="Preferred slot">
+              {({ id }) => (
+                <select id={id} className="mg-select" value={slotStarts} onChange={(e) => setSlotStarts(e.target.value)}>
+                  {!slots.length ? <option value="">No slots</option> : null}
+                  {slots.map((slot) => (
+                    <option key={slot.starts_at} value={slot.starts_at}>
+                      {new Date(slot.starts_at).toLocaleString()}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </FormField>
+            {formError ? <Text tone="secondary">{formError}</Text> : null}
+            {busy ? <LoadingState label="Confirming booking" /> : null}
+            <MgBtn block disabled={!canSubmit || busy} onClick={() => void bookAndPay('success')}>
+              Book &amp; pay
+            </MgBtn>
+            {showDevTools() ? (
+              <MgBtn variant="ghost" disabled={!canSubmit || busy} onClick={() => void bookAndPay('failed')}>
+                Dev: simulate failure
+              </MgBtn>
+            ) : null}
+            {!addresses.length && mode === 'HOME' ? (
+              <MgBtn variant="ghost" href="/account/addresses">
+                Add address first
+              </MgBtn>
+            ) : null}
+          </MgCard>
         </>
       ) : null}
-    </CustomerShell>
+    </Page>
   );
 }

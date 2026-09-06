@@ -12,6 +12,7 @@ import { SettlementImportService } from './settlement-import.service';
 import { SettlementImportScheduleService } from './settlement-import-schedule.service';
 import { SettlementImportWorkerService } from './settlement-import-worker.service';
 import { ReconBreakService } from './recon-break.service';
+import { PartnerWithdrawAdminService } from './partner-withdraw-admin.service';
 
 @Controller('admin/finance')
 @UseGuards(JwtAuthGuard, AudienceGuard, PermissionsGuard)
@@ -23,6 +24,7 @@ export class FinanceAdminController {
     private readonly settlementImportWorker: SettlementImportWorkerService,
     private readonly settlementImportSchedules: SettlementImportScheduleService,
     private readonly reconBreaks: ReconBreakService,
+    private readonly partnerWithdraws: PartnerWithdrawAdminService,
   ) {}
 
   @Get('dashboard')
@@ -47,6 +49,61 @@ export class FinanceAdminController {
   @RequirePermissions('finance:read')
   payables(@Query('seller_org_id') sellerOrgId?: string) {
     return this.finance.listPayables(sellerOrgId);
+  }
+
+  @Get('affiliate-liabilities')
+  @RequirePermissions('finance:read')
+  affiliateLiabilities(
+    @Query('status') status?: string,
+    @Query('country_code') countryCode?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.finance.listAffiliateLiabilities({
+      status: status as never,
+      countryCode,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Get('doctor-earnings')
+  @RequirePermissions('finance:read')
+  doctorEarnings(@Query('country_code') countryCode?: string) {
+    return this.finance.adminDoctorEarningsOverview(countryCode);
+  }
+
+  @Get('lab-earnings')
+  @RequirePermissions('finance:read')
+  labEarnings(@Query('country_code') countryCode?: string) {
+    return this.finance.adminLabEarningsOverview(countryCode);
+  }
+
+  @Get('settlements')
+  @RequirePermissions('finance:read')
+  settlements(@Query('country_code') countryCode?: string, @Query('limit') limit?: string) {
+    return this.finance.listSettlementBatches({
+      countryCode,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Get('settlement-membership/:payableId')
+  @RequirePermissions('finance:read')
+  settlementMembership(
+    @Param('payableId') payableId: string,
+    @Query('country_id') countryId: string,
+    @Query('currency') currency: string,
+  ) {
+    return this.finance.evaluateSettlementMembership({
+      vendorPayableId: payableId,
+      countryId,
+      currency,
+    });
+  }
+
+  @Get('reconciliation/overview')
+  @RequirePermissions('finance:read')
+  reconciliationOverview(@Query('country_code') countryCode?: string) {
+    return this.finance.reconciliationOverview(countryCode);
   }
 
   @Get('settlement-lines')
@@ -369,5 +426,36 @@ export class FinanceAdminController {
     @Body() body: { idempotency_key: string; note?: string },
   ) {
     return this.reconBreaks.close(principal, id, body.idempotency_key, body.note);
+  }
+
+  @Get('partner-withdraws')
+  @RequirePermissions('finance:read')
+  listPartnerWithdraws(@Query('status') status?: string, @Query('limit') limit?: string) {
+    return this.partnerWithdraws.list({
+      status,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Post('partner-withdraws/:id/approve')
+  @RequirePermissions('finance:approve')
+  approvePartnerWithdraw(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.partnerWithdraws.approve(principal, id);
+  }
+
+  @Post('partner-withdraws/:id/reject')
+  @RequirePermissions('finance:approve')
+  rejectPartnerWithdraw(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body?: { note?: string },
+  ) {
+    return this.partnerWithdraws.reject(principal, id, body?.note);
+  }
+
+  @Post('partner-withdraws/:id/execute')
+  @RequirePermissions('finance:settle')
+  executePartnerWithdraw(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.partnerWithdraws.execute(principal, id);
   }
 }

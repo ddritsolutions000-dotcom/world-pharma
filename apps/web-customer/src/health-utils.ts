@@ -125,3 +125,57 @@ export function groupTimelineByDate(
     items: grouped,
   }));
 }
+
+export function resolveTimelineHref(item: HealthTimelineItem): string | null {
+  if (item.deep_link?.startsWith('/')) {
+    return item.deep_link;
+  }
+  if (item.artifact_id) {
+    return `/health/artifacts/${item.artifact_id}`;
+  }
+  const sourceId = item.source_id?.trim();
+  if (!sourceId) {
+    return null;
+  }
+  const module = item.source_module?.toLowerCase() ?? '';
+  if (module === 'lab') {
+    return `/lab/bookings/${sourceId}`;
+  }
+  if (module === 'radiology') {
+    return `/radiology/bookings/${sourceId}`;
+  }
+  if (module === 'encounter' || module === 'clinical') {
+    if (item.event_type.includes('APPOINTMENT')) {
+      return `/appointments/${sourceId}`;
+    }
+    if (item.event_type.includes('CONSULT')) {
+      return `/appointments/${sourceId}`;
+    }
+  }
+  if (module === 'prescription' || item.artifact_type === 'PRESCRIPTION_STRUCTURED') {
+    return '/prescriptions';
+  }
+  return null;
+}
+
+export function resolvePendingActionHref(action: { kind: string; id: string }): string | null {
+  if (action.kind === 'appointment_upcoming') {
+    return `/appointments/${action.id}`;
+  }
+  if (action.kind === 'lab_report_pending') {
+    return `/lab/bookings/${action.id}`;
+  }
+  if (action.kind === 'imaging_report_pending') {
+    return `/radiology/bookings/${action.id}`;
+  }
+  if (action.kind === 'prescription_available') {
+    return '/prescriptions';
+  }
+  if (action.kind === 'medicine_reorder' || action.kind === 'medicine_purchase') {
+    return `/orders/${action.id}`;
+  }
+  if (action.kind === 'care_plan_action') {
+    return '/health';
+  }
+  return null;
+}

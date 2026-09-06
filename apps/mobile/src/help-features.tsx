@@ -21,13 +21,13 @@ import {
 } from './help-api';
 import type { ViewState } from './navigation';
 
-export const HELP_COUNTRY = 'XX';
 export const HELP_LOCALE = 'en';
 
 export type HelpCtx = {
   viewState: ViewState;
   setViewState: (state: ViewState) => void;
   onBack: () => void;
+  country: string;
   onExitApp?: () => void;
   onOpenCategory: (slug: string) => void;
   onOpenArticle: (slug: string) => void;
@@ -54,9 +54,9 @@ export function HelpHomeScreen({ ctx }: { ctx: HelpCtx }) {
     ctx.setViewState('loading');
     try {
       const [cats, arts, bns] = await Promise.all([
-        fetchHelpCategories(HELP_COUNTRY, HELP_LOCALE),
-        fetchHelpArticles(HELP_COUNTRY, HELP_LOCALE),
-        fetchHelpBanners(HELP_COUNTRY, HELP_LOCALE),
+        fetchHelpCategories(ctx.country, HELP_LOCALE),
+        fetchHelpArticles(ctx.country, HELP_LOCALE),
+        fetchHelpBanners(ctx.country, HELP_LOCALE),
       ]);
       setCategories(cats.data ?? []);
       setArticles((arts.data ?? []).slice(0, 8));
@@ -134,7 +134,7 @@ export function HelpCategoryScreen({ ctx, categorySlug }: { ctx: HelpCtx; catego
   const load = useCallback(async () => {
     ctx.setViewState('loading');
     try {
-      const body = await fetchHelpArticles(HELP_COUNTRY, HELP_LOCALE, { category_slug: categorySlug });
+      const body = await fetchHelpArticles(ctx.country, HELP_LOCALE, { category_slug: categorySlug });
       setArticles(body.data ?? []);
       ctx.setViewState('idle');
     } catch (err) {
@@ -179,7 +179,7 @@ export function HelpArticleScreen({ ctx, articleSlug }: { ctx: HelpCtx; articleS
   const load = useCallback(async () => {
     ctx.setViewState('loading');
     try {
-      const article = await fetchHelpArticle(HELP_COUNTRY, articleSlug, HELP_LOCALE);
+      const article = await fetchHelpArticle(ctx.country, articleSlug, HELP_LOCALE);
       if (!article) {
         ctx.setViewState('idle');
         setTitle('');
@@ -237,7 +237,7 @@ export function HelpSearchScreen({ ctx, initialQuery = '' }: { ctx: HelpCtx; ini
       ctx.setViewState('loading');
       setMessage('');
       try {
-        const body = await fetchHelpSearch(HELP_COUNTRY, trimmed, HELP_LOCALE);
+        const body = await fetchHelpSearch(ctx.country, trimmed, HELP_LOCALE);
         setResults(body.data ?? []);
         ctx.setViewState('idle');
       } catch (err) {

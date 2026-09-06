@@ -22,16 +22,7 @@ import {
 import { OutboxService } from '../events/outbox.service';
 import { EventWorkerService } from '../events/worker.service';
 import { OrderPaymentRefundedListenerService } from './order-payment-refunded.listener';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { signIn, provisionOrgAdmin, provisionSuperAdmin } from '../test/sign-in';
 
 describe('PAYMENT_REFUNDED order status listener', () => {
   jest.setTimeout(120_000);
@@ -132,23 +123,8 @@ describe('PAYMENT_REFUNDED order status listener', () => {
         timezone: 'UTC',
       },
     });
-    const admin = await signIn(app, `ord-ref-admin-${Date.now()}@example.com`, 'admin');
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `ord-ref-vendor-${Date.now()}@example.com`, 'admin');
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendor.id,
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, 'ord-ref-admin');
+    const vendorUser = await provisionOrgAdmin(app, prisma, 'ord-ref-vendor', vendor.id);
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,
       adminToken: admin.token,

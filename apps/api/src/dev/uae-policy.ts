@@ -1,0 +1,52 @@
+import type { PolicyDocument } from '../policy/empty-pack';
+import { buildSandboxPolicyDocument } from './sandbox-policy';
+
+/** UAE demo policy — AED, card + COD, VAT profile ref (dev only). */
+export function buildUaePolicyDocument(): PolicyDocument {
+  const doc = buildSandboxPolicyDocument();
+  doc.currency.default = 'AED';
+  doc.currency.allowed = ['AED'];
+  doc.i18n.default_locale = 'en-AE';
+  doc.i18n.locales = ['en-AE', 'ar'];
+  doc.timezone.default = 'Asia/Dubai';
+  doc.timezone.allowed = ['Asia/Dubai'];
+  doc.datetime.number_format = 'en-AE';
+  doc.payments.currencies = ['AED'];
+  doc.payments.methods = ['CARD', 'COD'];
+  doc.payments.gateway_refs = ['MOCK_PRIMARY'];
+  doc.tax_profile_id = 'AE_VAT_DEMO';
+  doc.commerce = {
+    platform_fee_bps: 0,
+    platform_fee_flat_minor: 0,
+    delivery_fee_minor: 1500,
+    packaging_fee_minor: 0,
+    handling_fee_minor: 0,
+    payment_convenience_fee_minor: 0,
+    free_delivery_threshold_minor: 9900,
+    carrier_cost_estimate_minor: 2000,
+    affiliate_commission_bps: 500,
+    doctor_platform_fee_bps: 1500,
+    lab_platform_fee_bps: 2000,
+    delivery_platform_fee_bps: 1500,
+    pharmacy_platform_fee_bps: 1800,
+    partner_platform_fee_flat_minor: 0,
+  };
+  doc.crm.loyalty = { enabled: true };
+  doc.crm.marketing = {
+    enabled: true,
+    channels: ['in_app', 'sms', 'whatsapp'],
+    medicine_advertising: false,
+  };
+  doc.search = { discovery_enabled: true, blocklist_terms: [] };
+  return doc;
+}
+
+export const UAE_COUNTRY = {
+  isoAlpha2: 'AE',
+  isoAlpha3: 'ARE',
+  nameI18n: { en: 'United Arab Emirates', ar: 'الإمارات' },
+  defaultLocale: 'en-AE',
+  defaultCurrency: 'AED',
+  defaultTimezone: 'Asia/Dubai',
+  phonePrefix: '+971',
+} as const;

@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { AdminViewLoadError } from './admin-request-error';
+import { classifyAdminViewState } from './admin-http';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useSession } from '@world-pharma/shell-web';
@@ -9,8 +11,7 @@ import {
   Card,
   EmptyState,
   Heading,
-  LoadingState,
-  NetworkErrorState,
+  LoadingState,
   PermissionDeniedState,
   Text,
 } from '@world-pharma/ui-kit/web';
@@ -23,13 +24,14 @@ import {
   type CampaignSendRow,
   type MarketingCampaign,
 } from './marketing-api';
+import { workingCountry } from './working-country';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'not_found';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error' | 'not_found';
 
 export function MarketingCampaignDetail({ campaignId }: { campaignId: string }) {
   const searchParams = useSearchParams();
-  const countryCode = searchParams.get('country') ?? 'XX';
   const { getAccessToken, session } = useSession();
+  const countryCode = workingCountry(searchParams.get('country') ?? session.countryCode);
   const [data, setData] = useState<MarketingCampaign | null>(null);
   const [sends, setSends] = useState<CampaignSendRow[]>([]);
   const [viewState, setViewState] = useState<ViewState>('loading');
@@ -60,7 +62,7 @@ export function MarketingCampaignDetail({ campaignId }: { campaignId: string }) 
         setViewState('not_found');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [campaignId, countryCode, getAccessToken]);
 
@@ -113,8 +115,8 @@ export function MarketingCampaignDetail({ campaignId }: { campaignId: string }) 
   if (viewState === 'not_found') {
     return <EmptyState title="Campaign not found" description="Check country code and campaign id." />;
   }
-  if (viewState === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (viewState === 'network' || viewState === 'error') {
+    return <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />;
   }
   if (!data) {
     return null;

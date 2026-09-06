@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3006",
+    "dev": "next dev --port 3009",
     "build": "next build",
-    "start": "next start --port 3006"
+    "start": "next start --port 3009"
   },
   "dependencies": {
     "@world-pharma/shell-core": "workspace:*",

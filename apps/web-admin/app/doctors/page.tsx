@@ -3,9 +3,8 @@ import { DoctorsAdminPanel } from '../../src/doctors-admin';
 
 export default function DoctorsPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="doctors">
       <DoctorsAdminPanel />
-    </>
+    </AdminShell>
   );
 }

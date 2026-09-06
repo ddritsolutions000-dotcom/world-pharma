@@ -189,7 +189,11 @@ export type LabStaffBooking = {
   currency: string;
   total_minor: string;
   slot_starts_at: string | null;
+  slot_ends_at?: string | null;
+  timezone?: string | null;
   sandbox: boolean;
+  created_at?: string;
+  lab_location?: { id: string; name: string; city: string | null; address_line: string | null } | null;
   lines: Array<{ id: string; title: string; qty: number; line_minor: string; currency: string }>;
   note?: string;
 };
@@ -197,6 +201,13 @@ export type LabStaffBooking = {
 export function fetchLabStaffBookings(token: string, labOrgId: string) {
   return call<{ data: LabStaffBooking[]; note?: string }>(
     `/api/v1/lab/bookings?lab_org_id=${encodeURIComponent(labOrgId)}`,
+    token,
+  );
+}
+
+export function fetchLabStaffBooking(token: string, labOrgId: string, bookingId: string) {
+  return call<LabStaffBooking>(
+    `/api/v1/lab/bookings/${encodeURIComponent(bookingId)}?lab_org_id=${encodeURIComponent(labOrgId)}`,
     token,
   );
 }
@@ -438,4 +449,71 @@ export function dispatchLabPhysicalReport(
     headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ lab_org_id: labOrgId, idempotency_key: idempotencyKey }),
   });
+}
+
+export type LabEarningsSummary = {
+  sandbox: true;
+  live_payout: false;
+  settlement_enabled: false;
+  payout_authority: string;
+  message: string;
+  lab_org_id: string;
+  country_code: string;
+  currency: string;
+  completed_booking_count: number;
+  gross_minor: string;
+  platform_fee_bps: number;
+  platform_fee_minor: string;
+  platform_fee_modeled: boolean;
+  lab_payable_minor: string;
+  pending_settlement_minor: string;
+  settled_minor: string;
+  settlement_status: string;
+  settlement_batch_id: string | null;
+};
+
+export type LabEarningsBookingRow = {
+  lab_booking_id: string;
+  lab_report_id: string;
+  published_at: string | null;
+  report_version: number | null;
+  country_code: string;
+  currency: string;
+  gross_minor: string;
+  platform_fee_minor: string;
+  lab_payable_minor: string;
+  settlement_status: string;
+  settlement_batch_id: string | null;
+  financial_fact_source_key: string | null;
+};
+
+export function fetchLabEarningsSummary(token: string, labOrgId: string) {
+  return call<LabEarningsSummary>(
+    `/api/v1/lab/earnings/summary?lab_org_id=${encodeURIComponent(labOrgId)}`,
+    token,
+  );
+}
+
+export function fetchLabEarningsBookings(token: string, labOrgId: string) {
+  return call<{ sandbox: true; live_payout: false; data: LabEarningsBookingRow[] }>(
+    `/api/v1/lab/earnings/bookings?lab_org_id=${encodeURIComponent(labOrgId)}`,
+    token,
+  );
+}
+
+export type LabTeamMember = {
+  person_id: string;
+  display_name: string;
+  membership_role_code: string;
+  membership_role_name: string;
+  partner_types: string[];
+  operational_roles: string[];
+  location_id: string | null;
+};
+
+export function fetchLabTeam(token: string, labOrgId: string) {
+  return call<{ lab_org_id: string; country_code: string; data: LabTeamMember[]; note: string }>(
+    `/api/v1/lab/team?lab_org_id=${encodeURIComponent(labOrgId)}`,
+    token,
+  );
 }

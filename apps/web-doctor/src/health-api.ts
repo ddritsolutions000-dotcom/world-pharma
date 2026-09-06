@@ -59,13 +59,27 @@ type TokenOpts = {
   onUnauthorized?: () => void;
 };
 
+/** Same-origin in the browser so Next /api rewrites are used. */
+function healthCall<T>(
+  path: string,
+  options: {
+    method?: string;
+    token?: string | null;
+    body?: unknown;
+    onUnauthorized?: () => void;
+  } = {},
+): Promise<ApiCallResult<T>> {
+  const baseUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+  return apiCall<T>(path, { ...options, baseUrl });
+}
+
 export const DOCTOR_HEALTH_PURPOSE = 'treatment';
 
 export function fetchDoctorHealthPatients(
   opts: TokenOpts & { countryCode: string },
 ): Promise<ApiCallResult<{ patients: DoctorHealthPatient[] }>> {
   const qs = new URLSearchParams({ country_code: opts.countryCode });
-  return apiCall<{ patients: DoctorHealthPatient[] }>(`api/v1/doctor/me/health-patients?${qs}`, {
+  return healthCall<{ patients: DoctorHealthPatient[] }>(`api/v1/doctor/me/health-patients?${qs}`, {
     token: opts.token,
     onUnauthorized: opts.onUnauthorized,
   });
@@ -90,7 +104,7 @@ export function fetchDoctorPatientTimeline(
   if (opts.limit) {
     qs.set('limit', String(opts.limit));
   }
-  return apiCall<HealthTimelineResponse>(
+  return healthCall<HealthTimelineResponse>(
     `api/v1/health/patients/${encodeURIComponent(opts.patientPersonId)}/timeline?${qs}`,
     { token: opts.token, onUnauthorized: opts.onUnauthorized },
   );
@@ -103,7 +117,7 @@ export function fetchDoctorArtifactMetadata(
     country_code: opts.countryCode,
     purpose: opts.purpose ?? DOCTOR_HEALTH_PURPOSE,
   });
-  return apiCall<HealthArtifactMetadata>(
+  return healthCall<HealthArtifactMetadata>(
     `api/v1/health/patients/${encodeURIComponent(opts.patientPersonId)}/artifacts/${encodeURIComponent(opts.artifactId)}?${qs}`,
     { token: opts.token, onUnauthorized: opts.onUnauthorized },
   );
@@ -116,7 +130,7 @@ export function fetchDoctorArtifactPayload(
     country_code: opts.countryCode,
     purpose: opts.purpose ?? DOCTOR_HEALTH_PURPOSE,
   });
-  return apiCall<HealthArtifactPayload>(
+  return healthCall<HealthArtifactPayload>(
     `api/v1/health/patients/${encodeURIComponent(opts.patientPersonId)}/artifacts/${encodeURIComponent(opts.artifactId)}/payload?${qs}`,
     { token: opts.token, onUnauthorized: opts.onUnauthorized },
   );

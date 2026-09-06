@@ -1,29 +1,36 @@
-import { Text, View } from 'react-native';
-import { nativeColors, type ColorMode } from './theme';
+import type { ReactNode } from 'react';
+import { Text, View, type ViewStyle } from 'react-native';
+import { nativeColors, nativeRadius, nativeShadow, type ColorMode } from './theme';
 
-export function NativeCard({ children, mode = 'light' }: { children: React.ReactNode; mode?: ColorMode }) {
+export type NativeCardProps = {
+  children?: ReactNode;
+  mode?: ColorMode;
+  key?: string | number;
+  style?: ViewStyle;
+};
+
+export function NativeCard({ children, mode = 'light', style }: NativeCardProps) {
   const color = nativeColors(mode);
-  return (
-    <View
-      style={{
-        backgroundColor: color.background.surface,
-        borderColor: color.border.default,
-        borderWidth: 1,
-        borderRadius: 8,
-        padding: 16,
-      }}
-    >
-      {children}
-    </View>
-  );
+  const baseStyle = {
+    backgroundColor: color.background.surface,
+    borderColor: color.border.default,
+    borderWidth: 1,
+    borderRadius: nativeRadius.lg,
+    padding: 16,
+    gap: 10,
+    ...nativeShadow(),
+  };
+  return <View style={style ? [baseStyle, style] : baseStyle}>{children}</View>;
 }
 
 export function NativeBadge({
   label,
   mode = 'light',
+  key,
 }: {
   label: string;
   mode?: ColorMode;
+  key?: string | number;
 }) {
   const color = nativeColors(mode);
   return (
@@ -32,12 +39,12 @@ export function NativeBadge({
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: color.clinical.rxBg,
-        paddingHorizontal: 8,
+        paddingHorizontal: 10,
         paddingVertical: 4,
-        borderRadius: 999,
+        borderRadius: nativeRadius.pill,
       }}
     >
-      <Text style={{ color: color.clinical.rx, fontSize: 12 }}>{label}</Text>
+      <Text style={{ color: color.clinical.rx, fontSize: 12, fontWeight: '700' }}>{label}</Text>
     </View>
   );
 }

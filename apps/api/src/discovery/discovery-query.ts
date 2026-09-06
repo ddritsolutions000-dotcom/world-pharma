@@ -24,6 +24,15 @@ export interface DiscoveryResultItem {
   slug: string | null;
   href: string | null;
   in_stock?: boolean;
+  rx_required?: boolean;
+  min_sell_minor?: string | null;
+  max_discount_pct?: number | null;
+  avg_rating?: number | null;
+  review_count?: number;
+  manufacturer?: string | null;
+  composition?: string | null;
+  brand?: string | null;
+  category?: string | null;
   content_type?: string;
   category_slug?: string | null;
   online_capable?: boolean;
@@ -32,6 +41,8 @@ export interface DiscoveryResultItem {
   organization_id?: string | null;
   location_id?: string | null;
 }
+
+export type DiscoveryCommerceSort = 'relevance' | 'price_asc' | 'price_desc' | 'rating' | 'discount';
 
 export interface DiscoverySearchResponse {
   country: string;

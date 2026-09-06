@@ -71,8 +71,8 @@ export function ImagingStudiesPanel({
     <Card>
       <Heading level={2}>Acquisition worklist</Heading>
       <Text tone="secondary">
-        Technician sandbox acquisition workflow. Metadata + opaque object pointer only — no image pixels, no production
-        PACS, no DICOM transfer.
+        Technician sandbox acquisition with DICOM study UIDs and private object storage — not production PACS or
+        clinical viewer.
       </Text>
       <Button size="sm" variant="secondary" disabled={loading || busy} onClick={() => void load()}>
         Refresh studies
@@ -96,6 +96,15 @@ export function ImagingStudiesPanel({
         <Card>
           <Heading level={3}>Study {selected.accession_number}</Heading>
           <Text>Status: {selected.status}</Text>
+          {selected.study_instance_uid ? (
+            <Text size="caption">StudyInstanceUID: {selected.study_instance_uid}</Text>
+          ) : null}
+          {selected.dicom?.series?.length ? (
+            <Text size="caption">
+              {selected.dicom.series.length} series ·{' '}
+              {selected.dicom.series.reduce((n, s) => n + s.instances.length, 0)} instance(s) in private storage
+            </Text>
+          ) : null}
           {selected.acquisition ? (
             <Text size="caption">
               Acquisition {selected.acquisition.status}

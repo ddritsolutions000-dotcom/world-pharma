@@ -44,10 +44,31 @@ export async function persistPreSubmitFailureAudit(
 ): Promise<boolean> {
   const existing = await tx.paymentIntent.findUnique({
     where: { id: input.intent.id },
-    select: { id: true },
+    select: { id: true, status: true },
   });
   if (existing) {
-    return false;
+    if (existing.status !== PaymentIntentStatus.FAILED) {
+      await tx.paymentIntent.update({
+        where: { id: input.intent.id },
+        data: { status: PaymentIntentStatus.FAILED },
+      });
+    }
+    await outbox.enqueue(tx, {
+      type: 'PAYMENT_FAILED',
+      aggregateType: 'PaymentIntent',
+      aggregateId: input.intent.id,
+      producer: 'payment',
+      countryId: input.intent.countryId,
+      payload: sanitizeObservabilityPayload({
+        ...input.failurePayload,
+        sandbox: true,
+        pre_submit_failure: true,
+        failure_outcome: 'PRE_SUBMIT_FAILURE',
+        customer_person_id: input.intent.customerPersonId,
+      }) as Record<string, unknown>,
+      occurrenceKey: `PAYMENT_FAILED:pre_submit:${input.intent.id}`,
+    });
+    return true;
   }
 
   await tx.paymentIntent.create({
@@ -107,6 +128,7 @@ export async function persistPreSubmitFailureAudit(
       sandbox: true,
       pre_submit_failure: true,
       failure_outcome: 'PRE_SUBMIT_FAILURE',
+      customer_person_id: input.intent.customerPersonId,
     }) as Record<string, unknown>,
     occurrenceKey: `PAYMENT_FAILED:pre_submit:${input.intent.id}`,
   });

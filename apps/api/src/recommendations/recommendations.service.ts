@@ -275,9 +275,10 @@ export class RecommendationsService {
 
   private presentProduct(
     row: { itemId: string; title: string; brandName: string; categoryName: string; inStock: boolean },
-    slugByItem: Map<string, string>,
+    metaByItem: Map<string, { slug: string; image_url: string | null }>,
   ): RecommendationProduct {
-    const slug = slugByItem.get(row.itemId) ?? row.itemId;
+    const meta = metaByItem.get(row.itemId);
+    const slug = meta?.slug ?? row.itemId;
     return {
       item_id: row.itemId,
       title: row.title,
@@ -285,20 +286,30 @@ export class RecommendationsService {
       brand_name: row.brandName,
       category_name: row.categoryName,
       in_stock: row.inStock,
-      href: `/products/${slug}`,
+      href: `/p/${slug}`,
+      image_url: meta?.image_url ?? null,
     };
   }
 
-  private async slugMap(itemIds: string[]): Promise<Map<string, string>> {
+  private async slugMap(itemIds: string[]): Promise<Map<string, { slug: string; image_url: string | null }>> {
     const unique = [...new Set(itemIds)];
     if (!unique.length) {
       return new Map();
     }
     const rows = await this.prisma.catalogItem.findMany({
       where: { id: { in: unique } },
-      select: { id: true, slug: true },
+      select: {
+        id: true,
+        slug: true,
+        assets: { orderBy: { sortOrder: 'asc' }, take: 1, select: { publicUrl: true } },
+      },
     });
-    return new Map(rows.map((row) => [row.id, row.slug]));
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        { slug: row.slug, image_url: row.assets[0]?.publicUrl ?? null },
+      ]),
+    );
   }
 
   private emptyItemResponse(

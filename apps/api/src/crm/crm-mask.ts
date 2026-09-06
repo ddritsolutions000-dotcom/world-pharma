@@ -1,4 +1,4 @@
-/** Mask email/phone for CRM 360 — no reveal-pii in R12-A (TD-R11A-04). */
+/** Mask email/phone for CRM 360 — use reveal-identifiers with user:reveal_pii for audited reveal. */
 
 export function maskEmail(value: string): string {
   const at = value.indexOf('@');

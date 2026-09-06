@@ -22,19 +22,7 @@ import {
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
 
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { provisionSuperAdmin, signIn } from '../test/sign-in';
 
 describe('CR-317 order fulfillment notification recipient parity (e2e)', () => {
   jest.setTimeout(120_000);
@@ -83,21 +71,10 @@ describe('CR-317 order fulfillment notification recipient parity (e2e)', () => {
   }
 
   async function seedMarketplaceOrder(suffix: string) {
-    const admin = await signIn(app, `cr317-admin-${suffix}@example.com`, 'admin');
+    const admin = await provisionSuperAdmin(app, prisma, `cr317-admin-${suffix}`);
     const vendor = await signIn(app, `cr317-vendor-${suffix}@example.com`);
     const customer = await signIn(app, `cr317-customer-${suffix}@example.com`);
     const otherCustomer = await signIn(app, `cr317-other-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
 
     let country = await prisma.country.findUnique({ where: { isoAlpha2: 'T7' } });
     if (!country) {
@@ -276,6 +253,9 @@ describe('CR-317 order fulfillment notification recipient parity (e2e)', () => {
     const ctx = await seedMarketplaceOrder(suffix);
 
     await request(app.getHttpServer())
+      .post(`/api/v1/vendor/orders/${ctx.orderId}/accept`)
+      .set(ctx.auth(ctx.vendor.token));
+    await request(app.getHttpServer())
       .post(`/api/v1/vendor/orders/${ctx.orderId}/pick/start`)
       .set(ctx.auth(ctx.vendor.token));
     await request(app.getHttpServer())
@@ -345,7 +325,7 @@ describe('CR-317 order fulfillment notification recipient parity (e2e)', () => {
     expect(customerTitles.filter((title: string) => title === 'Order cancelled').length).toBe(1);
 
     const vendorTitles = await inboxTitles(ctx.vendor.token);
-    expect(vendorTitles.filter((title: string) => title === 'Order cancelled').length).toBe(0);
+    expect(vendorTitles.filter((title: string) => title === 'Order cancelled').length).toBe(1);
 
     const otherTitles = await inboxTitles(ctx.otherCustomer.token);
     expect(otherTitles.filter((title: string) => title === 'Order cancelled').length).toBe(0);

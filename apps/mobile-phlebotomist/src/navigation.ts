@@ -1,6 +1,6 @@
 import type { SessionSnapshot } from '@world-pharma/shell-core';
 
-export type PhlebotomistTab = 'jobs';
+export type PhlebotomistTab = 'jobs' | 'inbox' | 'support';
 
 export type PhlebotomistMobileScreen = 'sign-in' | PhlebotomistTab | 'expired';
 
@@ -17,4 +17,8 @@ export function phlebotomistMobileScreen(
   return tab;
 }
 
-export const PHLEBOTOMIST_TABS: Array<{ id: PhlebotomistTab; label: string }> = [{ id: 'jobs', label: 'Jobs' }];
+export const PHLEBOTOMIST_TABS: Array<{ id: PhlebotomistTab; label: string }> = [
+  { id: 'jobs', label: 'Jobs' },
+  { id: 'inbox', label: 'Inbox' },
+  { id: 'support', label: 'Support' },
+];

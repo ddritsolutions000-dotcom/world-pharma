@@ -385,12 +385,13 @@ export function VendorInventoryPanel({
             ) : (
               <Table
                 caption="Vendor inventory lots"
-                columns={['SKU', 'Lot', 'Location', 'On hand', 'Available', 'Expiry', 'Status']}
+                columns={['SKU', 'Lot', 'Location', 'On hand', 'Reserved', 'Available', 'Expiry', 'Status']}
                 rows={filteredLots.map((lot) => [
                   lot.sku ?? lot.id.slice(0, 8),
                   lot.lot_code || 'no-lot',
                   lot.location_name ?? lot.location_id?.slice(0, 8) ?? '—',
                   String(lot.on_hand ?? '—'),
+                  String(lot.reserved ?? 0),
                   String(lot.available),
                   formatExpiry(lot.expires_on),
                   lot.status ?? '—',

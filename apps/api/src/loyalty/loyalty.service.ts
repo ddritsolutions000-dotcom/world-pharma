@@ -49,9 +49,88 @@ export class LoyaltyService {
         return {
           enabled: true,
           balance_points: balance,
-          live_redemption: false,
+          live_redemption: true,
           program_code: program.code,
+          points_value_minor: balance,
         };
+      },
+    );
+  }
+
+  /** 1 point = 1 minor unit discount in sandbox; capped at 50% of sell after promo. */
+  async previewRedemption(principal: Principal, countryCode: string, points: number, sellMinorAfterPromo: bigint) {
+    const enabled = await this.isEnabled(countryCode);
+    if (!enabled || points <= 0) {
+      return { allowed: false, discount_minor: '0', points_applied: 0, reason: 'loyalty_disabled' };
+    }
+    const country = await resolveCountryByCode(this.prisma, countryCode);
+    return runWithTenant(
+      workerTenantContext({ countryId: country.id, personId: principal.personId }),
+      async () => {
+        const program = await this.activeProgram(country.id);
+        if (!program) {
+          return { allowed: false, discount_minor: '0', points_applied: 0, reason: 'no_program' };
+        }
+        const account = await this.ensureAccount(program.id, principal.personId, country.id);
+        const balance = await this.computeBalance(account.id);
+        const applied = Math.min(points, balance, Number(sellMinorAfterPromo / 2n));
+        if (applied <= 0) {
+          return { allowed: false, discount_minor: '0', points_applied: 0, reason: 'insufficient_points' };
+        }
+        return {
+          allowed: true,
+          discount_minor: applied.toString(),
+          points_applied: applied,
+          balance_points: balance,
+        };
+      },
+    );
+  }
+
+  async redeemForCheckout(input: {
+    personId: string;
+    countryId: string;
+    orderId: string;
+    points: number;
+    discountMinor: bigint;
+  }) {
+    if (input.points <= 0) return { redeemed: false };
+    return runWithTenant(
+      workerTenantContext({ countryId: input.countryId, personId: input.personId }),
+      async () => {
+        const program = await this.activeProgram(input.countryId);
+        if (!program) return { redeemed: false, reason: 'no_program' };
+        const account = await this.ensureAccount(program.id, input.personId, input.countryId);
+        const balance = await this.computeBalance(account.id);
+        if (input.points > balance) {
+          throw Errors.validation('Insufficient loyalty points');
+        }
+        const source = 'checkout_redeem';
+        const sourceKey = input.orderId;
+        const existing = await this.prisma.loyaltyLedgerEntry.findUnique({
+          where: {
+            source_sourceKey_kind: {
+              source,
+              sourceKey,
+              kind: LoyaltyLedgerEntryKind.REDEEM,
+            },
+          },
+        });
+        if (existing) return { redeemed: false, duplicate: true };
+        await this.prisma.loyaltyLedgerEntry.create({
+          data: {
+            id: uuidv7(),
+            accountId: account.id,
+            countryId: input.countryId,
+            kind: LoyaltyLedgerEntryKind.REDEEM,
+            pointsDelta: -input.points,
+            source,
+            sourceKey,
+            orderId: input.orderId,
+            metadata: { discount_minor: input.discountMinor.toString() },
+          },
+        });
+        return { redeemed: true, points: input.points };
       },
     );
   }

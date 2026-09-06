@@ -7,6 +7,7 @@ import { AffiliateClickService } from './affiliate-click.service';
 import { AffiliateContextService } from './affiliate-context.service';
 import { AffiliateSelfController, AdminAffiliateController } from './affiliate.controller';
 import { AffiliateService } from './affiliate.service';
+import { AffiliateStatementService } from './affiliate-statement.service';
 import { PublicAffiliateController } from './public-affiliate.controller';
 
 @Module({
@@ -16,9 +17,10 @@ import { PublicAffiliateController } from './public-affiliate.controller';
     PrismaService,
     AffiliateContextService,
     AffiliateService,
+    AffiliateStatementService,
     AffiliateClickService,
     AffiliateAttributionService,
   ],
-  exports: [AffiliateAttributionService, AffiliateService],
+  exports: [AffiliateAttributionService, AffiliateService, AffiliateStatementService],
 })
 export class AffiliateModule {}

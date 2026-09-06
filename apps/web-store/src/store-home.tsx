@@ -1,13 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useSession } from '@world-pharma/shell-web';
+import {
+  useSession,
+  PortalAuthPage,
+  PortalWorkspaceShell,
+  PortalKpiCards,
+} from '@world-pharma/shell-web';
 import {
   Button,
   Card,
   EmptyState,
   FormField,
-  HeaderBar,
   Heading,
   Input,
   LoadingState,
@@ -57,9 +61,56 @@ import {
   type CatalogOffer,
 } from './store-api';
 import { StoreSupportPanel } from './store-support-panel';
+import { StoreNotificationsPanel } from './store-notifications-panel';
+import {
+  dispensingStatusLabel,
+  storeOrderNextAction,
+  storeOrderStatusLabel,
+} from './store-status-labels';
 
-type Tab = 'dashboard' | 'inventory' | 'orders' | 'rx' | 'exceptions' | 'grn' | 'adjust' | 'support';
+const STORE_ORDER_ACTION_LABELS: Record<string, string> = {
+  'pick/start': 'Start pick',
+  'pick/complete': 'Complete pick',
+  'pack/complete': 'Complete pack',
+  ready: 'Ready to ship',
+};
+
+function runStoreOrderAction(
+  action: ReturnType<typeof storeOrderNextAction>,
+  token: string,
+  organizationId: string,
+  locationId: string,
+  orderId: string,
+) {
+  if (action === 'pick/start') {
+    return startStorePick(token, organizationId, locationId, orderId);
+  }
+  if (action === 'pick/complete') {
+    return completeStorePick(token, organizationId, locationId, orderId);
+  }
+  if (action === 'pack/complete') {
+    return completeStorePack(token, organizationId, locationId, orderId);
+  }
+  if (action === 'ready') {
+    return readyStoreOrder(token, organizationId, locationId, orderId);
+  }
+  return Promise.resolve();
+}
+
+type Tab = 'dashboard' | 'inventory' | 'orders' | 'rx' | 'exceptions' | 'grn' | 'adjust' | 'notifications' | 'support';
 type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
+
+const STORE_TABS: Array<{ id: Tab; label: string }> = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'inventory', label: 'Inventory' },
+  { id: 'orders', label: 'Orders' },
+  { id: 'rx', label: 'Rx desk' },
+  { id: 'exceptions', label: 'Exceptions' },
+  { id: 'grn', label: 'GRN' },
+  { id: 'adjust', label: 'Adjust' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'support', label: 'Support' },
+];
 
 type MapLineDraft = {
   prescription_line_id: string;
@@ -140,9 +191,7 @@ function ScopeSelector({
 }
 
 export function StoreHome() {
-  const { session, signInWithOtp, signOut, expire, getAccessToken } = useSession();
-  const [email, setEmail] = useState('');
-  const [signInError, setSignInError] = useState<string | null>(null);
+  const { session, signOut, expire, getAccessToken } = useSession();
 
   const [organizations, setOrganizations] = useState<StoreOrganization[]>([]);
   const [locations, setLocations] = useState<StoreLocation[]>([]);
@@ -151,6 +200,25 @@ export function StoreHome() {
   const [scopeLoading, setScopeLoading] = useState(false);
 
   const [tab, setTab] = useState<Tab>('dashboard');
+
+  const selectTab = useCallback((next: Tab) => {
+    setTab(next);
+    if (typeof window !== 'undefined') {
+      window.location.hash = next;
+    }
+  }, []);
+
+  useEffect(() => {
+    const syncHash = () => {
+      const raw = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
+      if (raw && STORE_TABS.some((item) => item.id === raw)) {
+        setTab(raw as Tab);
+      }
+    };
+    syncHash();
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
+  }, []);
   const [viewState, setViewState] = useState<ViewState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -246,8 +314,14 @@ export function StoreHome() {
     setErrorMessage(null);
     try {
       if (tab === 'dashboard') {
-        const dash = await fetchStoreDashboard(token, organizationId, locationId);
+        const [dash, queue, ex] = await Promise.all([
+          fetchStoreDashboard(token, organizationId, locationId),
+          fetchStoreOrders(token, organizationId, locationId),
+          fetchStoreExceptions(token, organizationId, locationId),
+        ]);
         setDashboard(dash);
+        setOrders(queue.data ?? []);
+        setExceptions(ex);
       } else if (tab === 'inventory') {
         const lotPage = await fetchStoreLots(token, organizationId, locationId);
         setLots(lotPage.data);
@@ -322,25 +396,7 @@ export function StoreHome() {
   }
 
   if (session.status !== 'authenticated') {
-    return (
-      <main className="shell-main">
-        <Heading level={1}>Store sign-in</Heading>
-        <Text tone="secondary">Use OTP against the real API. Location scope is server-enforced.</Text>
-        <FormField label="Email">
-          {({ id }) => <Input id={id} value={email} onChange={(e) => setEmail(e.target.value)} />}
-        </FormField>
-        <Button
-          onClick={() => {
-            void signInWithOtp(email, 'customer')
-              .then(() => setSignInError(null))
-              .catch((err: Error) => setSignInError(err.message));
-          }}
-        >
-          Send OTP & sign in
-        </Button>
-        {signInError ? <NetworkErrorState action={{ label: 'Retry', onClick: () => setSignInError(null) }} /> : null}
-      </main>
-    );
+    return <PortalAuthPage portalId="store" />;
   }
 
   if (session.audience !== 'customer') {
@@ -350,18 +406,35 @@ export function StoreHome() {
   const scoped = Boolean(organizationId && locationId);
 
   return (
-    <>
-      <HeaderBar title="Store operations">
-        <Button variant="secondary" size="sm" onClick={() => expire()}>
-          Expire session
-        </Button>
-        <Button variant="tertiary" size="sm" onClick={() => signOut()}>
-          Sign out
-        </Button>
-      </HeaderBar>
-      <main className="shell-main">
-        <div className="wp-stack">
-          <Heading level={1}>Location operations</Heading>
+    <PortalWorkspaceShell
+      portalId="store"
+      brandTitle="Pharmacy store"
+      portalLabel="Pharmacy store"
+      nav={STORE_TABS}
+      currentNav={tab}
+      onNavSelect={(id) => selectTab(id as Tab)}
+      audience="customer"
+      breadcrumbs={[
+        { label: 'World Pharma' },
+        { label: 'Pharmacy store' },
+        { label: STORE_TABS.find((item) => item.id === tab)?.label ?? 'Dashboard' },
+      ]}
+    >
+          <header className="wp-page-header store-floor-hero">
+            <div>
+              <p className="store-floor-kicker">Pharmacy floor</p>
+              <Heading level={1}>Location operations</Heading>
+              <p className="wp-page-intro">
+                Pick, pack, dispense, and receive inventory for the selected store. Queues and Rx stay scoped to this
+                location.
+              </p>
+            </div>
+            {scoped ? (
+              <Button variant="secondary" size="sm" onClick={() => void loadTabData()}>
+                Refresh
+              </Button>
+            ) : null}
+          </header>
           <ScopeSelector
             organizations={organizations}
             locations={locations}
@@ -377,17 +450,6 @@ export function StoreHome() {
 
           {scoped ? (
             <>
-              <div className="wp-stack" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {(['dashboard', 'inventory', 'orders', 'rx', 'exceptions', 'grn', 'adjust', 'support'] as Tab[]).map((t) => (
-                  <Button key={t} variant={tab === t ? 'primary' : 'secondary'} size="sm" onClick={() => setTab(t)}>
-                    {t === 'rx' ? 'Rx desk' : t}
-                  </Button>
-                ))}
-                <Button variant="tertiary" size="sm" onClick={() => void loadTabData()}>
-                  Refresh
-                </Button>
-              </div>
-
               {viewState === 'loading' ? (
                 <LoadingState label={tab === 'rx' ? 'Loading dispensing queue' : 'Loading'} />
               ) : null}
@@ -400,31 +462,153 @@ export function StoreHome() {
               ) : null}
 
               {viewState === 'idle' && tab === 'dashboard' ? (
-                dashboard ? (
-                  <Card>
-                    <Text>Queue: {String(dashboard.queue_count ?? 0)}</Text>
-                    <Text>Expiring lots: {String(dashboard.expiring_lots ?? 0)}</Text>
-                    <Text>Open pick tasks: {String(dashboard.open_pick_tasks ?? 0)}</Text>
-                    <Text>Open pack tasks: {String(dashboard.open_pack_tasks ?? 0)}</Text>
-                  </Card>
-                ) : (
-                  <EmptyState title="No dashboard data" description="Select a location to load metrics." />
-                )
+                <div className="store-dashboard">
+                  {dashboard ? (
+                    <Card className="store-dashboard-kpi">
+                      <PortalKpiCards
+                        items={[
+                          { label: 'Queue', value: Number(dashboard.queue_count ?? 0) },
+                          { label: 'Expiring lots', value: Number(dashboard.expiring_lots ?? 0) },
+                          { label: 'Open pick', value: Number(dashboard.open_pick_tasks ?? 0) },
+                          { label: 'Open pack', value: Number(dashboard.open_pack_tasks ?? 0) },
+                        ]}
+                      />
+                    </Card>
+                  ) : (
+                    <EmptyState title="No dashboard data" description="Select a location to load metrics." />
+                  )}
+
+                  <div className="store-dashboard-grid">
+                    <Card raised>
+                      <header className="store-panel-head">
+                        <Heading level={3}>Fulfilment queue</Heading>
+                        <Button size="sm" variant="secondary" onClick={() => selectTab('orders')}>
+                          Open orders
+                        </Button>
+                      </header>
+                      {orders.length === 0 ? (
+                        <EmptyState title="No open orders" description="Pick and pack work will appear here." />
+                      ) : (
+                        <table className="wp-data-table">
+                          <thead>
+                            <tr>
+                              <th>Order</th>
+                              <th>Status</th>
+                              <th>Items</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {orders.slice(0, 8).map((order) => {
+                              const nextAction = storeOrderNextAction(order.status);
+                              return (
+                                <tr key={order.id}>
+                                  <td>{order.order_number}</td>
+                                  <td>
+                                    <span className="wp-status">{storeOrderStatusLabel(order.status)}</span>
+                                  </td>
+                                  <td>
+                                    {order.item_count}
+                                    {order.dispensing_case_id ? ' · Rx' : ''}
+                                  </td>
+                                  <td>
+                                    {nextAction ? (
+                                      <Button
+                                        size="sm"
+                                        onClick={() =>
+                                          void runMutation(() =>
+                                            runStoreOrderAction(
+                                              nextAction,
+                                              getAccessToken()!,
+                                              organizationId,
+                                              locationId,
+                                              order.id,
+                                            ),
+                                          )
+                                        }
+                                      >
+                                        {STORE_ORDER_ACTION_LABELS[nextAction]}
+                                      </Button>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </Card>
+
+                    <Card raised>
+                      <header className="store-panel-head">
+                        <Heading level={3}>Floor shortcuts</Heading>
+                      </header>
+                      <div className="store-quick-actions">
+                        <Button onClick={() => selectTab('orders')}>Orders</Button>
+                        <Button variant="secondary" onClick={() => selectTab('rx')}>
+                          Rx desk
+                        </Button>
+                        <Button variant="secondary" onClick={() => selectTab('inventory')}>
+                          Inventory
+                        </Button>
+                        <Button variant="secondary" onClick={() => selectTab('grn')}>
+                          Receive GRN
+                        </Button>
+                        <Button variant="secondary" onClick={() => selectTab('exceptions')}>
+                          Exceptions
+                        </Button>
+                      </div>
+                      {exceptions ? (
+                        <div className="store-exception-summary">
+                          <Text size="caption" tone="secondary">
+                            Exceptions snapshot
+                          </Text>
+                          <ul className="wp-mini-list">
+                            <li>
+                              Stuck pick tasks: <strong>{exceptions.pick_tasks.length}</strong>
+                            </li>
+                            <li>
+                              Stuck pack tasks: <strong>{exceptions.pack_tasks.length}</strong>
+                            </li>
+                          </ul>
+                          {(exceptions.pick_tasks.length > 0 || exceptions.pack_tasks.length > 0) ? (
+                            <Button size="sm" variant="secondary" onClick={() => selectTab('exceptions')}>
+                              Review exceptions
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </Card>
+                  </div>
+                </div>
               ) : null}
 
               {viewState === 'idle' && tab === 'inventory' ? (
                 lots.length ? (
-                  lots.map((lot) => (
-                    <Card key={lot.id}>
-                      <Text>
-                        {lot.sku ?? lot.id.slice(0, 8)} — {lot.lot_code}
-                      </Text>
-                      <Text size="caption">
-                        On hand {lot.on_hand} · Available {lot.available}
-                        {lot.expires_on ? ` · Expires ${lot.expires_on}` : ''}
-                      </Text>
-                    </Card>
-                  ))
+                  <table className="wp-data-table">
+                    <thead>
+                      <tr>
+                        <th>SKU</th>
+                        <th>Lot</th>
+                        <th>On hand</th>
+                        <th>Available</th>
+                        <th>Expires</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lots.map((lot) => (
+                        <tr key={lot.id}>
+                          <td>{lot.sku ?? lot.id.slice(0, 8)}</td>
+                          <td>
+                            <span className="wp-status">{lot.lot_code}</span>
+                          </td>
+                          <td>{lot.on_hand}</td>
+                          <td>{lot.available}</td>
+                          <td>{lot.expires_on ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 ) : (
                   <EmptyState title="No lots" description="Inventory lots for this location appear here." />
                 )
@@ -432,59 +616,53 @@ export function StoreHome() {
 
               {viewState === 'idle' && tab === 'orders' ? (
                 orders.length ? (
-                  orders.map((order) => (
-                    <Card key={order.id}>
-                      <Text>
-                        {order.order_number} — {order.status} ({order.item_count} items)
-                        {order.dispensing_case_id ? ' · Rx origin' : ''}
-                      </Text>
-                      <div className="wp-stack" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            void runMutation(() =>
-                              startStorePick(getAccessToken()!, organizationId, locationId, order.id),
-                            )
-                          }
-                        >
-                          Start pick
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            void runMutation(() =>
-                              completeStorePick(getAccessToken()!, organizationId, locationId, order.id),
-                            )
-                          }
-                        >
-                          Complete pick
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            void runMutation(() =>
-                              completeStorePack(getAccessToken()!, organizationId, locationId, order.id),
-                            )
-                          }
-                        >
-                          Complete pack
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            void runMutation(() =>
-                              readyStoreOrder(getAccessToken()!, organizationId, locationId, order.id),
-                            )
-                          }
-                        >
-                          Ready to ship
-                        </Button>
-                      </div>
-                    </Card>
-                  ))
+                  <table className="wp-data-table">
+                    <thead>
+                      <tr>
+                        <th>Order</th>
+                        <th>Status</th>
+                        <th>Items</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orders.map((order) => {
+                        const nextAction = storeOrderNextAction(order.status);
+                        return (
+                          <tr key={order.id}>
+                            <td>{order.order_number}</td>
+                            <td>
+                              <span className="wp-status">{storeOrderStatusLabel(order.status)}</span>
+                            </td>
+                            <td>
+                              {order.item_count}
+                              {order.dispensing_case_id ? ' · Rx' : ''}
+                            </td>
+                            <td>
+                              {nextAction ? (
+                                <Button
+                                  size="sm"
+                                  onClick={() =>
+                                    void runMutation(() =>
+                                      runStoreOrderAction(
+                                        nextAction,
+                                        getAccessToken()!,
+                                        organizationId,
+                                        locationId,
+                                        order.id,
+                                      ),
+                                    )
+                                  }
+                                >
+                                  {STORE_ORDER_ACTION_LABELS[nextAction]}
+                                </Button>
+                              ) : null}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 ) : (
                   <EmptyState title="No orders in queue" description="Orders assigned to this location appear here." />
                 )
@@ -492,38 +670,56 @@ export function StoreHome() {
 
               {viewState === 'idle' && tab === 'rx' ? (
                 <>
-                  <Heading level={2}>Pharmacy Rx desk</Heading>
-                  <Text tone="secondary">
-                    Claim, verify, map lots, and complete dispensing. After DISPENSED, the patient may start a commercial
-                    order (read-only order id shown here if present later).
-                  </Text>
+                  <header className="wp-page-header">
+                    <Heading level={2}>Pharmacy Rx desk</Heading>
+                    <p className="wp-page-intro">
+                      Claim, verify, map lots, and complete dispensing. After DISPENSED, the patient may start a
+                      commercial order.
+                    </p>
+                  </header>
                   {!dispensingCases.length ? (
                     <EmptyState
                       title="No dispensing cases"
                       description="Issued prescriptions queued for this pharmacy appear here."
                     />
                   ) : (
-                    dispensingCases.map((row) => (
-                      <Card key={row.id}>
-                        <Text>
-                          {row.status} · Rx {row.prescription_id.slice(0, 8)} · v{row.version_number ?? '—'}
-                        </Text>
-                        <Text size="caption">
-                          Case {row.id.slice(0, 8)} · {row.location_id ? 'claimed' : 'unclaimed'}
-                        </Text>
-                        <Button
-                          size="sm"
-                          variant={selectedCaseId === row.id ? 'primary' : 'secondary'}
-                          onClick={() => setSelectedCaseId(row.id)}
-                        >
-                          Open case
-                        </Button>
-                      </Card>
-                    ))
+                    <table className="wp-data-table">
+                      <thead>
+                        <tr>
+                          <th>Rx</th>
+                          <th>Status</th>
+                          <th>Case</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dispensingCases.map((row) => (
+                          <tr key={row.id} className={selectedCaseId === row.id ? 'is-selected' : undefined}>
+                            <td>{row.prescription_id.slice(0, 8)}</td>
+                            <td>
+                              <span className="wp-status">{dispensingStatusLabel(row.status)}</span>
+                            </td>
+                            <td>
+                              {row.id.slice(0, 8)} · v{row.version_number ?? '—'} ·{' '}
+                              {row.location_id ? 'claimed' : 'unclaimed'}
+                            </td>
+                            <td>
+                              <Button
+                                size="sm"
+                                variant={selectedCaseId === row.id ? 'primary' : 'secondary'}
+                                onClick={() => setSelectedCaseId(row.id)}
+                              >
+                                Open case
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
 
                   {caseDetail ? (
-                    <Card>
+                    <Card className="wp-order-detail">
                       <Heading level={3}>Case {caseDetail.id.slice(0, 8)}</Heading>
                       <Text>{`Status: ${caseDetail.status}`}</Text>
                       {isRefillDispensingCase(caseDetail) ? (
@@ -535,7 +731,7 @@ export function StoreHome() {
                       {caseDetail.order_id ? (
                         <>
                           <Text size="caption">{`Commercial order: ${caseDetail.order_id}`}</Text>
-                          <Button size="sm" variant="secondary" onClick={() => setTab('orders')}>
+                          <Button size="sm" variant="secondary" onClick={() => selectTab('orders')}>
                             View in orders queue
                           </Button>
                         </>
@@ -759,23 +955,40 @@ export function StoreHome() {
               {viewState === 'idle' && tab === 'exceptions' ? (
                 exceptions &&
                 (exceptions.pick_tasks.length || exceptions.pack_tasks.length) ? (
-                  <>
-                    {exceptions.pick_tasks.map((task) => (
-                      <Card key={task.id}>
-                        <Text>
-                          Pick — {task.order_number}: {task.picked_qty}/{task.required_qty} ({task.status})
-                        </Text>
-                      </Card>
-                    ))}
-                    {exceptions.pack_tasks.map((task) => (
-                      <Card key={task.id}>
-                        <Text>
-                          Pack — {task.order_number}: {task.status}
-                          {task.exception ? ` — ${task.exception}` : ''}
-                        </Text>
-                      </Card>
-                    ))}
-                  </>
+                  <table className="wp-data-table">
+                    <thead>
+                      <tr>
+                        <th>Task</th>
+                        <th>Order</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {exceptions.pick_tasks.map((task) => (
+                        <tr key={task.id}>
+                          <td>Pick</td>
+                          <td>{task.order_number}</td>
+                          <td>
+                            <span className="wp-status">{task.status}</span>
+                          </td>
+                          <td>
+                            {task.picked_qty}/{task.required_qty} picked
+                          </td>
+                        </tr>
+                      ))}
+                      {exceptions.pack_tasks.map((task) => (
+                        <tr key={task.id}>
+                          <td>Pack</td>
+                          <td>{task.order_number}</td>
+                          <td>
+                            <span className="wp-status">{task.status}</span>
+                          </td>
+                          <td>{task.exception ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 ) : (
                   <EmptyState title="No exceptions" description="Open pick/pack exceptions appear here." />
                 )
@@ -909,6 +1122,20 @@ export function StoreHome() {
                 </Card>
               ) : null}
 
+              {viewState === 'idle' && tab === 'notifications' && getAccessToken() ? (
+                <StoreNotificationsPanel
+                  token={getAccessToken()!}
+                  onError={(err) => {
+                    if (err instanceof StoreApiError && (err.status === 401 || err.status === 403)) {
+                      setViewState(err.status === 403 ? 'forbidden' : 'network');
+                      return;
+                    }
+                    setErrorMessage((err as Error).message);
+                    setViewState('error');
+                  }}
+                />
+              ) : null}
+
               {viewState === 'idle' && tab === 'support' && getAccessToken() ? (
                 <StoreSupportPanel
                   organizationId={organizationId}
@@ -928,8 +1155,6 @@ export function StoreHome() {
           ) : organizations.length ? (
             <EmptyState title="Select a location" description="Choose organization and location to begin." />
           ) : null}
-        </div>
-      </main>
-    </>
+    </PortalWorkspaceShell>
   );
 }

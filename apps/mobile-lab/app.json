@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "World Pharma Lab",
+    "slug": "world-pharma-lab",
+    "scheme": "worldpharmalab",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.worldpharma.lab" },
+    "android": { "package": "com.worldpharma.lab", "versionCode": 1 },
+    "extra": { "appEnv": "local" }
+  }
+}

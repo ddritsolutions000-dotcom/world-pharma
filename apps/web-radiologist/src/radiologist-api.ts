@@ -4,9 +4,11 @@ const base = () => apiBaseUrl(typeof process === 'undefined' ? {} : process.env)
 
 export class RadiologistApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -20,7 +22,11 @@ async function call<T>(path: string, token: string, init: RequestInit = {}): Pro
   const res = await fetch(`${base()}${path}`, { ...init, headers });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new RadiologistApiError((body as { detail?: string }).detail ?? 'request_failed', res.status);
+    throw new RadiologistApiError(
+      (body as { detail?: string }).detail ?? 'request_failed',
+      res.status,
+      (body as { code?: string }).code,
+    );
   }
   return body as T;
 }
@@ -58,6 +64,8 @@ export type RadiologistCaseDetail = RadiologistCase & {
     id: string;
     status: string;
     summary: string | null;
+    entered_by?: string | null;
+    verified_by?: string | null;
     findings: Array<{
       finding_code: string;
       finding_text: string;
@@ -70,6 +78,10 @@ export type RadiologistCaseDetail = RadiologistCase & {
 
 export function fetchRadiologistOrganizations(token: string) {
   return call<{ data: RadiologistOrg[] }>('/api/v1/radiologist/organizations', token);
+}
+
+export function fetchRadiologistMe(token: string) {
+  return call<{ person_id: string }>('/api/v1/radiologist/me', token);
 }
 
 export function fetchRadiologistWorklist(token: string, imagingOrgId: string) {
@@ -91,6 +103,70 @@ export function fetchRadiologistCase(token: string, imagingOrgId: string, studyI
     `/api/v1/radiologist/cases/${studyId}?imaging_org_id=${encodeURIComponent(imagingOrgId)}`,
     token,
   );
+}
+
+export function fetchRadiologistViewerSession(token: string, imagingOrgId: string, studyId: string) {
+  return call<{
+    imaging_study_id: string;
+    imaging_booking_id: string;
+    study_instance_uid: string;
+    accession_number: string;
+    modality_code: string | null;
+    study_description: string | null;
+    study_date_time: string | null;
+    sandbox: boolean;
+    viewer: {
+      available: boolean;
+      certified_diagnostic_workstation: boolean;
+      note: string;
+      report_separate_from_viewer?: boolean;
+    };
+    series: Array<{
+      series_id: string;
+      series_instance_uid: string;
+      series_number: number;
+      modality_code: string | null;
+      description: string | null;
+      frame_count: number;
+      instance_count: number;
+    }>;
+    capabilities: {
+      zoom: boolean;
+      pan: boolean;
+      rotate: boolean;
+      reset: boolean;
+      fit_to_screen: boolean;
+      series_navigation: boolean;
+      slice_navigation: boolean;
+      fullscreen: boolean;
+    };
+  }>(
+    `/api/v1/radiologist/studies/${studyId}/viewer?imaging_org_id=${encodeURIComponent(imagingOrgId)}`,
+    token,
+  );
+}
+
+export async function fetchRadiologistViewerFrameBlob(
+  token: string,
+  imagingOrgId: string,
+  studyId: string,
+  seriesId: string,
+  frameIndex: number,
+): Promise<Blob> {
+  const headers = new Headers({ Accept: 'image/png', Authorization: `Bearer ${token}` });
+  const res = await fetch(
+    `${base()}/api/v1/radiologist/studies/${studyId}/viewer/series/${seriesId}/frames/${frameIndex}?imaging_org_id=${encodeURIComponent(imagingOrgId)}`,
+    { headers },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new RadiologistApiError(
+      (body as { detail?: string }).detail ?? 'frame_request_failed',
+      res.status,
+      (body as { code?: string }).code,
+    );
+  }
+  return res.blob();
 }
 
 export function assignRadiologistCase(token: string, imagingOrgId: string, reportId: string) {

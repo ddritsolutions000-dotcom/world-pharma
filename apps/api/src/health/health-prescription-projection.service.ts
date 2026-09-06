@@ -28,6 +28,7 @@ export class HealthPrescriptionProjectionService {
       countryId: string;
       countryCode: string;
       publishedAt: Date;
+      subjectFamilyMemberId?: string | null;
     },
   ) {
     const resolved = await this.policy.resolvePublished(input.countryCode);
@@ -42,6 +43,7 @@ export class HealthPrescriptionProjectionService {
       return existing;
     }
 
+    const subjectFamilyMemberId = input.subjectFamilyMemberId ?? null;
     const artifactId = uuidv7();
     const artifact = await tx.healthArtifact.create({
       data: {
@@ -55,6 +57,7 @@ export class HealthPrescriptionProjectionService {
         publishedAt: input.publishedAt,
         sandbox: true,
         status: HealthArtifactStatus.ACTIVE,
+        subjectFamilyMemberId,
       },
     });
 
@@ -68,6 +71,7 @@ export class HealthPrescriptionProjectionService {
       title: 'Prescription',
       occurredAt: input.publishedAt,
       sandbox: true,
+      subjectFamilyMemberId,
     });
 
     return artifact;
@@ -83,6 +87,7 @@ export class HealthPrescriptionProjectionService {
       countryId: string;
       countryCode: string;
       publishedAt: Date;
+      subjectFamilyMemberId?: string | null;
     },
   ) {
     const priorArtifact = await tx.healthArtifact.findUnique({
@@ -111,6 +116,7 @@ export class HealthPrescriptionProjectionService {
       countryId: input.countryId,
       countryCode: input.countryCode,
       publishedAt: input.publishedAt,
+      subjectFamilyMemberId: input.subjectFamilyMemberId,
     });
   }
 }

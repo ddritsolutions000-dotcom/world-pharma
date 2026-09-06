@@ -1,5 +1,5 @@
 import { INestApplication } from '@nestjs/common';
-import { LocationKind, OrganizationKind, PolicyPackStatus } from '@prisma/client';
+import { InventoryLotStatus, LocationKind, OrganizationKind, PolicyPackStatus } from '@prisma/client';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { uuidv7 } from '@world-pharma/shared';
@@ -14,24 +14,7 @@ import {
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
 import { seedCheckoutInventory } from '../test/seed-checkout-inventory';
-
-async function signIn(
-  app: INestApplication,
-  email: string,
-  audience: 'admin' | 'customer' = 'customer',
-): Promise<{ token: string; personId: string }> {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token, personId: verified.body.person_id };
-}
+import { signIn, provisionOrgAdmin, provisionSuperAdmin } from '../test/sign-in';
 
 describe('cart checkout (e2e)', () => {
   let app: INestApplication;
@@ -133,28 +116,19 @@ describe('cart checkout (e2e)', () => {
       },
     });
 
-    const admin = await signIn(app, `cart-admin-${Date.now()}@example.com`, 'admin');
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `cart-vendor-${Date.now()}@example.com`, 'admin');
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendorA.id,
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, 'cart-admin');
+    const vendorUser = await provisionOrgAdmin(app, prisma, 'cart-vendor', vendorA.id);
 
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,
       adminToken: admin.token,
       sellerOrgId: vendorA.id,
+    });
+    const vendorUserB = await provisionOrgAdmin(app, prisma, 'cart-vendor-b', vendorB.id);
+    await activateMarketplaceSeller(app, {
+      vendorToken: vendorUserB.token,
+      adminToken: admin.token,
+      sellerOrgId: vendorB.id,
     });
 
     const brand = await request(app.getHttpServer())
@@ -302,5 +276,117 @@ describe('cart checkout (e2e)', () => {
     });
     expect(cartEvents.length).toBeGreaterThan(0);
     expect(dup.status).toBeGreaterThan(0);
+
+    const goodAddr = await request(app.getHttpServer())
+      .post('/api/v1/me/addresses')
+      .set('Authorization', `Bearer ${customer.token}`)
+      .set('Idempotency-Key', `cart-svc-good-${Date.now()}`)
+      .send({
+        country_code: 'TQ',
+        recipient_name: 'Cart Customer',
+        line1: '1 Delivery Street',
+        city: 'Test City',
+        postal_code: '400001',
+        phone: '+10000000001',
+      });
+    const badAddr = await request(app.getHttpServer())
+      .post('/api/v1/me/addresses')
+      .set('Authorization', `Bearer ${customer.token}`)
+      .set('Idempotency-Key', `cart-svc-bad-${Date.now()}`)
+      .send({
+        country_code: 'TQ',
+        recipient_name: 'Cart Customer',
+        line1: '2 Remote Lane',
+        city: 'Nowhere',
+        postal_code: 'X',
+        phone: '+10000000002',
+      });
+    await request(app.getHttpServer())
+      .post(`/api/v1/me/checkout/sessions/${session.body.id}/fulfillment`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .send({ address_id: goodAddr.body.id });
+    const serviceableQuote = await request(app.getHttpServer())
+      .post(`/api/v1/me/checkout/sessions/${session.body.id}/quote`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .set('Idempotency-Key', `cart-svc-q-good-${Date.now()}`)
+      .send({});
+    expect(serviceableQuote.status).toBeLessThan(300);
+    await request(app.getHttpServer())
+      .post(`/api/v1/me/checkout/sessions/${session.body.id}/fulfillment`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .send({ address_id: badAddr.body.id });
+    const blockedDestination = await request(app.getHttpServer())
+      .post(`/api/v1/me/checkout/sessions/${session.body.id}/quote`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .set('Idempotency-Key', `cart-svc-q-bad-${Date.now()}`)
+      .send({});
+    expect(blockedDestination.status).toBe(422);
+    expect(blockedDestination.body.code).toBe('NOT_SERVICEABLE');
+
+    const blockedCustomer = await signIn(app, `cart-svc-blocked-${Date.now()}@example.com`, 'customer');
+    const blockedGoodAddr = await request(app.getHttpServer())
+      .post('/api/v1/me/addresses')
+      .set('Authorization', `Bearer ${blockedCustomer.token}`)
+      .set('Idempotency-Key', `cart-svc-blocked-addr-${Date.now()}`)
+      .send({
+        country_code: 'TQ',
+        recipient_name: 'Blocked Customer',
+        line1: '3 Delivery Street',
+        city: 'Test City',
+        postal_code: '400001',
+        phone: '+10000000003',
+      });
+    const locationB = await prisma.location.create({
+      data: {
+        id: uuidv7(),
+        organizationId: vendorB.id,
+        countryId: country.id,
+        kind: LocationKind.VENDOR_WAREHOUSE,
+        name: 'B WH',
+        timezone: 'UTC',
+      },
+    });
+    await prisma.inventoryLot.create({
+      data: {
+        id: uuidv7(),
+        variantId: variant.body.id,
+        locationId: locationB.id,
+        ownerOrgId: vendorB.id,
+        countryId: country.id,
+        lotCode: 'B-LOT',
+        status: InventoryLotStatus.ACTIVE,
+      },
+    }).then(async (lot) => {
+      await prisma.inventoryBalance.create({
+        data: { id: uuidv7(), lotId: lot.id, onHand: 5, available: 5 },
+      });
+    });
+    const blockedAdd = await request(app.getHttpServer())
+      .post('/api/v1/me/cart/items?country=TQ')
+      .set('Authorization', `Bearer ${blockedCustomer.token}`)
+      .set('Idempotency-Key', `cart-svc-add-b-${Date.now()}`)
+      .send({ offer_id: offerB.id, qty: 1 });
+    expect(blockedAdd.status).toBe(201);
+    const blockedSession = await request(app.getHttpServer())
+      .post('/api/v1/me/checkout/sessions?country=TQ')
+      .set('Authorization', `Bearer ${blockedCustomer.token}`)
+      .set('Idempotency-Key', `cart-svc-co-b-${Date.now()}`)
+      .send({});
+    expect(blockedSession.status).toBe(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/me/checkout/sessions/${blockedSession.body.id}/fulfillment`)
+      .set('Authorization', `Bearer ${blockedCustomer.token}`)
+      .send({ address_id: blockedGoodAddr.body.id });
+    await prisma.organization.update({
+      where: { id: vendorB.id },
+      data: { status: 'SUSPENDED' },
+    });
+    const blockedSeller = await request(app.getHttpServer())
+      .post(`/api/v1/me/checkout/sessions/${blockedSession.body.id}/quote`)
+      .set('Authorization', `Bearer ${blockedCustomer.token}`)
+      .set('Idempotency-Key', `cart-svc-q-seller-${Date.now()}`)
+      .send({});
+    expect(blockedSeller.status).toBe(409);
+    expect(blockedSeller.body.code).toBe('OFFER_EXPIRED');
   });
 });

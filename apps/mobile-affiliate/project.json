@@ -1,0 +1,30 @@
+{
+  "name": "mobile-affiliate",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/mobile-affiliate/src",
+  "projectType": "application",
+  "tags": ["type:app", "scope:affiliate"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/mobile-affiliate/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "options": {
+        "jestConfig": "apps/mobile-affiliate/jest.config.cts",
+        "passWithNoTests": false
+      }
+    },
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx expo start --web --port 8092",
+        "cwd": "apps/mobile-affiliate"
+      }
+    }
+  }
+}

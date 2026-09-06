@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
@@ -13,6 +13,12 @@ import { DeliveryService } from './delivery.service';
 @RequireAudiences('admin')
 export class DeliveryAdminController {
   constructor(private readonly delivery: DeliveryService) {}
+
+  @Get('jobs')
+  @RequirePermissions('logistics:read')
+  jobs() {
+    return this.delivery.listJobsAdmin();
+  }
 
   @Post('jobs/assign')
   @HttpCode(200)

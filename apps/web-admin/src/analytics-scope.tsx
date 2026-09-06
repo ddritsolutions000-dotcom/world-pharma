@@ -2,14 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  Button,
-  Card,
-  FormField,
-  Heading,
-  Input,
-  Text,
-} from '@world-pharma/ui-kit/web';
+import { Button, FormField, Heading, Input, Select } from '@world-pharma/ui-kit/web';
+import { MARKET_COUNTRY_CODES, workingCountry } from './working-country';
 
 export type AnalyticsScopeProps = {
   countryCode: string;
@@ -40,54 +34,52 @@ export function AnalyticsScopeBar({
 
   return (
     <div className="wp-stack">
-      <Heading level={1}>Analytics</Heading>
-      <Text tone="secondary">
-        Operational commerce and marketing rollups only. Country-scoped, non-clinical aggregates from R13-E.
-      </Text>
+      <header className="wp-page-header">
+        <Heading level={1}>Analytics</Heading>
+        <p className="wp-page-intro">
+          Operational commerce and marketing rollups only. Country-scoped, non-clinical aggregates from R13-E.
+        </p>
+      </header>
 
-      <nav aria-label="Analytics views" className="wp-stack">
-        <ul style={{ display: 'flex', gap: '1rem', listStyle: 'none', padding: 0, margin: 0 }}>
-          {VIEWS.map((view) => {
-            const active = pathname === view.href;
-            return (
-              <li key={view.href}>
-                <Link
-                  href={view.href}
-                  aria-current={active ? 'page' : undefined}
-                  style={{ fontWeight: active ? 600 : 400 }}
-                >
-                  {view.label}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+      <nav aria-label="Analytics views" className="wp-toolbar">
+        {VIEWS.map((view) => {
+          const active = pathname === view.href;
+          return (
+            <Link key={view.href} href={view.href} aria-current={active ? 'page' : undefined}>
+              <Button size="sm" variant={active ? 'primary' : 'secondary'}>
+                {view.label}
+              </Button>
+            </Link>
+          );
+        })}
       </nav>
 
-      <Card>
-        <div className="wp-stack">
-          <FormField label="Country code" hint="Two-letter ISO country scope for analytics reads">
-            {({ id }) => (
-              <Input
-                id={id}
-                value={countryCode}
-                maxLength={2}
-                autoComplete="off"
-                onChange={(e) => onCountryCodeChange(e.target.value.toUpperCase())}
-              />
-            )}
-          </FormField>
-          <FormField label="From (UTC date)">
-            {({ id }) => (
-              <Input id={id} type="date" value={from} onChange={(e) => onFromChange(e.target.value)} />
-            )}
-          </FormField>
-          <FormField label="To (UTC date)">
-            {({ id }) => <Input id={id} type="date" value={to} onChange={(e) => onToChange(e.target.value)} />}
-          </FormField>
-          <Button onClick={onRefresh}>Refresh</Button>
-        </div>
-      </Card>
+      <div className="wp-toolbar">
+        <FormField label="Country" hint="Sandbox markets only — no silent India default">
+          {({ id }) => (
+            <Select
+              id={id}
+              aria-label="Country code"
+              value={workingCountry(countryCode)}
+              onChange={(e) => onCountryCodeChange(workingCountry(e.target.value))}
+            >
+              <option value="">Select market…</option>
+              {MARKET_COUNTRY_CODES.map((iso) => (
+                <option key={iso} value={iso}>
+                  {iso}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="From (UTC date)">
+          {({ id }) => <Input id={id} type="date" value={from} onChange={(e) => onFromChange(e.target.value)} />}
+        </FormField>
+        <FormField label="To (UTC date)">
+          {({ id }) => <Input id={id} type="date" value={to} onChange={(e) => onToChange(e.target.value)} />}
+        </FormField>
+        <Button onClick={onRefresh}>Refresh</Button>
+      </div>
     </div>
   );
 }

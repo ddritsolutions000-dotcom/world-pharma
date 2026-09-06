@@ -63,6 +63,23 @@ export class MockPaymentGatewayAdapter extends PaymentGatewayPort {
             sandbox: true,
           },
         };
+      case 'upi_collect':
+        this.ledger.set(providerRef, {
+          status: 'unknown',
+          providerRef,
+          amountMinor: input.amountMinor,
+          currency: input.currency,
+        });
+        return {
+          submitted: true,
+          status: 'requires_action',
+          providerRef,
+          nextAction: {
+            type: 'upi_collect',
+            vpa: 'worldpharma@upi',
+            sandbox: true,
+          },
+        };
       case 'authorize':
         this.ledger.set(providerRef, {
           status: 'authorized',

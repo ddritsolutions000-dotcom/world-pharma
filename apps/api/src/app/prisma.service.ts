@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@world-pharma/database';
 import { applyTenantGucs } from '../tenancy/apply-tenant-gucs';
-import { tenantAls } from '../tenancy/tenant-als';
+import { tenantAls, withTenantNestLock } from '../tenancy/tenant-als';
 import type { TenantContext } from '../tenancy/tenant-context';
 
 const root = new PrismaClient();
@@ -11,6 +11,17 @@ export async function disconnectSharedPrisma(): Promise<void> {
   await root.$disconnect();
 }
 
+async function safeRollbackToSavepoint(
+  tx: { $executeRawUnsafe: (sql: string) => Promise<unknown> },
+  sp: string,
+): Promise<void> {
+  try {
+    await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${sp}`);
+  } catch {
+    // Transaction may already be aborted, or a raced RELEASE destroyed this savepoint.
+  }
+}
+
 export async function runWithTenant<T>(
   ctx: TenantContext,
   fn: () => Promise<T>,
@@ -18,31 +29,41 @@ export async function runWithTenant<T>(
 ): Promise<T> {
   const existing = opts?.fresh ? undefined : tenantAls.getStore();
   if (existing) {
-    const previous = existing.ctx;
-    const sp = `rls_ctx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    await existing.tx.$executeRawUnsafe(`SAVEPOINT ${sp}`);
-    await applyTenantGucs(existing.tx, ctx);
-    existing.ctx = ctx;
-    try {
-      const result = await fn();
-      await existing.tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${sp}`);
-      return result;
-    } catch (error) {
-      await existing.tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${sp}`);
-      throw error;
-    } finally {
-      existing.ctx = previous;
+    return withTenantNestLock(existing, async () => {
+      const previous = existing.ctx;
+      const sp = `rls_ctx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      await existing.tx.$executeRawUnsafe(`SAVEPOINT ${sp}`);
+      await applyTenantGucs(existing.tx, ctx);
+      existing.ctx = ctx;
       try {
-        await applyTenantGucs(existing.tx, previous);
-      } catch {
-        // parent transaction may already be aborted
+        const result = await fn();
+        await existing.tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${sp}`);
+        return result;
+      } catch (error) {
+        await safeRollbackToSavepoint(existing.tx, sp);
+        throw error;
+      } finally {
+        existing.ctx = previous;
+        try {
+          await applyTenantGucs(existing.tx, previous);
+        } catch {
+          // parent transaction may already be aborted
+        }
       }
-    }
+    });
   }
-  return root.$transaction(async (tx) => {
-    await applyTenantGucs(tx, ctx);
-    return tenantAls.run({ tx, ctx }, fn);
-  });
+  return root.$transaction(
+    async (tx) => {
+      await applyTenantGucs(tx, ctx);
+      return tenantAls.run({ tx, ctx }, fn);
+    },
+    {
+      // Admin network/readiness snapshots and multi-gate composition exceed Prisma's
+      // default 5s interactive timeout under RLS; keep fail-closed semantics, raise budget only.
+      maxWait: 10_000,
+      timeout: 20_000,
+    },
+  );
 }
 
 export interface PrismaService extends PrismaClient {
@@ -65,20 +86,23 @@ export class PrismaService implements OnModuleDestroy {
             await root.$disconnect();
           };
         }
-        const tx = tenantAls.getStore()?.tx;
-        if (prop === '$transaction' && tx) {
+        const store = tenantAls.getStore();
+        const tx = store?.tx;
+        if (prop === '$transaction' && tx && store) {
           return async (arg: unknown, options?: unknown) => {
             if (typeof arg === 'function') {
-              const sp = `rls_nest_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-              await tx.$executeRawUnsafe(`SAVEPOINT ${sp}`);
-              try {
-                const result = await (arg as (inner: typeof tx) => Promise<unknown>)(tx);
-                await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${sp}`);
-                return result;
-              } catch (error) {
-                await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${sp}`);
-                throw error;
-              }
+              return withTenantNestLock(store, async () => {
+                const sp = `rls_nest_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+                await tx.$executeRawUnsafe(`SAVEPOINT ${sp}`);
+                try {
+                  const result = await (arg as (inner: typeof tx) => Promise<unknown>)(tx);
+                  await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${sp}`);
+                  return result;
+                } catch (error) {
+                  await safeRollbackToSavepoint(tx, sp);
+                  throw error;
+                }
+              });
             }
             if (Array.isArray(arg)) {
               return Promise.all(arg);

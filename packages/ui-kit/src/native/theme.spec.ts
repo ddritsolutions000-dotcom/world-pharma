@@ -6,6 +6,6 @@ describe('native tokens', () => {
     expect(light.text.primary).toBeTruthy();
     expect(light.clinical.rx).not.toBe(light.status.success);
     expect(nativeSpace(4)).toBe(16);
-    expect(nativeTouch).toBe(44);
+    expect(nativeTouch).toBe(48);
   });
 });

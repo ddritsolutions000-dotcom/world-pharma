@@ -7,7 +7,7 @@ import { isEditableStatus } from './cms-admin-api';
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
-  useSearchParams: () => new URLSearchParams('country=XX'),
+  useSearchParams: () => new URLSearchParams('country=IN'),
 }));
 
 function wrap(ui: React.ReactElement) {
@@ -54,15 +54,15 @@ describe('CmsAdminList', () => {
     });
   });
 
-  it('renders CMS list heading and OD-CMS-01 notice', async () => {
+  it('renders CMS list heading and intro', async () => {
     wrap(<CmsAdminList />);
-    expect(await screen.findByRole('heading', { name: 'CMS content' })).toBeInTheDocument();
-    expect(screen.getByText(/OD-CMS-01 dual-control is not implemented/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Storefront CMS' })).toBeInTheDocument();
+    expect(screen.getByText(/Edit banners, landing pages/i)).toBeInTheDocument();
     expect(await screen.findByText('Help topic')).toBeInTheDocument();
   });
 
   it('shows permission denied on 403', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValue({
       ok: false,
       status: 403,
       json: async () => ({ detail: 'forbidden' }),
@@ -71,14 +71,14 @@ describe('CmsAdminList', () => {
     expect(await screen.findByText(/You do not have access/i)).toBeInTheDocument();
   });
 
-  it('shows network error on failure', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+  it('shows load error on HTTP 500', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
       ok: false,
       status: 500,
       json: async () => ({ detail: 'server_error' }),
     });
     wrap(<CmsAdminList />);
-    expect(await screen.findByText(/Connection problem/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Could not load this area/i })).toBeInTheDocument();
   });
 });
 

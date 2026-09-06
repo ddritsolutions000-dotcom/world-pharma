@@ -16,10 +16,33 @@ export class PaymentController {
     return this.payments.listMethods(country);
   }
 
+  @Get('me/payments/intents')
+  @UseGuards(JwtAuthGuard)
+  listIntents(
+    @CurrentPrincipal() principal: Principal,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.payments.listCustomerIntents(principal, {
+      limit: limit ? Number(limit) : undefined,
+      cursor,
+    });
+  }
+
   @Get('me/payments/intents/:id')
   @UseGuards(JwtAuthGuard)
   getIntent(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
     return this.payments.getIntent(principal, id);
+  }
+
+  @Post('me/payments/intents/:id/complete-upi')
+  @UseGuards(JwtAuthGuard)
+  completeUpi(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Headers('idempotency-key') idempotencyKey: string,
+  ) {
+    return this.payments.completeSandboxUpi(principal, id, idempotencyKey);
   }
 
   @Post('me/payments/intents/:id/confirm')

@@ -1,7 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSession } from '@world-pharma/shell-web';
+import {
+  PartnerInboxPanel,
+  PartnerSupportPanel,
+  PortalAuthPage,
+  PortalBrandBar,
+  PortalKpiCards,
+  RouteBreadcrumbs,
+  buildPortalBreadcrumbs,
+  useSession,
+} from '@world-pharma/shell-web';
 import {
   Button,
   Card,
@@ -17,7 +26,7 @@ import {
   Sidebar,
   Text,
 } from '@world-pharma/ui-kit/web';
-import { LabApiError, fetchLabActivity, fetchLabOffers, fetchLabOrganizations, type LabOrganization } from './lab-api';
+import { LabApiError, fetchLabActivity, fetchLabCollections, fetchLabOffers, fetchLabOrganizations, fetchLabStaffBookings, type LabOrganization } from './lab-api';
 import { LabAccessionPanel } from './lab-accession-panel';
 import { LabBookingsPanel } from './lab-bookings-panel';
 import { LabCapabilitiesPanel } from './lab-capabilities-panel';
@@ -26,6 +35,8 @@ import { LabCollectionsPanel } from './lab-collections-panel';
 import { LabPathologyPanel } from './lab-pathology-panel';
 import { LabPhysicalPanel } from './lab-physical-panel';
 import { LabProcessingPanel } from './lab-processing-panel';
+import { LabEarningsPanel } from './lab-earnings-panel';
+import { LabTeamPanel } from './lab-team-panel';
 import { LabTransportPanel } from './lab-transport-panel';
 
 type TabId =
@@ -40,7 +51,10 @@ type TabId =
   | 'processing'
   | 'pathology'
   | 'physical'
-  | 'incidents'
+  | 'earnings'
+  | 'team'
+  | 'notifications'
+  | 'support'
   | 'activity';
 
 type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
@@ -57,7 +71,10 @@ const NAV: Array<{ id: TabId; label: string }> = [
   { id: 'processing', label: 'Processing' },
   { id: 'pathology', label: 'Pathology' },
   { id: 'physical', label: 'Physical' },
-  { id: 'incidents', label: 'Incidents' },
+  { id: 'earnings', label: 'Earnings' },
+  { id: 'team', label: 'Team' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'support', label: 'Support' },
   { id: 'activity', label: 'Activity' },
 ];
 
@@ -83,7 +100,13 @@ function OrgPicker({
     return (
       <EmptyState
         title="No laboratory organization"
-        description="You need an active membership on a LAB organization. Vendor, store, and clinic memberships are not shown here."
+        description="You need an active membership on a LAB organization. Apply as a lab partner, or sign in with the email your lab admin invited."
+        action={{
+          label: 'Apply as lab partner',
+          onClick: () => {
+            window.location.href = 'http://127.0.0.1:3008/lab';
+          },
+        }}
       />
     );
   }
@@ -110,21 +133,8 @@ function OrgPicker({
   );
 }
 
-function LaterPhaseState({ title, phase }: { title: string; phase: string }) {
-  return (
-    <Card>
-      <EmptyState
-        title={title}
-        description={`${phase} is planned after R7-A. This navigation slot is reserved without fake booking or clinical data.`}
-      />
-    </Card>
-  );
-}
-
 export function LabShell() {
-  const { session, signInWithOtp, signOut, expire, getAccessToken } = useSession();
-  const [email, setEmail] = useState('');
-  const [signInError, setSignInError] = useState<string | null>(null);
+  const { session, signOut, expire, getAccessToken } = useSession();
   const [organizations, setOrganizations] = useState<LabOrganization[]>([]);
   const [organizationId, setOrganizationId] = useState('');
   const [scopeLoading, setScopeLoading] = useState(false);
@@ -132,6 +142,9 @@ export function LabShell() {
   const [viewState, setViewState] = useState<ViewState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [offerCount, setOfferCount] = useState(0);
+  const [bookingCount, setBookingCount] = useState(0);
+  const [collectionCount, setCollectionCount] = useState(0);
+  const [kpiLoading, setKpiLoading] = useState(false);
   const [activityRows, setActivityRows] = useState<
     Array<{ id: string; type: string; outcome: string; created_at: string }>
   >([]);
@@ -189,11 +202,13 @@ export function LabShell() {
     try {
       const orgRes = await fetchLabOrganizations(token);
       setOrganizations(orgRes.data);
-      if (orgRes.data.length === 1) {
-        const only = orgRes.data[0];
-        if (only) {
-          setOrganizationId(only.id);
-        }
+      if (orgRes.data.length >= 1) {
+        setOrganizationId((current) => {
+          if (current && orgRes.data.some((org) => org.id === current)) {
+            return current;
+          }
+          return orgRes.data[0]!.id;
+        });
       }
       setViewState('idle');
       setErrorMessage(null);
@@ -215,14 +230,23 @@ export function LabShell() {
     if (!token || !organizationId || session.status !== 'authenticated') {
       return;
     }
-    void fetchLabOffers(token, organizationId)
-      .then((body) => setOfferCount(body.data.length))
-      .catch(() => setOfferCount(0));
+    setKpiLoading(true);
+    void Promise.all([
+      fetchLabOffers(token, organizationId)
+        .then((body) => setOfferCount(body.data.length))
+        .catch(() => setOfferCount(0)),
+      fetchLabStaffBookings(token, organizationId)
+        .then((body) => setBookingCount(body.data.length))
+        .catch(() => setBookingCount(0)),
+      fetchLabCollections(token, organizationId)
+        .then((body) => setCollectionCount(body.data.length))
+        .catch(() => setCollectionCount(0)),
+    ]).finally(() => setKpiLoading(false));
   }, [getAccessToken, organizationId, session.status, tab]);
 
   if (session.status === 'expired') {
     return (
-      <div className="lab-body">
+      <div className="portal-root lab-body" data-tone="lab">
         <div className="shell-main">
           <SessionExpiredState action={{ label: 'Continue', onClick: () => selectTab('dashboard') }} />
         </div>
@@ -231,69 +255,51 @@ export function LabShell() {
   }
 
   if (session.status !== 'authenticated') {
-    return (
-      <div className="lab-body">
-        <div className="shell-main wp-stack">
-          <HeaderBar title="World Pharma Lab">
-            <Text size="caption">Diagnostics foundation (R7-A)</Text>
-          </HeaderBar>
-          <Card>
-            <Heading level={2}>Sign in</Heading>
-            <Text tone="secondary">OTP session for lab partner staff. No LIS/HIS console.</Text>
-            <FormField label="Email">
-              {({ id }) => (
-                <Input id={id} value={email} onChange={(e) => setEmail(e.target.value)} />
-              )}
-            </FormField>
-            {signInError ? <Text tone="secondary">{signInError}</Text> : null}
-            <Button
-              onClick={() => {
-                setSignInError(null);
-                void signInWithOtp(email.trim(), 'customer').catch((err: Error) =>
-                  setSignInError(err.message),
-                );
-              }}
-            >
-              Continue with OTP
-            </Button>
-          </Card>
-        </div>
-      </div>
-    );
+    return <PortalAuthPage portalId="lab" />;
   }
 
   const token = getAccessToken() ?? '';
 
   return (
-    <div className="lab-body">
-      <div className="lab-layout">
-        <Sidebar
-          items={NAV.map((item) => ({ id: item.id, label: item.label }))}
-          current={tab}
-        />
-        <div className="shell-main wp-stack">
-          <HeaderBar title="Laboratory operations">
-            <Text size="caption">
-              {selectedOrg
-                ? `${selectedOrg.display_name} · ${selectedOrg.country_code} · sandbox`
-                : 'Select a LAB organization'}
-            </Text>
-            <Button size="sm" variant="secondary" onClick={() => void signOut()}>
-              Sign out
-            </Button>
-          </HeaderBar>
-          <div className="lab-tab-row">
-            {NAV.map((item) => (
-              <Button
-                key={item.id}
-                size="sm"
-                variant={tab === item.id ? 'primary' : 'secondary'}
-                onClick={() => selectTab(item.id)}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </div>
+    <div className="portal-root lab-body" data-tone="lab">
+      <PortalBrandBar portalLabel="Laboratory" />
+      <HeaderBar title="Laboratory operations">
+        <Text size="caption">
+          {selectedOrg ? `${selectedOrg.display_name} · ${selectedOrg.country_code}` : 'Select a laboratory'}
+        </Text>
+        <Button size="sm" variant="secondary" onClick={() => void signOut()}>
+          Sign out
+        </Button>
+      </HeaderBar>
+      <div className="portal-body">
+        <aside className="portal-sidebar">
+          <Sidebar
+            items={NAV.map((item) => ({ id: item.id, label: item.label }))}
+            current={tab}
+            onSelect={(id) => {
+              if (isTabId(id)) {
+                selectTab(id);
+              }
+            }}
+          />
+        </aside>
+        <main className="portal-main wp-stack">
+          <RouteBreadcrumbs
+            items={buildPortalBreadcrumbs(
+              'Lab',
+              tab,
+              Object.fromEntries(NAV.map((item) => [item.id, item.label])),
+            )}
+          />
+          <header className="wp-page-header">
+            <Heading level={1}>Laboratory operations</Heading>
+            <p className="wp-page-intro">
+              Bookings, collections, accession, processing, and pathology reporting for your lab organization.
+            </p>
+          </header>
+          <p className="wp-sandbox-banner" role="status">
+            Sandbox lab workflows — not a live diagnostic network. Reports and settlements here are demo data.
+          </p>
 
           <OrgPicker
             organizations={organizations}
@@ -318,13 +324,40 @@ export function LabShell() {
           {viewState === 'idle' || viewState === 'loading' ? (
             <>
               {tab === 'dashboard' ? (
-                <Card>
-                  <Heading level={2}>Dashboard</Heading>
-                  <Text>
-                    Offers on this lab: {offerCount}. Customer booking visibility is available; accession and
-                    pathology remain locked until later R7 sub-phases.
-                  </Text>
-                </Card>
+                <div className="wp-stack">
+                  <Card>
+                    <Heading level={2}>Laboratory snapshot</Heading>
+                    <Text tone="secondary">
+                      Live queues for {selectedOrg?.display_name ?? 'your lab'} — same bookings customers place from the
+                      store.
+                    </Text>
+                    {!organizationId ? (
+                      <Text tone="secondary">Select a laboratory organization above to load queue metrics.</Text>
+                    ) : kpiLoading ? (
+                      <LoadingState label="Loading queue metrics…" />
+                    ) : (
+                      <PortalKpiCards
+                        items={[
+                          { label: 'Published tests', value: offerCount },
+                          { label: 'Bookings', value: bookingCount },
+                          { label: 'Collections', value: collectionCount },
+                        ]}
+                      />
+                    )}
+                    <div className="wp-quick-grid" style={{ marginTop: 16 }}>
+                      <Button onClick={() => selectTab('bookings')}>Open bookings</Button>
+                      <Button variant="secondary" onClick={() => selectTab('collections')}>
+                        Open collections
+                      </Button>
+                      <Button variant="secondary" onClick={() => selectTab('pathology')}>
+                        Pathology
+                      </Button>
+                      <Button variant="secondary" onClick={() => selectTab('earnings')}>
+                        Earnings
+                      </Button>
+                    </div>
+                  </Card>
+                </div>
               ) : null}
               {tab === 'organization' ? (
                 <Card>
@@ -371,51 +404,38 @@ export function LabShell() {
               {tab === 'collections' && organizationId ? (
                 <LabCollectionsPanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
-              {tab === 'collections' && !organizationId ? (
-                <EmptyState
-                  title="Select a laboratory"
-                  description="Choose a LAB organization to view the collection queue."
-                />
-              ) : null}
-              {tab === 'bookings' && !organizationId ? (
-                <EmptyState
-                  title="Select a laboratory"
-                  description="Choose a LAB organization to view bookings."
-                />
-              ) : null}
               {tab === 'transport' && organizationId ? (
                 <LabTransportPanel organizationId={organizationId} token={token} onError={handleApiError} />
-              ) : null}
-              {tab === 'transport' && !organizationId ? (
-                <EmptyState title="Select a laboratory" description="Choose a LAB organization to view transport." />
               ) : null}
               {tab === 'accession' && organizationId ? (
                 <LabAccessionPanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
-              {tab === 'accession' && !organizationId ? (
-                <EmptyState title="Select a laboratory" description="Choose a LAB organization for accession." />
-              ) : null}
               {tab === 'processing' && organizationId ? (
                 <LabProcessingPanel organizationId={organizationId} token={token} onError={handleApiError} />
-              ) : null}
-              {tab === 'processing' && !organizationId ? (
-                <EmptyState title="Select a laboratory" description="Choose a LAB organization for processing." />
               ) : null}
               {tab === 'pathology' && organizationId ? (
                 <LabPathologyPanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
-              {tab === 'pathology' && !organizationId ? (
-                <EmptyState title="Select a laboratory" description="Choose a LAB organization for pathology." />
-              ) : null}
               {tab === 'physical' && organizationId ? (
                 <LabPhysicalPanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
-              {tab === 'physical' && !organizationId ? (
-                <EmptyState title="Select a laboratory" description="Choose a LAB organization for physical reports." />
+              {tab === 'earnings' && organizationId ? (
+                <LabEarningsPanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
-              {tab === 'incidents' ? (
-                <LaterPhaseState title="Incidents" phase="Later ops / support correlation" />
+              {tab === 'team' && organizationId ? (
+                <LabTeamPanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
+              {!organizationId &&
+              ['bookings', 'collections', 'transport', 'accession', 'processing', 'pathology', 'physical', 'earnings', 'team', 'catalog', 'capabilities', 'activity'].includes(
+                tab,
+              ) ? (
+                <EmptyState
+                  title="Select a laboratory"
+                  description="Choose a LAB organization above to continue this workflow step."
+                />
+              ) : null}
+              {tab === 'notifications' ? <PartnerInboxPanel token={token} audienceLabel="lab operators" /> : null}
+              {tab === 'support' ? <PartnerSupportPanel token={token} audienceLabel="lab operators" /> : null}
               {tab === 'activity' && organizationId ? (
                 <Card>
                   <Heading level={2}>Activity</Heading>
@@ -448,22 +468,9 @@ export function LabShell() {
                   )}
                 </Card>
               ) : null}
-              {(tab === 'capabilities' ||
-                tab === 'catalog' ||
-                tab === 'activity' ||
-                tab === 'collections' ||
-                tab === 'transport' ||
-                tab === 'accession' ||
-                tab === 'processing') &&
-              !organizationId ? (
-                <EmptyState
-                  title="Select a laboratory"
-                  description="Choose a LAB organization to continue."
-                />
-              ) : null}
             </>
           ) : null}
-        </div>
+        </main>
       </div>
     </div>
   );

@@ -8,11 +8,14 @@ export function OtpSignIn({
   audience,
   title,
   description,
+  purpose = 'LOGIN',
   onVerified,
 }: {
   audience: Audience;
   title: string;
   description: string;
+  /** LOGIN for returning users; REGISTER creates a new person on first verify. */
+  purpose?: 'REGISTER' | 'LOGIN';
   onVerified: (identifier: string, code: string, challengeId: string) => Promise<void>;
 }) {
   const [email, setEmail] = useState('');
@@ -25,7 +28,7 @@ export function OtpSignIn({
     setLoading(true);
     setError(null);
     try {
-      const result = await requestOtp(email, 'LOGIN');
+      const result = await requestOtp(email, purpose);
       setChallengeId(result.challengeId);
       if (result.devCode) {
         setCode(result.devCode);
@@ -35,7 +38,7 @@ export function OtpSignIn({
     } finally {
       setLoading(false);
     }
-  }, [email]);
+  }, [email, purpose]);
 
   const verify = useCallback(async () => {
     if (!challengeId) {

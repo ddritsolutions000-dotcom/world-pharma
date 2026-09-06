@@ -25,6 +25,13 @@
       "options": {
         "command": "tsc --noEmit -p apps/web-radiologist/tsconfig.json"
       }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "jestConfig": "apps/web-radiologist/jest.config.cts"
+      }
     }
   }
 }

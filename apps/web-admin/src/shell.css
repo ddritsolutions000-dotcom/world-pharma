@@ -1,32 +1,218 @@
-.admin-body {
-  display: flex;
-  flex-direction: column;
+
+/* —— Enterprise admin sign-in —— */
+.admin-auth-root {
+  position: relative;
   min-height: 100dvh;
-}
-
-.admin-content {
   display: flex;
-  flex: 1;
-  min-height: 0;
+  align-items: stretch;
+  background: var(--wp-color-background-primary);
+  color: var(--wp-color-text-primary);
 }
 
-.admin-main {
-  flex: 1;
-  padding: var(--wp-space-4);
+.admin-auth-ambient {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 50% at 0% 0%, color-mix(in srgb, var(--wp-color-action-primary) 14%, transparent), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, color-mix(in srgb, var(--wp-color-action-accent) 10%, transparent), transparent 50%),
+    linear-gradient(180deg, var(--wp-color-background-primary) 0%, var(--wp-color-background-sunken) 100%);
 }
 
-@media (min-width: 768px) {
-  .admin-content {
-    flex-direction: row;
+.admin-auth-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+  gap: 2rem;
+  align-items: center;
+}
+
+.admin-auth-aside h1 {
+  margin: 1.25rem 0 0.75rem;
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.admin-auth-aside p {
+  margin: 0 0 1.25rem;
+  color: var(--wp-color-text-secondary);
+  line-height: 1.55;
+  max-width: 28rem;
+}
+
+.admin-auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-auth-brand strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.admin-auth-brand small {
+  color: var(--wp-color-text-muted);
+  font-size: 0.78rem;
+}
+
+.admin-auth-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--wp-radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.75rem;
+  background: var(--wp-color-action-primary);
+  color: var(--wp-color-action-on-primary);
+}
+
+.admin-auth-trust {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+  color: var(--wp-color-text-secondary);
+  font-size: 0.88rem;
+}
+
+.admin-auth-trust li::before {
+  content: '✓ ';
+  color: var(--wp-color-status-success);
+}
+
+.admin-auth-card {
+  padding: 1.75rem;
+  border-radius: var(--wp-radius-lg);
+  background: var(--wp-color-background-surface);
+  border: var(--wp-border-hairline) solid var(--wp-color-border-default);
+  box-shadow: var(--wp-elev-overlay);
+}
+
+.admin-auth-steps {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.admin-auth-step {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--wp-radius-sm);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--wp-color-text-muted);
+  background: var(--wp-color-background-sunken);
+}
+
+.admin-auth-step.is-active {
+  color: var(--wp-color-text-primary);
+  background: color-mix(in srgb, var(--wp-color-action-primary) 18%, var(--wp-color-background-sunken));
+}
+
+.admin-auth-step.is-done {
+  color: var(--wp-color-status-success);
+}
+
+.admin-auth-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+}
+
+.admin-auth-lead {
+  margin-bottom: 1rem;
+}
+
+.admin-auth-error {
+  margin: 0.75rem 0 0;
+  color: var(--wp-color-status-error);
+  font-size: 0.88rem;
+}
+
+.admin-auth-info {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--wp-radius-sm);
+  background: var(--wp-color-status-info-bg);
+  color: var(--wp-color-status-info);
+  font-size: 0.85rem;
+}
+
+.admin-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.admin-auth-foot {
+  margin: 1.25rem 0 0;
+  font-size: 0.78rem;
+  color: var(--wp-color-text-muted);
+}
+
+.admin-kv-list {
+  margin: 0.75rem 0 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.admin-kv-list dt {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--wp-color-text-muted);
+}
+
+.admin-kv-list dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.92rem;
+}
+
+.admin-tag-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.admin-tag-list li {
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--wp-radius-pill);
+  font-size: 0.75rem;
+  background: var(--wp-color-background-sunken);
+  border: var(--wp-border-hairline) solid var(--wp-color-border-default);
+}
+
+.wp-admin-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--wp-space-4);
+}
+
+.admin-audit-filters {
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .admin-auth-grid {
+    grid-template-columns: 1fr;
   }
 
-  .admin-main {
-    padding: var(--wp-space-6);
-  }
-}
-
-@media (max-width: 767px) {
-  .wp-nav-side {
-    width: 100%;
+  .wp-admin-grid-2 {
+    grid-template-columns: 1fr;
   }
 }

@@ -300,9 +300,34 @@ export class LabDiagnosticsOpsService {
         collection_started: false,
         status: null,
         custody_timeline: [],
+        phlebotomist: null,
         note: 'Sample collection has not started yet.',
       };
     }
+    const collectionJob = await this.prisma.logisticsJob.findFirst({
+      where: { labSampleId: sample.id, jobType: LogisticsJobType.SAMPLE_COLLECTION },
+      include: { events: { orderBy: { createdAt: 'asc' }, take: 5 } },
+    });
+    const phlebotomist = collectionJob
+      ? {
+          job_id: collectionJob.id,
+          status: collectionJob.status,
+          assigned: Boolean(collectionJob.assigneeId),
+          live_tracking:
+            collectionJob.status === LogisticsJobStatus.PICKUP ||
+            collectionJob.status === LogisticsJobStatus.IN_PROGRESS,
+          eta_label:
+            collectionJob.status === LogisticsJobStatus.PICKUP
+              ? 'Phlebotomist on the way'
+              : collectionJob.status === LogisticsJobStatus.IN_PROGRESS
+                ? 'Sample collection in progress'
+                : collectionJob.status === LogisticsJobStatus.DELIVERED
+                  ? 'Sample collected'
+                  : collectionJob.assigneeId
+                    ? 'Phlebotomist assigned'
+                    : 'Awaiting phlebotomist assignment',
+        }
+      : null;
     return {
       lab_booking_id: labBookingId,
       lab_sample_id: sample.id,
@@ -325,6 +350,7 @@ export class LabDiagnosticsOpsService {
         action_code: e.actionCode,
         created_at: e.createdAt.toISOString(),
       })),
+      phlebotomist,
       note: 'Operational progress only. Open report when available.',
       boundary: {
         pathology: Boolean(sample.labReport),

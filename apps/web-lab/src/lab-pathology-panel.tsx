@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { PortalKpiCards } from '@world-pharma/shell-web';
 import {
   Button,
   Card,
@@ -165,15 +166,32 @@ export function LabPathologyPanel({
   };
 
   return (
-    <Card>
-      <Heading level={2}>Pathology</Heading>
-      <Text tone="secondary">Report workflow metadata. Result entry for lab staff; sign/publish is pathologist-only.</Text>
-      <Button size="sm" variant="secondary" onClick={() => void load()}>
-        Refresh pathology queue
-      </Button>
+    <div className="wp-stack">
+      <header className="wp-page-header">
+        <Heading level={2}>Pathology</Heading>
+        <p className="wp-page-intro">
+          Result entry for laboratory staff. Pathologist sign-off and publish happen on the pathologist portal
+          (sandbox-pathologist@dev.local).
+        </p>
+      </header>
+      <PortalKpiCards
+        items={[
+          { label: 'Reports', value: rows.length },
+          { label: 'Drafts', value: rows.filter((row) => row.status === 'DRAFT').length },
+          { label: 'Awaiting pathologist', value: rows.filter((row) => row.status === 'PENDING_VERIFY').length },
+        ]}
+      />
+      <div className="wp-toolbar">
+        <Button size="sm" variant="secondary" onClick={() => void load()}>
+          Refresh pathology queue
+        </Button>
+      </div>
       {loading ? <LoadingState label="Loading pathology queue…" /> : null}
       {!loading && !rows.length ? (
-        <EmptyState title="No pathology reports" description="Reports appear after bench processing completes." />
+        <EmptyState
+          title="No pathology reports yet"
+          description="Reports appear after accession and bench processing complete. If this lab has paid bookings, ask an operator to finish processing or reload after sandbox seed."
+        />
       ) : null}
       {rows.map((row) => (
         <Card key={row.id}>
@@ -187,6 +205,11 @@ export function LabPathologyPanel({
             <Button size="sm" onClick={() => startEntry(row.id)}>
               Enter results
             </Button>
+          ) : null}
+          {row.status === 'PENDING_VERIFY' || row.status === 'VERIFIED' ? (
+            <Text size="caption">
+              Pathologist sign-off happens on the pathologist portal (port 3009) — lab staff cannot publish reports.
+            </Text>
           ) : null}
         </Card>
       ))}
@@ -274,6 +297,6 @@ export function LabPathologyPanel({
           ))}
         </Card>
       ) : null}
-    </Card>
+    </div>
   );
 }

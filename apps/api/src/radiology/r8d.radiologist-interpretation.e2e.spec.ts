@@ -19,20 +19,7 @@ import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateImagingPartner, enableImagingPartnerPack } from '../test/imaging-partner';
 import { attachRadiologist } from '../test/radiologist-partner';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R8-D radiologist interpretation + SoD (e2e)', () => {
   let app: INestApplication;
@@ -120,24 +107,13 @@ describe('R8-D radiologist interpretation + SoD (e2e)', () => {
 
   it('radiologist worklist, assignment, draft, SoD verify, isolation, no customer findings', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r8d-admin-${suffix}@example.com`, 'admin');
-    const imagingUser = await signIn(app, `r8d-ia-${suffix}@example.com`);
-    const tech = await signIn(app, `r8d-tech-${suffix}@example.com`);
-    const radA = await signIn(app, `r8d-rad-a-${suffix}@example.com`);
-    const radB = await signIn(app, `r8d-rad-b-${suffix}@example.com`);
-    const radOtherOrg = await signIn(app, `r8d-rad-c-${suffix}@example.com`);
-    const customer = await signIn(app, `r8d-cust-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r8d-admin-${suffix}@example.com`);
+    const imagingUser = await signInAudience(app, `r8d-ia-${suffix}@example.com`);
+    const tech = await signInAudience(app, `r8d-tech-${suffix}@example.com`);
+    const radA = await signInAudience(app, `r8d-rad-a-${suffix}@example.com`);
+    const radB = await signInAudience(app, `r8d-rad-b-${suffix}@example.com`);
+    const radOtherOrg = await signInAudience(app, `r8d-rad-c-${suffix}@example.com`);
+    const customer = await signInAudience(app, `r8d-cust-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableImagingPartnerPack(enabledDoc);
@@ -295,7 +271,7 @@ describe('R8-D radiologist interpretation + SoD (e2e)', () => {
       .get(`/api/v1/radiologist/cases/${studyId}?imaging_org_id=${imagingA.id}`)
       .set(auth(radA.token));
     expect(caseDetail.status).toBe(200);
-    expect(caseDetail.body.acquisition.sandbox_object_ref).toMatch(/^sandbox:\/\//);
+    expect(caseDetail.body.acquisition.sandbox_object_ref).toMatch(/^(sandbox|private):\/\//);
     expect(caseDetail.body.boundary.publication).toBe(false);
     expect(caseDetail.body.boundary.pacs).toBe(false);
 

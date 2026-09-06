@@ -168,6 +168,26 @@ export function fetchLabReport(opts: TokenOpts & { id: string }) {
   return call<LabCustomerReport>(`api/v1/me/lab/bookings/${opts.id}/report`, opts);
 }
 
+export type LabReportStatus = {
+  lab_booking_id: string;
+  report_available: boolean;
+  status: string | null;
+  note?: string;
+};
+
+export function fetchLabReportStatus(opts: TokenOpts & { id: string }) {
+  return call<LabReportStatus>(`api/v1/me/lab/bookings/${opts.id}/report/status`, opts);
+}
+
+export function cancelPhysicalReport(opts: TokenOpts & { id: string; reason?: string }) {
+  return call<PhysicalReportStatus>(`api/v1/me/lab/bookings/${opts.id}/physical-report/cancel`, {
+    token: opts.token,
+    onUnauthorized: opts.onUnauthorized,
+    method: 'POST',
+    body: { reason: opts.reason },
+  });
+}
+
 export type PhysicalReportEligibility = {
   eligible: boolean;
   reason: string | null;
@@ -201,4 +221,50 @@ export function requestPhysicalReport(opts: TokenOpts & { id: string; idempotenc
 
 export function fetchPhysicalReportStatus(opts: TokenOpts & { id: string }) {
   return call<PhysicalReportStatus>(`api/v1/me/lab/bookings/${opts.id}/physical-report`, opts);
+}
+
+export type HealthPackageCard = {
+  id: string;
+  name: string;
+  price: number;
+  original_price: number;
+  discount: number;
+  tests_count: number;
+};
+
+export function fetchPopularHealthPackages(country: string): Promise<ApiCallResult<{ popular_packages: HealthPackageCard[] }>> {
+  return apiCall<{ popular_packages: HealthPackageCard[] }>(
+    `api/v1/public/health-packages/popular?country_code=${encodeURIComponent(country)}`,
+  );
+}
+
+export type SpecialityProgramCard = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  features: string[];
+};
+
+export function fetchPublicSpecialityPrograms(country: string): Promise<ApiCallResult<{ programs: SpecialityProgramCard[] }>> {
+  return apiCall<{ programs: SpecialityProgramCard[] }>(
+    `api/v1/public/speciality-care/programs?country_code=${encodeURIComponent(country)}`,
+  );
+}
+
+export function enrollSpecialityProgram(
+  token: string,
+  programId: string,
+  country: string,
+  onUnauthorized?: () => void,
+): Promise<ApiCallResult<{ message: string }>> {
+  return apiCall<{ message: string }>(
+    `api/v1/customer/speciality-care/programs/${encodeURIComponent(programId)}/enroll`,
+    {
+      token,
+      onUnauthorized,
+      method: 'POST',
+      body: { country_code: country },
+    },
+  );
 }

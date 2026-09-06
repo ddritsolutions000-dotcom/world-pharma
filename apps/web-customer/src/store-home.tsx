@@ -1,336 +1,286 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useCountries } from '@world-pharma/shell-web';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { EmptyState, LoadingState } from '@world-pharma/ui-kit/web';
+import { ProductRow } from './product-row';
+import { ProductCard } from './product-card';
+import { ServiceShortcuts } from './service-shortcuts';
+import { fetchBrands, fetchCatalog, fetchCategories, type CatalogBrand, type CatalogCard } from './store-api';
+import { fetchPublicCareDoctors } from './care-api';
+import { HomeExtraSections } from './home-extra-sections';
 import {
-  Card,
-  EmptyState,
-  Heading,
-  Input,
-  LoadingState,
-  NetworkErrorState,
-  Text,
-} from '@world-pharma/ui-kit/web';
+  FeaturedBrandsSection,
+  FullBodyPackagesSection,
+  HealthConcernsSection,
+  LabTestsHomeSection,
+  OffersBanner,
+  PetCareHomeSection,
+  CancerCareHomeSection,
+  AyurvedaHomeSection,
+  ComboPacksHomeSection,
+  QuickOrderSection,
+  SuperDealsSection,
+  TrendingSearchesSection,
+  ConsultCtaBanner,
+  DoctorsHomeSection,
+} from './store-home-sections';
+import { RecentlyViewedSection } from './recently-viewed-section';
+import { HealthContentSection } from './health-content-section';
 import {
-  DiscoveryApiError,
-  DISCOVERY_TYPE_LABELS,
-  fetchDiscoverySearch,
-  type DiscoveryResultItem,
-  type DiscoveryType,
-} from './discovery-api';
-import { fetchCatalog, fetchCategories, type CatalogCard } from './store-api';
-
-type ViewState = 'idle' | 'loading' | 'network' | 'validation' | 'forbidden' | 'error';
-
-const DEFAULT_SEARCH_TYPES: DiscoveryType[] = ['commerce', 'help', 'doctor', 'lab', 'test', 'pharmacy'];
-
-function formatPrice(minor: string, currency: string): string {
-  return `${currency} ${minor}`;
-}
+  filterAyurvedaProducts,
+  filterCancerCareProducts,
+  filterComboPacks,
+  filterDeals,
+  filterLabPackages,
+  filterPetProducts,
+  isLabTest,
+  isMedicine,
+  sortByDiscount,
+} from './store-catalog-utils';
+import { StoreSearchBox } from './store-search-box';
+import { Section } from './ui/mg-ui';
+import { isStoreMarket, useSelectedCountry } from './use-selected-country';
+import { useSiteChrome } from './use-site-chrome';
 
 export function StoreHome() {
-  const { countries } = useCountries();
-  const country = countries[0]?.iso_alpha2 ?? 'XX';
-  const locale = 'en';
-  const [query, setQuery] = useState('');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { country, countryName, hydrated } = useSelectedCountry();
+  const { hero } = useSiteChrome(country);
   const [browseItems, setBrowseItems] = useState<CatalogCard[]>([]);
-  const [discoveryItems, setDiscoveryItems] = useState<DiscoveryResultItem[]>([]);
-  const [enabled, setEnabled] = useState(true);
-  const [discoveryEnabled, setDiscoveryEnabled] = useState(true);
+  const [labTests, setLabTests] = useState<CatalogCard[]>([]);
   const [categories, setCategories] = useState<{ slug: string; name: string }[]>([]);
-  const [viewState, setViewState] = useState<ViewState>('idle');
-  const [message, setMessage] = useState('');
-  const [selectedTypes, setSelectedTypes] = useState<DiscoveryType[]>(DEFAULT_SEARCH_TYPES);
+  const [petProducts, setPetProducts] = useState<CatalogCard[]>([]);
+  const [cancerProducts, setCancerProducts] = useState<CatalogCard[]>([]);
+  const [ayurvedaProducts, setAyurvedaProducts] = useState<CatalogCard[]>([]);
+  const [brands, setBrands] = useState<CatalogBrand[]>([]);
+  const [doctors, setDoctors] = useState<
+    { profile_id: string; display_name: string; specialties?: string[]; online_capable?: boolean }[]
+  >([]);
+  const [enabled, setEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = searchParams?.get('q');
+    if (q?.trim()) {
+      router.replace(`/search?q=${encodeURIComponent(q.trim())}`);
+    }
+  }, [router, searchParams]);
 
   const loadBrowse = useCallback(async () => {
-    const result = await fetchCatalog(country, undefined);
-    setEnabled(result.country_enabled);
-    setBrowseItems(result.data);
-  }, [country]);
-
-  const runDiscovery = useCallback(
-    async (q: string) => {
-      const trimmed = q.trim();
-      if (!trimmed) {
-        setDiscoveryItems([]);
-        setMessage('');
-        setViewState('idle');
-        await loadBrowse();
-        return;
-      }
-      setViewState('loading');
-      setMessage('');
-      try {
-        const result = await fetchDiscoverySearch({
-          country,
-          locale,
-          q: trimmed,
-          types: selectedTypes,
-        });
-        setEnabled(result.country_enabled);
-        setDiscoveryEnabled(result.discovery_enabled);
-        setDiscoveryItems(result.data);
-        setViewState('idle');
-      } catch (err) {
-        setDiscoveryItems([]);
-        if (err instanceof DiscoveryApiError) {
-          if (err.status === 0) {
-            setViewState('network');
-            return;
-          }
-          if (err.status === 400) {
-            setViewState('validation');
-            setMessage(err.message);
-            return;
-          }
-          if (err.status === 403) {
-            setViewState('forbidden');
-            setMessage(err.message);
-            return;
-          }
-        }
-        setViewState('error');
-      }
-    },
-    [country, locale, loadBrowse, selectedTypes],
-  );
+    if (!hydrated || !isStoreMarket(country)) {
+      setLoading(!hydrated);
+      return;
+    }
+    setLoading(true);
+    try {
+      const [catalog, cats, brandRows, doctorBody] = await Promise.all([
+        fetchCatalog(country, undefined),
+        fetchCategories(country),
+        fetchBrands(country),
+        fetchPublicCareDoctors(country).catch(() => ({ doctors: [] })),
+      ]);
+      setEnabled(catalog.country_enabled);
+      const medicines = catalog.data.filter(isMedicine);
+      setBrowseItems(medicines);
+      setLabTests(catalog.data.filter(isLabTest));
+      setPetProducts(filterPetProducts(catalog.data));
+      setCancerProducts(filterCancerCareProducts(catalog.data));
+      setAyurvedaProducts(filterAyurvedaProducts(catalog.data));
+      setCategories(cats);
+      setBrands(brandRows);
+      setDoctors((doctorBody as { doctors?: typeof doctors }).doctors ?? []);
+    } catch {
+      setBrowseItems([]);
+      setLabTests([]);
+      setPetProducts([]);
+      setCancerProducts([]);
+      setAyurvedaProducts([]);
+      setCategories([]);
+      setBrands([]);
+      setDoctors([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [country, hydrated]);
 
   useEffect(() => {
-    void fetchCategories(country)
-      .then((rows) => setCategories(Array.isArray(rows) ? rows : []))
-      .catch(() => setCategories([]));
-  }, [country]);
+    if (searchParams?.get('q')?.trim()) return;
+    void loadBrowse();
+  }, [loadBrowse, searchParams]);
 
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      void runDiscovery(query);
-    }, 300);
-    return () => window.clearTimeout(handle);
-  }, [query, runDiscovery, selectedTypes]);
+  const deals = filterDeals(sortByDiscount(browseItems));
+  const labPackages = filterLabPackages(labTests);
+  const comboPacks = filterComboPacks(browseItems);
 
-  function toggleType(type: DiscoveryType) {
-    setSelectedTypes((current) =>
-      current.includes(type) ? current.filter((entry) => entry !== type) : [...current, type],
-    );
+  if (searchParams?.get('q')?.trim()) {
+    return <LoadingState label="Opening search…" />;
   }
 
-  const heading = useMemo(() => {
-    if (!enabled) {
-      return 'Catalog unavailable';
-    }
-    if (!discoveryEnabled) {
-      return 'Search unavailable';
-    }
-    return query.trim() ? 'Search results' : 'Store';
-  }, [discoveryEnabled, enabled, query]);
-
-  const commerceResults = discoveryItems.filter((row) => row.type === 'commerce');
-  const helpResults = discoveryItems.filter((row) => row.type === 'help');
-  const doctorResults = discoveryItems.filter((row) => row.type === 'doctor');
-  const labResults = discoveryItems.filter((row) => row.type === 'lab');
-  const testResults = discoveryItems.filter((row) => row.type === 'test');
-  const pharmacyResults = discoveryItems.filter((row) => row.type === 'pharmacy');
-  const searching = query.trim().length > 0;
-
-  return (
-    <section className="store-home">
-      <Heading level={1}>{heading}</Heading>
-      <Text tone="secondary">
-        {searching
-          ? 'Unified commerce, help, and provider discovery powered by the R13 search index.'
-          : 'Browse published products. Search uses the discovery API across commerce and providers.'}
-      </Text>
-      <Input
-        aria-label="Search catalog, help, and providers"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search products, doctors, labs, tests, pharmacies, help"
-      />
-      {searching ? (
-        <nav className="store-cats" aria-label="Discovery types">
-          {DEFAULT_SEARCH_TYPES.map((type) => (
-            <button
-              key={type}
-              type="button"
-              className={selectedTypes.includes(type) ? 'is-active' : undefined}
-              onClick={() => toggleType(type)}
-            >
-              {DISCOVERY_TYPE_LABELS[type]}
-            </button>
-          ))}
-        </nav>
-      ) : null}
-      <nav className="store-cats" aria-label="Categories">
-        {categories.map((category) => (
-          <Link key={category.slug} href={`/c/${category.slug}`}>
-            {category.name}
+  function rail(id: string) {
+    switch (id) {
+      case 'shortcuts':
+        return <ServiceShortcuts shortcuts={hero.shortcuts} />;
+      case 'consult':
+        return <ConsultCtaBanner hero={hero} />;
+      case 'offers':
+        return <OffersBanner />;
+      case 'rx':
+        return (
+          <Link href={hero.rxHref} className="mg-rx-banner">
+            <div>
+              <strong>{hero.rxTitle}</strong>
+              <span>{hero.rxBody}</span>
+            </div>
+            <span className="mg-rx-cta">{hero.rxCta}</span>
           </Link>
-        ))}
-      </nav>
-
-      {viewState === 'loading' ? <LoadingState label="Searching…" /> : null}
-      {viewState === 'network' ? (
-        <NetworkErrorState
-          action={{ label: 'Retry', onClick: () => void runDiscovery(query) }}
-        />
-      ) : null}
-      {viewState === 'validation' || viewState === 'forbidden' ? (
-        <EmptyState title="Search blocked" description={message || 'This query cannot be processed.'} />
-      ) : null}
-      {viewState === 'error' ? (
-        <EmptyState
-          title="Search unavailable"
-          description="Try again in a moment."
-          action={{ label: 'Retry', onClick: () => void runDiscovery(query) }}
-        />
-      ) : null}
-
-      {viewState === 'idle' && searching ? (
-        <>
-          {!enabled || !discoveryEnabled ? (
-            <EmptyState
-              title={enabled ? 'Search disabled' : 'Not enabled in this country'}
-              description="Country policy controls discovery visibility."
-            />
-          ) : discoveryItems.length === 0 ? (
-            <EmptyState title="No results" description="Try a different search term." />
-          ) : (
-            <>
-              {commerceResults.length > 0 ? (
-                <section>
-                  <Heading level={2}>Products</Heading>
-                  <ul className="store-grid">
-                    {commerceResults.map((item) => (
-                      <li key={`commerce-${item.id}`}>
-                        <Link href={item.href ?? '#'}>
-                          <Card raised>
-                            <Heading level={3}>{item.title}</Heading>
-                            <Text size="caption">{item.subtitle ?? 'Product'}</Text>
-                          </Card>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {helpResults.length > 0 ? (
-                <section>
-                  <Heading level={2}>Help articles</Heading>
-                  <ul className="store-grid">
-                    {helpResults.map((item) => (
-                      <li key={`help-${item.id}`}>
-                        <Link href={item.href ?? '#'}>
-                          <Card>
-                            <Heading level={3}>{item.title}</Heading>
-                            <Text size="caption">{item.subtitle ?? 'Help'}</Text>
-                          </Card>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {doctorResults.length > 0 ? (
-                <section>
-                  <Heading level={2}>Doctors</Heading>
-                  <ul className="store-grid">
-                    {doctorResults.map((item) => (
-                      <li key={`doctor-${item.id}`}>
-                        <Link href={item.href ?? '#'}>
-                          <Card>
-                            <Heading level={3}>{item.title}</Heading>
-                            <Text size="caption">{item.subtitle ?? 'Doctor'}</Text>
-                          </Card>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {labResults.length > 0 ? (
-                <section>
-                  <Heading level={2}>Labs</Heading>
-                  <ul className="store-grid">
-                    {labResults.map((item) => (
-                      <li key={`lab-${item.id}`}>
-                        <Link href={item.href ?? '#'}>
-                          <Card>
-                            <Heading level={3}>{item.title}</Heading>
-                            <Text size="caption">{item.subtitle ?? 'Lab'}</Text>
-                          </Card>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {testResults.length > 0 ? (
-                <section>
-                  <Heading level={2}>Lab tests</Heading>
-                  <ul className="store-grid">
-                    {testResults.map((item) => (
-                      <li key={`test-${item.id}`}>
-                        <Link href={item.href ?? '#'}>
-                          <Card>
-                            <Heading level={3}>{item.title}</Heading>
-                            <Text size="caption">{item.subtitle ?? 'Test'}</Text>
-                          </Card>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {pharmacyResults.length > 0 ? (
-                <section>
-                  <Heading level={2}>Pharmacies</Heading>
-                  <ul className="store-grid">
-                    {pharmacyResults.map((item) => (
-                      <li key={`pharmacy-${item.id}`}>
-                        <Link href={item.href ?? '#'}>
-                          <Card>
-                            <Heading level={3}>{item.title}</Heading>
-                            <Text size="caption">{item.subtitle ?? 'Pharmacy'}</Text>
-                          </Card>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-            </>
-          )}
-        </>
-      ) : null}
-
-      {viewState === 'idle' && !searching ? (
-        !enabled || browseItems.length === 0 ? (
-          <EmptyState
-            title={enabled ? 'No products yet' : 'Not enabled in this country'}
-            description="Country policy controls storefront visibility."
-          />
-        ) : (
-          <ul className="store-grid">
-            {browseItems.map((item) => {
-              const offer = item.offers[0];
-              return (
-                <li key={item.id}>
-                  <Link href={`/p/${item.slug}`}>
-                    <Card raised>
-                      <Heading level={3}>{item.title}</Heading>
-                      <Text size="caption">{item.brand ?? 'House brand'}</Text>
-                      <Text>
-                        {offer?.price ? formatPrice(offer.price.sell_minor, offer.currency) : 'Price unavailable'}
-                      </Text>
-                    </Card>
+        );
+      case 'promo':
+        return (
+          <section className="mg-promo" aria-label="World Pharma home">
+            <div>
+              <p className="mg-promo-kicker">{hero.promoKicker}</p>
+              <h1 className="mg-promo-title">{hero.promoTitle}</h1>
+              <p className="mg-promo-sub">{hero.promoSub.replace('your country', countryName)}</p>
+              <div className="mg-promo-cta">
+                <Link href="/" className="mg-promo-btn">
+                  Order medicines
+                </Link>
+                <Link href="/lab" className="mg-promo-btn mg-promo-btn--ghost">
+                  Book lab test
+                </Link>
+                <Link href="/doctors" className="mg-promo-btn mg-promo-btn--ghost">
+                  Consult a doctor
+                </Link>
+              </div>
+              <div className="mg-promo-search">
+                <StoreSearchBox country={country} className="mg-search-form mg-search-form--hero" />
+              </div>
+            </div>
+          </section>
+        );
+      case 'stats':
+        return (
+          <ul className="mg-store-stats" aria-label="Platform highlights">
+            {hero.stats.map((stat) => (
+              <li key={stat.label} className="mg-store-stat">
+                <strong>{stat.value}</strong>
+                <span>{stat.label}</span>
+              </li>
+            ))}
+          </ul>
+        );
+      case 'quickOrder':
+        return <QuickOrderSection />;
+      case 'trending':
+        return <TrendingSearchesSection />;
+      case 'health':
+        return <HealthContentSection />;
+      case 'doctors':
+        return loading ? null : <DoctorsHomeSection doctors={doctors} />;
+      case 'packages':
+        return loading ? null : <FullBodyPackagesSection packages={labPackages} />;
+      case 'recently':
+        return !loading && enabled ? <RecentlyViewedSection items={browseItems} /> : null;
+      case 'concerns':
+        return !loading && enabled ? <HealthConcernsSection categories={categories} /> : null;
+      case 'pet':
+        return !loading && enabled ? <PetCareHomeSection petProducts={petProducts} /> : null;
+      case 'cancer':
+        return !loading && enabled ? <CancerCareHomeSection cancerProducts={cancerProducts} /> : null;
+      case 'ayurveda':
+        return !loading && enabled ? <AyurvedaHomeSection ayurvedaProducts={ayurvedaProducts} /> : null;
+      case 'combo':
+        return !loading && enabled ? <ComboPacksHomeSection combos={comboPacks} /> : null;
+      case 'labs':
+        return !loading && enabled ? (
+          <LabTestsHomeSection labTests={labTests.filter((t) => !labPackages.some((p) => p.id === t.id))} />
+        ) : null;
+      case 'brands':
+        return !loading && enabled ? <FeaturedBrandsSection brands={brands} /> : null;
+      case 'deals':
+        return !loading && enabled && deals.length > 0 ? <SuperDealsSection deals={deals} /> : null;
+      case 'categories':
+        return !loading && enabled && categories.length ? (
+          <Section title="Popular categories" seeAllHref="/categories">
+            <ul className="mg-chips">
+              {categories.slice(0, 10).map((c) => (
+                <li key={c.slug}>
+                  <Link href={`/c/${c.slug}`} className="mg-chip">
+                    <span className="mg-chip-icon">{c.name.slice(0, 1)}</span>
+                    {c.name}
                   </Link>
                 </li>
-              );
+              ))}
+            </ul>
+          </Section>
+        ) : null;
+      case 'medicines':
+        if (!enabled) {
+          return null;
+        }
+        if (loading) {
+          return (
+            <Section title="Popular medicines">
+              <LoadingState label="Loading products" />
+            </Section>
+          );
+        }
+        return browseItems.length === 0 ? (
+          <EmptyState
+            title="No medicines listed yet"
+            description="Partners are onboarding inventory. Explore lab tests and doctors meanwhile."
+            action={{ label: 'Book lab test', onClick: () => (window.location.href = '/lab') }}
+          />
+        ) : (
+          <>
+            <Section title="Popular medicines" seeAllHref="/categories">
+              <ul className="mg-product-grid">
+                {browseItems.slice(0, 24).map((item) => (
+                  <li key={item.id}>
+                    <ProductCard item={item} />
+                  </li>
+                ))}
+              </ul>
+            </Section>
+            <ProductRow title="Top picks for you" items={browseItems} seeAllHref="/deals" />
+            {categories.slice(0, 5).map((cat) => {
+              const aisle = browseItems.filter((item) => {
+                const name = (item.category ?? '').toLowerCase();
+                const slug = cat.slug.toLowerCase();
+                return (
+                  name.includes(slug.replace(/-/g, ' ')) ||
+                  name.includes(cat.name.toLowerCase()) ||
+                  item.slug.includes(slug)
+                );
+              });
+              return <ProductRow key={cat.slug} title={cat.name} items={aisle.slice(0, 12)} seeAllHref={`/c/${cat.slug}`} />;
             })}
-          </ul>
-        )
+          </>
+        );
+      case 'extra':
+        return loading ? null : <HomeExtraSections />;
+      default:
+        return null;
+    }
+  }
+
+  return (
+    <div className="mg-page mg-page--store">
+      {!loading && !enabled ? (
+        <EmptyState
+          title="Pharmacy catalog is still onboarding here"
+          description="You can still consult doctors, book labs, and read health articles while medicines go live in this country."
+          action={{ label: 'Consult a doctor', onClick: () => (window.location.href = '/doctors') }}
+        />
       ) : null}
-    </section>
+      {hero.rails
+        .filter((row) => row.enabled)
+        .map((row) => (
+          <Fragment key={row.id}>{rail(row.id)}</Fragment>
+        ))}
+    </div>
   );
 }

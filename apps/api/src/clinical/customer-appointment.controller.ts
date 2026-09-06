@@ -65,6 +65,7 @@ export class CustomerAppointmentController {
       organization_id?: string;
       location_id?: string;
       reason_category?: string;
+      family_member_id?: string | null;
     },
     @CurrentPrincipal() principal: Principal,
   ) {
@@ -82,6 +83,8 @@ export class CustomerAppointmentController {
       organizationId: body.organization_id,
       locationId: body.location_id,
       reasonCategory: body.reason_category,
+      familyMemberId: body.family_member_id,
+      principal,
     });
   }
 

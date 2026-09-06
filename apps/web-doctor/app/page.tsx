@@ -1,10 +1,10 @@
+import { DoctorHomeDashboard } from '../src/doctor-home-dashboard';
 import { DoctorShell } from '../src/doctor-shell';
 
 export default function Page() {
   return (
-    <DoctorShell
-      title="Doctor workspace"
-      description="Verification status and profile live here. Appointments are not included."
-    />
+    <DoctorShell title="Good day, Doctor" description="Your schedule and notifications at a glance." currentNav="home">
+      <DoctorHomeDashboard />
+    </DoctorShell>
   );
 }

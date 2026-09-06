@@ -3,11 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3004",
+    "dev": "next dev --port 3008",
     "build": "next build",
-    "start": "next start --port 3004"
+    "start": "next start --port 3008"
   },
   "dependencies": {
+    "@world-pharma/shared": "workspace:*",
     "@world-pharma/shell-core": "workspace:*",
     "@world-pharma/shell-web": "workspace:*",
     "@world-pharma/ui-kit": "workspace:*",

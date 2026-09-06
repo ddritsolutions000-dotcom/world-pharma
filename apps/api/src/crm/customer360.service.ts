@@ -3,6 +3,7 @@ import { PrismaService, runWithTenant } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import type { Principal } from '../identity/current-principal';
 import { SecurityEventsService } from '../identity/security-events.service';
+import { RateLimitService } from '../identity/rate-limit.service';
 import { PolicyResolver } from '../policy/resolver';
 import { resolveCountryByCode, assertUuid, isUuid } from '../cms/cms-country';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
@@ -16,6 +17,7 @@ export class Customer360Service {
     private readonly securityEvents: SecurityEventsService,
     private readonly marketingPrefs: MarketingPreferenceService,
     private readonly policies: PolicyResolver,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   async searchCustomers(principal: Principal, query: { country_code: string; q?: string; limit?: number }) {
@@ -110,7 +112,19 @@ export class Customer360Service {
           metadata: { subject_person_id: personId, country_id: country.id },
         });
 
-        const [profile, orders, appointments, labBookings, imagingBookings, tickets, marketing, refills, subscriptions] =
+        const [
+          profile,
+          orders,
+          appointments,
+          labBookings,
+          imagingBookings,
+          tickets,
+          marketing,
+          refills,
+          subscriptions,
+          loyalty,
+          reviews,
+        ] =
           await Promise.all([
             this.buildProfileSummary(personId, country.id, country.isoAlpha2),
             this.listOrders(personId, country.id),
@@ -121,6 +135,8 @@ export class Customer360Service {
             this.marketingPrefs.getForPerson(personId, country.isoAlpha2),
             this.listRefillMetadata(personId, country.id),
             this.listSubscriptionMetadata(personId, country.id),
+            this.listLoyalty(personId, country.id),
+            this.listReviews(personId, country.id),
           ]);
 
         return {
@@ -135,6 +151,8 @@ export class Customer360Service {
           marketing_preferences: marketing,
           refill_requests: refills,
           rx_subscriptions: subscriptions,
+          loyalty: loyalty,
+          product_reviews: reviews,
         };
       },
     );
@@ -159,6 +177,63 @@ export class Customer360Service {
     return runWithTenant(
       workerTenantContext({ countryId: country.id, personId: principal.personId }),
       async () => ({ data: await this.listTickets(personId, country.id) }),
+    );
+  }
+
+  async revealIdentifiers(
+    principal: Principal,
+    personId: string,
+    body: { country_code: string; reason: string },
+  ) {
+    this.assertAdmin(principal);
+    const hit = await this.rateLimit.hit(`admin:pii-reveal:${principal.personId}`, 10, 900);
+    if (!hit.allowed) {
+      throw Errors.rateLimited(hit.retryAfter);
+    }
+    assertUuid(personId, 'person id');
+    const reason = body.reason?.trim();
+    if (!reason || reason.length < 8) {
+      throw Errors.validation('A reason of at least 8 characters is required to reveal PII');
+    }
+    await this.assertCrmEnabled(body.country_code);
+    const country = await resolveCountryByCode(this.prisma, body.country_code);
+
+    return runWithTenant(
+      workerTenantContext({ countryId: country.id, personId: principal.personId }),
+      async () => {
+        const person = await this.prisma.person.findUnique({
+          where: { id: personId },
+          select: {
+            id: true,
+            identifiers: { select: { type: true, valueNormalized: true, verifiedAt: true } },
+          },
+        });
+        if (!person) {
+          throw Errors.notFound('Customer not found');
+        }
+
+        await this.securityEvents.emit({
+          type: 'CRM_PII_REVEAL',
+          outcome: 'success',
+          personId: principal.personId,
+          metadata: {
+            subject_person_id: personId,
+            country_id: country.id,
+            reason,
+          },
+        });
+
+        return {
+          person_id: person.id,
+          country_code: country.isoAlpha2,
+          identifiers: person.identifiers.map((row) => ({
+            type: row.type,
+            value: row.valueNormalized,
+            verified: row.verifiedAt != null,
+          })),
+          revealed_at: new Date().toISOString(),
+        };
+      },
     );
   }
 
@@ -371,6 +446,53 @@ export class Customer360Service {
       auto_execute_enabled: row.autoExecuteEnabled,
       created_at: row.createdAt.toISOString(),
       updated_at: row.updatedAt.toISOString(),
+    }));
+  }
+
+  private async listLoyalty(personId: string, countryId: string) {
+    const accounts = await this.prisma.loyaltyAccount.findMany({
+      where: { personId, countryId },
+      take: 10,
+      include: {
+        program: { select: { code: true, name: true, status: true } },
+      },
+    });
+    const sums =
+      accounts.length === 0
+        ? []
+        : await this.prisma.loyaltyLedgerEntry.groupBy({
+            by: ['accountId'],
+            where: { accountId: { in: accounts.map((row) => row.id) } },
+            _sum: { pointsDelta: true },
+          });
+    const byAccount = new Map(sums.map((row) => [row.accountId, row._sum.pointsDelta ?? 0]));
+    return accounts.map((account) => ({
+      program_code: account.program.code,
+      program_name: account.program.name,
+      program_status: account.program.status,
+      points_balance: byAccount.get(account.id) ?? 0,
+    }));
+  }
+
+  private async listReviews(personId: string, countryId: string) {
+    const rows = await this.prisma.productReview.findMany({
+      where: { authorPersonId: personId, countryId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: 25,
+      select: {
+        id: true,
+        rating: true,
+        status: true,
+        createdAt: true,
+        catalogItem: { select: { slug: true } },
+      },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      rating: row.rating,
+      status: row.status,
+      catalog_slug: row.catalogItem.slug,
+      created_at: row.createdAt.toISOString(),
     }));
   }
 

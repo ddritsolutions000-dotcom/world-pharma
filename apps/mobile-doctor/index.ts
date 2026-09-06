@@ -1,5 +1,5 @@
-import { AppRegistry } from 'react-native';
+import { registerRootComponent } from 'expo';
 import { App } from './src/app-root';
 
-AppRegistry.registerComponent('WorldPharmaDoctor', () => App);
+registerRootComponent(App);
 export { App };

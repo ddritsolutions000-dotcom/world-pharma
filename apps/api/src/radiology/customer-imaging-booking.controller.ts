@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Headers,
+  Param,
+  Post,
+  Query,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
@@ -7,7 +18,9 @@ import { AudienceGuard } from '../identity/audience.guard';
 import { RequireAudiences } from '../identity/require-audiences';
 import { PaymentService } from '../payment/payment.service';
 import { ImagingBookingService } from './imaging-booking.service';
+import { ImagingIngestService } from './imaging-ingest.service';
 import { ImagingPhysicalReportService } from './imaging-physical-report.service';
+import { ImagingDiagnosticViewerService } from './imaging-diagnostic-viewer.service';
 
 const createSchema = z
   .object({
@@ -21,6 +34,7 @@ const createSchema = z
     country: z.string().length(2),
     prep_acknowledged: z.literal(true),
     referral_reference: z.string().min(1).optional(),
+    family_member_id: z.string().uuid().nullable().optional(),
   })
   .strict();
 
@@ -48,6 +62,8 @@ export class CustomerImagingBookingController {
     private readonly bookings: ImagingBookingService,
     private readonly payments: PaymentService,
     private readonly physicalReports: ImagingPhysicalReportService,
+    private readonly ingest: ImagingIngestService,
+    private readonly viewer: ImagingDiagnosticViewerService,
   ) {}
 
   @Get('catalog')
@@ -132,6 +148,7 @@ export class CustomerImagingBookingController {
       idempotencyKey,
       prepAcknowledged: parsed.data.prep_acknowledged,
       referralReference: parsed.data.referral_reference,
+      familyMemberId: parsed.data.family_member_id,
     });
   }
 
@@ -157,6 +174,41 @@ export class CustomerImagingBookingController {
   @Get('bookings/:id/progress')
   progress(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
     return this.bookings.getProgress(principal, id);
+  }
+
+  @Get('bookings/:id/study')
+  study(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.ingest.getCustomerStudyMetadata(id, principal.personId);
+  }
+
+  @Get('bookings/:id/viewer')
+  openViewer(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.viewer.openCustomerViewer(id, principal.personId);
+  }
+
+  @Get('bookings/:id/viewer/series/:seriesId/frames/:frameIndex')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('X-Content-Type-Options', 'nosniff')
+  @Header('X-WP-Public-URL', 'false')
+  @Header('X-WP-Viewer-Mode', 'SANDBOX_DIAGNOSTIC_FRAMES')
+  async viewerFrame(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Param('seriesId') seriesId: string,
+    @Param('frameIndex') frameIndexRaw: string,
+  ): Promise<StreamableFile> {
+    const frameIndex = Number.parseInt(frameIndexRaw, 10);
+    const frame = await this.viewer.getAuthorizedFrame({
+      actor: 'customer',
+      principal,
+      bookingId: id,
+      seriesId,
+      frameIndex,
+    });
+    return new StreamableFile(frame.bytes, {
+      type: 'image/png',
+      disposition: 'inline',
+    });
   }
 
   @Get('bookings/:id/report/status')

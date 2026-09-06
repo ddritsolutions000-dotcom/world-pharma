@@ -30,26 +30,45 @@ export class OutboxService {
 
   async enqueue(tx: DbTx | PrismaService, input: EnqueueInput) {
     const payload = sanitizePayload(input.payload);
-    return tx.outboxEvent.create({
-      data: {
-        id: uuidv7(),
-        type: input.type,
-        schemaVersion: input.schemaVersion ?? 1,
-        aggregateType: input.aggregateType,
-        aggregateId: input.aggregateId,
-        producer: input.producer,
-        countryId: input.countryId ?? null,
-        regionId: input.regionId ?? null,
-        legalEntityId: input.legalEntityId ?? null,
-        organizationId: input.organizationId ?? null,
-        payload: payload as Prisma.InputJsonValue,
-        correlationId: input.correlationId ?? correlationId() ?? null,
-        causationId: input.causationId ?? null,
-        actorId: input.actorId ?? null,
-        occurrenceKey: input.occurrenceKey,
-        status: 'PENDING',
-        availableAt: new Date(),
-      },
+    const existing = await tx.outboxEvent.findFirst({
+      where: { occurrenceKey: input.occurrenceKey },
     });
+    if (existing) {
+      return existing;
+    }
+    try {
+      return await tx.outboxEvent.create({
+        data: {
+          id: uuidv7(),
+          type: input.type,
+          schemaVersion: input.schemaVersion ?? 1,
+          aggregateType: input.aggregateType,
+          aggregateId: input.aggregateId,
+          producer: input.producer,
+          countryId: input.countryId ?? null,
+          regionId: input.regionId ?? null,
+          legalEntityId: input.legalEntityId ?? null,
+          organizationId: input.organizationId ?? null,
+          payload: payload as Prisma.InputJsonValue,
+          correlationId: input.correlationId ?? correlationId() ?? null,
+          causationId: input.causationId ?? null,
+          actorId: input.actorId ?? null,
+          occurrenceKey: input.occurrenceKey,
+          status: 'PENDING',
+          availableAt: new Date(),
+        },
+      });
+    } catch (err) {
+      // Concurrent enqueue with same occurrenceKey — treat as idempotent.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const again = await tx.outboxEvent.findFirst({
+          where: { occurrenceKey: input.occurrenceKey },
+        });
+        if (again) {
+          return again;
+        }
+      }
+      throw err;
+    }
   }
 }

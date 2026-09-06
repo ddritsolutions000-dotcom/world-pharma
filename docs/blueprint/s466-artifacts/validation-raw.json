@@ -1,0 +1,554 @@
+{
+  "started": "2026-09-05T20:10:04.085Z",
+  "runtime": "DEVELOPMENT/SANDBOX",
+  "application_code_changed": "NO",
+  "transactions": {
+    "TX1_CUSTOMER_COMMERCE": {
+      "FRONTEND": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "PAYMENT_UI": "NOT_APPLICABLE",
+      "FINAL": "PASS",
+      "pdpChecks": {
+        "manufacturer": true,
+        "composition": true,
+        "strength": true,
+        "pack": true,
+        "price": true,
+        "stock": true,
+        "seller": true
+      },
+      "cartOk": true,
+      "shot_pdp": "s466-artifacts/screenshots/tx1_pdp.png",
+      "shot_orders": "s466-artifacts/screenshots/tx1_orders.png",
+      "pageerrors": []
+    },
+    "TX1_VENDOR": {
+      "FRONTEND": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "FINAL": "PASS",
+      "shot": "s466-artifacts/screenshots/tx1_vendor_orders.png",
+      "sample": "Seller workspace Select organization 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care Pharmacy · IN Demo P"
+    },
+    "TX1_DELIVERY_LOGISTICS": {
+      "FRONTEND": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "FINAL": "PASS",
+      "shot": "s466-artifacts/screenshots/tx1_logistics.png",
+      "note": "Logistics web ops audience=admin; sandbox-delivery is rider partner identity",
+      "sample": "WorldPharma·Logistics Customer store Partner with us Admin Logistics workspace Sign out Shipments Inbox Support World Pharma › Logistics › Shipments Shipment operations Sandbox moc"
+    },
+    "TX3_LAB": {
+      "FRONTEND": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "FINAL": "PASS",
+      "shot_customer": "s466-artifacts/screenshots/tx3_lab_ops.png",
+      "sample_ops": "WorldPharma·Laboratory Customer store Partner with us Admin Dashboard Organization Capabilities Catalog Bookings Collections Transport Accession Processing Path"
+    },
+    "TX4_IMAGING": {
+      "FRONTEND": "PASS",
+      "VIEWER": "NOT_APPLICABLE",
+      "RADIOLOGIST": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "FINAL": "PASS",
+      "shot": "s466-artifacts/screenshots/tx4_radiologist.png",
+      "no_public_dicom_in_ui": true
+    },
+    "TX5_DOCTOR": {
+      "FRONTEND": "PASS",
+      "CUSTOMER_DISCOVERY": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "FINAL": "PASS",
+      "shot": "s466-artifacts/screenshots/tx5_doctors_customer.png"
+    },
+    "TX6_AFFILIATE": {
+      "FRONTEND": "PASS",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "LINK_ACTION": "NOT_APPLICABLE",
+      "FINAL": "PASS",
+      "pages": {
+        "/": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        },
+        "/links": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        },
+        "/earnings": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        },
+        "/statement": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        },
+        "/inbox": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        },
+        "/support": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        },
+        "/profile": {
+          "ok": true,
+          "sample": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World"
+        }
+      },
+      "shot": "s466-artifacts/screenshots/tx6_affiliate.png",
+      "no_payout_execute": true
+    },
+    "TX7_ADMIN": {
+      "FRONTEND": "PARTIAL",
+      "BACKEND": "PASS",
+      "DATABASE": "PASS",
+      "REDIS_WORKER": "NOT_APPLICABLE",
+      "BUSINESS_STATE": "PASS",
+      "SECURITY": "PASS",
+      "FINAL": "PARTIAL",
+      "loaded": 22,
+      "bad": [
+        "/vendor:EMPTY",
+        "/launch-readiness:EMPTY"
+      ]
+    }
+  },
+  "security": [
+    {
+      "name": "unauthenticated_admin",
+      "status": 401,
+      "result": "PASS",
+      "expected": 401
+    },
+    {
+      "name": "fake_bearer",
+      "status": 401,
+      "result": "PASS",
+      "expected": 401
+    },
+    {
+      "name": "customer_to_admin",
+      "status": 403,
+      "result": "PASS",
+      "expected": 403
+    },
+    {
+      "name": "customer_foreign_order",
+      "status": 403,
+      "result": "PASS",
+      "expected": [
+        403,
+        404
+      ]
+    },
+    {
+      "name": "public_or_unauth_lab/reports/00000000-0000-7000-8000-000000000099",
+      "status": 404,
+      "result": "PASS",
+      "expected": [
+        401,
+        403,
+        404
+      ]
+    },
+    {
+      "name": "public_or_unauth_imaging/studies/00000000-0000-7000-8000-000000000099",
+      "status": 404,
+      "result": "PASS",
+      "expected": [
+        401,
+        403,
+        404
+      ]
+    },
+    {
+      "name": "public_or_unauth_public/frame/1",
+      "status": 404,
+      "result": "PASS",
+      "expected": [
+        401,
+        403,
+        404
+      ]
+    }
+  ],
+  "payment": {
+    "SANDBOX": "NOT_APPLICABLE",
+    "REAL_PSP": "EXTERNAL_BLOCKED",
+    "note": "Sandbox checkout attempted in TX1; live PSP not enabled per /health/ready"
+  },
+  "otp": {
+    "request_verify_api": {
+      "request": 200,
+      "verify": 200,
+      "has_token": true
+    },
+    "wrong_code": {
+      "status": 401,
+      "result": "PASS"
+    },
+    "REAL_OTP": "EXTERNAL_BLOCKED",
+    "ui_matrix": {
+      "FINAL": "PARTIAL",
+      "error": "locator.waitFor: Timeout 45000ms exceeded.\nCall log:\n  - waiting for getByLabel(/One-time code/i) to be visible\n"
+    }
+  },
+  "country": {
+    "list_status": 200,
+    "sample": [
+      "AE",
+      "IN",
+      "MA",
+      "MB",
+      "S4",
+      "US",
+      "XX",
+      "Z9"
+    ],
+    "ui_markets": "PASS",
+    "XX_fail_closed_note": "XX is sandbox affiliate/policy market — store markets are IN/AE/US; XX not offered as storefront gate",
+    "cross_border_software": "CUSTOMER_COUNTRY may differ from fulfillment source in software model — no real cross-border medicine shipment executed",
+    "FINAL": "PASS"
+  },
+  "admin_pages": [
+    {
+      "route": "/",
+      "status": "LOADED",
+      "len": 5767,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/orders",
+      "status": "EXTERNAL-GATED",
+      "len": 3137,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/vendor",
+      "status": "EMPTY",
+      "len": 19,
+      "sample": "Opening Main Admin…"
+    },
+    {
+      "route": "/doctors",
+      "status": "LOADED",
+      "len": 1867,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/labs",
+      "status": "LOADED",
+      "len": 1776,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/imaging",
+      "status": "LOADED",
+      "len": 1791,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/delivery",
+      "status": "LOADED",
+      "len": 3249,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/affiliates",
+      "status": "LOADED",
+      "len": 1805,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/catalog",
+      "status": "LOADED",
+      "len": 4312,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/inventory",
+      "status": "LOADED",
+      "len": 3406,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/payments",
+      "status": "LOADED",
+      "len": 1426,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/finance",
+      "status": "LOADED",
+      "len": 4466,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/countries",
+      "status": "LOADED",
+      "len": 1439,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/policy-packs",
+      "status": "LOADED",
+      "len": 1442,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/provider-activation",
+      "status": "LOADED",
+      "len": 1642,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/launch-readiness",
+      "status": "EMPTY",
+      "len": 0,
+      "sample": ""
+    },
+    {
+      "route": "/notifications",
+      "status": "EXTERNAL-GATED",
+      "len": 12628,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/support",
+      "status": "LOADED",
+      "len": 1602,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/cms",
+      "status": "LOADED",
+      "len": 1792,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/crm",
+      "status": "LOADED",
+      "len": 1652,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/marketing",
+      "status": "LOADED",
+      "len": 1439,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/seo",
+      "status": "LOADED",
+      "len": 1695,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/storefront",
+      "status": "LOADED",
+      "len": 2252,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    },
+    {
+      "route": "/identity",
+      "status": "LOADED",
+      "len": 2058,
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Sup"
+    }
+  ],
+  "public": {
+    "pages": {
+      "home": {
+        "status": "http://127.0.0.1:3000/",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "search": {
+        "status": "http://127.0.0.1:3000/search?q=paracetamol",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "lab": {
+        "status": "http://127.0.0.1:3000/lab",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "radiology": {
+        "status": "http://127.0.0.1:3000/radiology",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "doctors": {
+        "status": "http://127.0.0.1:3000/doctors",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "help": {
+        "status": "http://127.0.0.1:3000/help",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "faq": {
+        "status": "http://127.0.0.1:3000/faq",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "contact": {
+        "status": "http://127.0.0.1:3000/contact",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "legal": {
+        "status": "http://127.0.0.1:3000/legal",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      },
+      "deals": {
+        "status": "http://127.0.0.1:3000/deals",
+        "ok": true,
+        "localhost_leak": 0,
+        "fake_prod": false
+      }
+    },
+    "mobile_overflow": "PASS",
+    "shot": "s466-artifacts/screenshots/public_mobile_home.png",
+    "FINAL": "PASS"
+  },
+  "defects": [],
+  "console_errors": [],
+  "infrastructure": {
+    "health": 200,
+    "ready": 200,
+    "ready_body": {
+      "status": "ready",
+      "postgres": "up",
+      "redis": "up",
+      "redis_version": "7.4.11",
+      "bullmq": "up",
+      "outbox": {
+        "pending": 0,
+        "processing": 1,
+        "dead_lettered": 0
+      },
+      "database": {
+        "connectivity": "up",
+        "migrations": "ok"
+      },
+      "infrastructure": {
+        "status": "EXTERNAL_GATED",
+        "storage": "EXTERNAL_GATED",
+        "malware_scanning": "EXTERNAL_GATED",
+        "kms_secrets": "EXTERNAL_GATED",
+        "backups": "EXTERNAL_GATED",
+        "pitr": "EXTERNAL_GATED",
+        "rpo": "TARGET_DEFINED",
+        "rto": "TARGET_DEFINED",
+        "rpo_target": "15m",
+        "rto_target": "4h",
+        "recovery_infrastructure_status": "RECOVERY_INFRASTRUCTURE_EXTERNAL_GATED"
+      },
+      "runtime": {
+        "environment": "development",
+        "app_version": "0.0.0",
+        "git_sha": "local",
+        "dependencies": [
+          {
+            "name": "postgres",
+            "mode": "healthy",
+            "detail": "Required — probed by /health/ready"
+          },
+          {
+            "name": "redis",
+            "mode": "healthy",
+            "detail": "Required for rate limits, BullMQ, policy cache"
+          },
+          {
+            "name": "payments",
+            "mode": "sandbox",
+            "detail": "Sandbox/mock only — live PSP rails not enabled"
+          },
+          {
+            "name": "carriers",
+            "mode": "sandbox",
+            "detail": "Mock carrier adapter — live carrier booking is an external dependency"
+          },
+          {
+            "name": "notifications",
+            "mode": "sandbox",
+            "detail": "Console/sandbox providers acceptable in development"
+          },
+          {
+            "name": "object_storage",
+            "mode": "sandbox",
+            "detail": "Local private object store — production requires S3-compatible backend"
+          },
+          {
+            "name": "otp",
+            "mode": "sandbox",
+            "detail": "AUTH_DEV_REVEAL_OTP enabled — development only"
+          }
+        ]
+      }
+    }
+  },
+  "finished": "2026-09-05T20:14:09.983Z",
+  "mobile": {
+    "ANDROID": "ENVIRONMENT_BLOCKED",
+    "IOS": "ENVIRONMENT_BLOCKED"
+  },
+  "real_providers": {
+    "PSP": "EXTERNAL_BLOCKED",
+    "OTP_SMS": "EXTERNAL_BLOCKED",
+    "KYC_KYB": "EXTERNAL_BLOCKED",
+    "Carrier": "EXTERNAL_BLOCKED",
+    "Pharmacy_network": "EXTERNAL_BLOCKED",
+    "Production_DB": "EXTERNAL_BLOCKED",
+    "Secrets": "EXTERNAL_BLOCKED",
+    "Storage_KMS": "EXTERNAL_BLOCKED",
+    "Backup_PITR": "EXTERNAL_BLOCKED",
+    "Deployment": "EXTERNAL_BLOCKED",
+    "WAF": "EXTERNAL_BLOCKED",
+    "APM": "EXTERNAL_BLOCKED",
+    "eRx": "EXTERNAL_BLOCKED",
+    "Telemedicine": "EXTERNAL_BLOCKED",
+    "PACS": "EXTERNAL_BLOCKED",
+    "Affiliate_payout": "EXTERNAL_BLOCKED"
+  }
+}

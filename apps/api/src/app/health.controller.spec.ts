@@ -28,7 +28,10 @@ describe('HealthController', () => {
   }
 
   it('returns ok without checking dependencies', async () => {
-    const health = await controller({ $queryRaw: async () => [1] }, { isActive: () => false });
+    const health = await controller(
+      { $queryRaw: async () => [1], outboxEvent: { count: async () => 0 } },
+      { isActive: () => false },
+    );
     expect(health.health()).toEqual({ status: 'ok' });
     expect(health.version().status).toBe('ok');
     expect(health.version().git_sha).toBeDefined();
@@ -36,13 +39,18 @@ describe('HealthController', () => {
 
   it('reports ready when postgres and redis are up', async () => {
     probe.mockResolvedValue({ ok: true, version: '7.4.9', bullMqCompatible: true });
-    const health = await controller({ $queryRaw: async () => [1] }, { isActive: () => true });
+    const prisma = {
+      $queryRaw: async () => [1],
+      outboxEvent: { count: async () => 0 },
+    };
+    const health = await controller(prisma, { isActive: () => true });
     const res = mockRes();
     await expect(health.ready(res)).resolves.toMatchObject({
       status: 'ready',
       postgres: 'up',
       redis: 'up',
-      bullmq: 'up',
+      bullmq: process.env['NODE_ENV'] === 'test' ? 'disabled' : 'up',
+      infrastructure: expect.objectContaining({ pitr: 'EXTERNAL_GATED' }),
     });
     expect(res.status).not.toHaveBeenCalled();
   });
@@ -54,6 +62,7 @@ describe('HealthController', () => {
         $queryRaw: async () => {
           throw new Error('ECONNREFUSED');
         },
+        outboxEvent: { count: async () => 0 },
       },
       { isActive: () => true },
     );
@@ -72,12 +81,15 @@ describe('HealthController', () => {
       bullMqCompatible: false,
       error: 'ECONNREFUSED',
     });
-    const health = await controller({ $queryRaw: async () => [1] }, { isActive: () => false });
+    const health = await controller(
+      { $queryRaw: async () => [1], outboxEvent: { count: async () => 0 } },
+      { isActive: () => false },
+    );
     const res = mockRes();
     await expect(health.ready(res)).resolves.toMatchObject({
       status: 'not_ready',
       redis: 'down',
-      bullmq: 'down',
+      bullmq: process.env['NODE_ENV'] === 'test' ? 'disabled' : 'down',
     });
     expect(res.status).toHaveBeenCalledWith(503);
   });

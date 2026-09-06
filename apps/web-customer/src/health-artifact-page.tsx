@@ -16,7 +16,6 @@ import {
   SessionExpiredState,
   Text,
 } from '@world-pharma/ui-kit/web';
-import { CustomerShell } from './customer-shell';
 import {
   fetchHealthArtifactMetadata,
   fetchHealthArtifactPayload,
@@ -31,20 +30,19 @@ import {
   formatWhen,
   type HealthViewError,
 } from './health-utils';
-
-const DEFAULT_COUNTRY = 'XX';
+import { useSelectedCountry } from './use-selected-country';
 
 export function HealthArtifactScreen() {
   const params = useParams<{ id: string }>();
   const artifactId = params?.id ?? '';
   const { session, getAccessToken, signOut, expire } = useSession();
+  const { country: countryCode } = useSelectedCountry();
   const [metadata, setMetadata] = useState<HealthArtifactMetadata | null>(null);
   const [payload, setPayload] = useState<HealthArtifactPayload | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
   const [payloadLoading, setPayloadLoading] = useState(false);
   const [metaError, setMetaError] = useState<HealthViewError | null>(null);
   const [payloadError, setPayloadError] = useState<HealthViewError | null>(null);
-  const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY);
 
   const onUnauthorized = useCallback(() => expire(), [expire]);
 
@@ -118,9 +116,7 @@ export function HealthArtifactScreen() {
 
   if (session.status !== 'authenticated') {
     return (
-      <CustomerShell apiReachable={true} countryLabel={countryCode}>
-        <EmptyState title="Sign in required" description="Sign in with OTP to view this health record." />
-      </CustomerShell>
+      <EmptyState title="Sign in required" description="Sign in with OTP to view this health record." />
     );
   }
 
@@ -130,34 +126,20 @@ export function HealthArtifactScreen() {
 
   if (!artifactId) {
     return (
-      <CustomerShell apiReachable={true} countryLabel={countryCode}>
-        <EmptyState title="Record unavailable" description="No health record was specified." />
-      </CustomerShell>
+      <EmptyState title="Record unavailable" description="No health record was specified." />
     );
   }
 
   const sourceLabel = formatSourceModule(metadata?.source_module);
 
   return (
-    <CustomerShell apiReachable={true} countryLabel={countryCode}>
+    <>
       <Link href="/health">
         <Button variant="tertiary" size="sm">
           Back to health timeline
         </Button>
       </Link>
       <Heading level={2}>Health record</Heading>
-      <FormField label="Country code">
-        {({ id }) => (
-          <input
-            id={id}
-            className="wp-input"
-            value={countryCode}
-            onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
-            onBlur={() => void loadMetadata()}
-            aria-label="Health country code"
-          />
-        )}
-      </FormField>
 
       {metaLoading ? <LoadingState label="Loading record details" /> : null}
 
@@ -244,6 +226,6 @@ export function HealthArtifactScreen() {
           ) : null}
         </>
       ) : null}
-    </CustomerShell>
+    </>
   );
 }

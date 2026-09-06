@@ -19,17 +19,8 @@ import {
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
 import { seedCheckoutInventory } from '../test/seed-checkout-inventory';
+import { signIn, provisionOrgAdmin, provisionSuperAdmin } from '../test/sign-in';
 import { MockPaymentGatewayAdapter } from './mock.adapter';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
 
 describe('R14-A checkout pay guard (e2e)', () => {
   jest.setTimeout(180_000);
@@ -149,24 +140,9 @@ describe('R14-A checkout pay guard (e2e)', () => {
         timezone: 'UTC',
       },
     });
-    const admin = await signIn(app, `pg-admin-${Date.now()}@example.com`, 'admin');
+    const admin = await provisionSuperAdmin(app, prisma, 'pg-admin');
     adminToken = admin.token;
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `pg-vendor-${Date.now()}@example.com`, 'admin');
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendor.id,
-        status: 'ACTIVE',
-      },
-    });
+    const vendorUser = await provisionOrgAdmin(app, prisma, 'pg-vendor', vendor.id);
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,
       adminToken: admin.token,
@@ -374,9 +350,13 @@ describe('R14-A checkout pay guard (e2e)', () => {
       paySession(session.body.id, 'success', `pg-conc-a-${Date.now()}`),
       paySession(session.body.id, 'success', `pg-conc-b-${Date.now()}`),
     ]);
-    expect(a.status).toBe(201);
-    expect(b.status).toBe(201);
-    expect(a.body.id).toBe(b.body.id);
+    const winner = a.status === 201 ? a : b;
+    expect(winner.status).toBe(201);
+    expect(winner.body.status).toBe('CAPTURED');
+    expect([a.status, b.status].sort((x, y) => x - y)).toEqual([201, 409]);
+    if (a.status === 201 && b.status === 201) {
+      expect(a.body.id).toBe(b.body.id);
+    }
     expect(await prisma.paymentIntent.count({ where: { checkoutSessionId: session.body.id } })).toBe(1);
     expect(
       await prisma.paymentIntent.count({

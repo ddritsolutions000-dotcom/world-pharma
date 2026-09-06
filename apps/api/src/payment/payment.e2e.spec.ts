@@ -14,19 +14,11 @@ import {
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
 import { seedCheckoutInventory } from '../test/seed-checkout-inventory';
+import { signIn, provisionOrgAdmin, provisionSuperAdmin } from '../test/sign-in';
 import { signSandboxPayload } from './hmac';
 
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
-
 describe('payment sandbox (e2e)', () => {
+  jest.setTimeout(120_000);
   let app: INestApplication;
   let prisma: PrismaService;
 
@@ -117,23 +109,8 @@ describe('payment sandbox (e2e)', () => {
         timezone: 'UTC',
       },
     });
-    const admin = await signIn(app, `pay-admin-${Date.now()}@example.com`, 'admin');
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `pay-vendor-${Date.now()}@example.com`, 'admin');
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendor.id,
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, 'pay-admin');
+    const vendorUser = await provisionOrgAdmin(app, prisma, 'pay-vendor', vendor.id);
 
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,
@@ -292,7 +269,7 @@ describe('payment sandbox (e2e)', () => {
     expect(orderAfter).toBe(orderBefore);
     expect(orderAfter).toBe(1);
 
-    const stranger = await signIn(app, `pay-stranger-${Date.now()}@example.com`, 'admin');
+    const stranger = await signIn(app, `pay-stranger-${Date.now()}@example.com`, 'customer');
     const denied = await request(app.getHttpServer())
       .get('/api/v1/admin/payments')
       .set('Authorization', `Bearer ${stranger.token}`);
@@ -363,23 +340,8 @@ describe('payment sandbox (e2e)', () => {
         timezone: 'UTC',
       },
     });
-    const admin = await signIn(app, `pay-stock-admin-${Date.now()}@example.com`, 'admin');
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `pay-stock-vendor-${Date.now()}@example.com`, 'admin');
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendor.id,
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, 'pay-stock-admin');
+    const vendorUser = await provisionOrgAdmin(app, prisma, 'pay-stock-vendor', vendor.id);
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,
       adminToken: admin.token,

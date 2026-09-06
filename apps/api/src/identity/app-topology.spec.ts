@@ -6,21 +6,21 @@ import {
 } from './app-topology';
 
 describe('global application topology', () => {
-  it('lists six mobile and twelve web product apps', () => {
+  it('lists seven mobile and twelve web product apps', () => {
     const mobile = APPLICATION_REGISTRY.filter((app) => app.surface === 'mobile');
     const web = APPLICATION_REGISTRY.filter((app) => app.surface === 'web');
-    expect(mobile).toHaveLength(6);
+    expect(mobile).toHaveLength(7);
     expect(web).toHaveLength(12);
   });
 
-  it('does not invent an affiliate mobile or generic partner app', () => {
-    expect(APPLICATION_REGISTRY.some((app) => /affiliate/i.test(app.name) && app.surface === 'mobile')).toBe(
-      false,
-    );
+  it('allows affiliate mobile companion and still forbids generic partner app', () => {
+    expect(applicationByPath('apps/mobile-affiliate')?.surface).toBe('mobile');
+    expect(applicationByPath('apps/mobile-affiliate')?.jwtAudiences).toEqual(['customer']);
     expect(APPLICATION_REGISTRY.some((app) => /^partner app$/i.test(app.name))).toBe(false);
     expect(FORBIDDEN_APPLICATIONS).toEqual(
-      expect.arrayContaining(['Generic Partner App', 'Affiliate mobile app']),
+      expect.arrayContaining(['Generic Partner App']),
     );
+    expect(FORBIDDEN_APPLICATIONS).not.toContain('Affiliate mobile app');
   });
 
   it('marks partner ops clients as functional and vendor/lab as foundation after pre-R4 hardening', () => {
@@ -32,6 +32,7 @@ describe('global application topology', () => {
     expect(applicationByPath('apps/web-radiologist')?.status).toBe('IMPLEMENTED');
     expect(applicationByPath('apps/web-radiologist')?.currentPath).toBe('apps/web-radiologist');
     expect(applicationByPath('apps/web-affiliate')?.status).toBe('IMPLEMENTED');
+    expect(applicationByPath('apps/mobile-affiliate')?.status).toBe('FUNCTIONAL');
     expect(applicationByPath('apps/web-join')?.status).toBe('FUNCTIONAL');
     expect(applicationByPath('apps/web-store')?.status).toBe('FUNCTIONAL');
     expect(applicationByPath('apps/mobile-store')?.status).toBe('FUNCTIONAL');
@@ -41,6 +42,7 @@ describe('global application topology', () => {
     expect(applicationByPath('apps/mobile-doctor')?.status).toBe('FOUNDATION');
     expect(applicationsByStatus('IMPLEMENTED').map((app) => app.path)).toEqual([
       'apps/web-radiologist',
+      'apps/web-pathologist',
       'apps/web-affiliate',
     ]);
   });

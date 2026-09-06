@@ -1,4 +1,4 @@
-﻿import { Module, forwardRef } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../app/prisma.service';
 import { CartModule } from '../cart/cart.module';
 import { CrmModule } from '../crm/crm.module';
@@ -7,6 +7,8 @@ import { HealthModule } from '../health/health.module';
 import { IdentityModule } from '../identity/identity.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { PartnerModule } from '../partner/partner.module';
+import { HealthcareModule } from '../healthcare/healthcare.module';
+import { PlatformModule } from '../platform/platform.module';
 import { PolicyModule } from '../policy/policy.module';
 import { AdminAppointmentController } from './admin-appointment.controller';
 import { AdminDispensingController } from './admin-dispensing.controller';
@@ -20,6 +22,7 @@ import { ClinicalAccessService } from './clinical-access.service';
 import { ConsentController } from './consent.controller';
 import { ConsentService } from './consent.service';
 import { CustomerAppointmentController } from './customer-appointment.controller';
+import { PublicCareController } from './public.controller';
 import { CustomerPrescriptionController } from './customer-prescription.controller';
 import { CustomerRxHandoffController } from './customer-rx-handoff.controller';
 import { CustomerRefillController, DoctorRefillController, AdminRefillController } from './refill.controller';
@@ -27,8 +30,11 @@ import { RefillService } from './refill.service';
 import { DoctorAdminController } from './doctor-admin.controller';
 import { DoctorAppointmentController } from './doctor-appointment.controller';
 import { DoctorController } from './doctor.controller';
-import { DoctorEncounterPrescriptionController } from './doctor-encounter-prescription.controller';
+import { DoctorEarningsController } from './doctor-earnings.controller';
+import { DoctorEarningsService } from './doctor-earnings.service';
+import { DoctorWalletService } from './doctor-wallet.service';
 import { DoctorPrescriptionController } from './doctor-prescription.controller';
+import { DoctorEncounterPrescriptionController } from './doctor-encounter-prescription.controller';
 import { EncounterConsultNoteService } from './encounter-consult-note.service';
 import { DoctorService } from './doctor.service';
 import { DISPENSING_BOUNDARY } from './dispensing-boundary.port';
@@ -41,6 +47,7 @@ import { NullERxAdapter } from './null-erx.adapter';
 import { SandboxERxAdapter } from './sandbox-erx.adapter';
 import { ErxRouter } from './erx-router';
 import { PrescriptionService } from './prescription.service';
+import { RxFulfillmentSafetyGate } from './rx-fulfillment-safety-gate';
 import { RxHandoffService } from './rx-handoff.service';
 import { ScheduleService } from './schedule.service';
 import { VIDEO_PROVIDER, VideoService } from './video.service';
@@ -52,8 +59,10 @@ import { VideoWebhookController } from './video-webhook.controller';
     PolicyModule,
     EventsModule,
     PartnerModule,
+    HealthcareModule,
     InventoryModule,
     CrmModule,
+    forwardRef(() => PlatformModule),
     forwardRef(() => CartModule),
     forwardRef(() => HealthModule),
   ],
@@ -63,8 +72,10 @@ import { VideoWebhookController } from './video-webhook.controller';
     ConsentController,
     ClinicalAccessController,
     ClinicalSearchController,
+    PublicCareController,
     CustomerAppointmentController,
     DoctorAppointmentController,
+    DoctorEarningsController,
     AdminAppointmentController,
     AdminVideoController,
     VideoWebhookController,
@@ -81,6 +92,8 @@ import { VideoWebhookController } from './video-webhook.controller';
   providers: [
     PrismaService,
     DoctorService,
+    DoctorEarningsService,
+    DoctorWalletService,
     ConsentService,
     ClinicalAccessService,
     ClinicalSearchService,
@@ -98,6 +111,7 @@ import { VideoWebhookController } from './video-webhook.controller';
     DispensingService,
     RxHandoffService,
     RefillService,
+    RxFulfillmentSafetyGate,
     { provide: ERX_PORT, useExisting: NullERxAdapter },
     { provide: DISPENSING_BOUNDARY, useExisting: DispensingService },
     {
@@ -125,12 +139,14 @@ import { VideoWebhookController } from './video-webhook.controller';
     ConsentService,
     ClinicalAccessService,
     ClinicalSearchService,
+    ScheduleService,
     AppointmentService,
     EncounterConsultNoteService,
     PrescriptionService,
     DispensingService,
     RxHandoffService,
     RefillService,
+    RxFulfillmentSafetyGate,
   ],
 })
 export class ClinicalModule {}

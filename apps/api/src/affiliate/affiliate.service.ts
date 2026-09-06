@@ -267,6 +267,13 @@ export class AffiliateService {
     if (country.id !== countryId) {
       throw Errors.forbidden('This country is outside the affiliate organization scope.');
     }
+    const countryRow = await this.prisma.country.findUniqueOrThrow({ where: { id: country.id } });
+    const pack = countryRow.publishedPolicyPackId
+      ? await this.prisma.policyPack.findUnique({ where: { id: countryRow.publishedPolicyPackId } })
+      : null;
+    const policyDoc = pack?.document as
+      | { partner_types?: { AFFILIATE?: { clinical_categories?: boolean } } }
+      | undefined;
     return runWithTenant(
       workerTenantContext({ countryId: country.id, organizationId, personId: principal.personId }),
       async () => {
@@ -293,13 +300,36 @@ export class AffiliateService {
         const pendingMinor = liabilities
           .filter((row) => row.status === 'PENDING')
           .reduce((sum, row) => sum + row.amountMinor, 0n);
+        const approvedMinor = liabilities
+          .filter((row) => row.status === 'APPROVED')
+          .reduce((sum, row) => sum + row.amountMinor, 0n);
+        const payableMinor = liabilities
+          .filter((row) => row.status === 'PAYABLE')
+          .reduce((sum, row) => sum + row.amountMinor, 0n);
+        const paidMinor = liabilities
+          .filter((row) => row.status === 'PAID')
+          .reduce((sum, row) => sum + row.amountMinor, 0n);
+        const reversedMinor = liabilities
+          .filter((row) => row.status === 'REVERSED')
+          .reduce((sum, row) => sum + row.amountMinor, 0n);
+        const attributedOrders = liabilities.filter((row) => row.status !== 'REVERSED');
+        const grossMinor = attributedOrders.reduce((sum, row) => sum + row.amountMinor, 0n);
         return {
           clicks_total: clicks,
           links_total: links,
           codes_active: codes,
           earnings_pending_minor: pendingMinor.toString(),
-          clinical_blocked_default: true,
+          earnings_approved_minor: approvedMinor.toString(),
+          earnings_payable_minor: payableMinor.toString(),
+          earnings_paid_minor: paidMinor.toString(),
+          earnings_reversed_minor: reversedMinor.toString(),
+          earnings_calculated_minor: (pendingMinor + approvedMinor + payableMinor + paidMinor).toString(),
+          gross_attributed_commission_minor: grossMinor.toString(),
+          conversions_total: attributedOrders.length,
+          clinical_blocked_default: policyDoc?.partner_types?.AFFILIATE?.clinical_categories !== true,
           payout_enabled: false,
+          payout_status: 'external_gated',
+          sandbox: true,
         };
       },
     );
@@ -318,6 +348,42 @@ export class AffiliateService {
           orderBy: { createdAt: 'desc' },
         })
       : [];
+    const summary = {
+      calculated_minor: '0',
+      pending_minor: '0',
+      approved_minor: '0',
+      payable_minor: '0',
+      paid_minor: '0',
+      reversed_minor: '0',
+    };
+    for (const row of rows) {
+      const amount = row.amountMinor;
+      switch (row.status) {
+        case 'PENDING':
+          summary.pending_minor = (BigInt(summary.pending_minor) + amount).toString();
+          break;
+        case 'APPROVED':
+          summary.approved_minor = (BigInt(summary.approved_minor) + amount).toString();
+          break;
+        case 'PAYABLE':
+          summary.payable_minor = (BigInt(summary.payable_minor) + amount).toString();
+          break;
+        case 'PAID':
+          summary.paid_minor = (BigInt(summary.paid_minor) + amount).toString();
+          break;
+        case 'REVERSED':
+          summary.reversed_minor = (BigInt(summary.reversed_minor) + amount).toString();
+          break;
+        default:
+          break;
+      }
+    }
+    summary.calculated_minor = (
+      BigInt(summary.pending_minor)
+      + BigInt(summary.approved_minor)
+      + BigInt(summary.payable_minor)
+      + BigInt(summary.paid_minor)
+    ).toString();
     return {
       data: rows.map((row) => ({
         order_id: row.orderId,
@@ -326,9 +392,15 @@ export class AffiliateService {
         status: row.status,
         clinical_blocked: row.clinicalBlocked,
         affiliate_code: row.affiliateCode,
+        created_at: row.createdAt.toISOString(),
+        updated_at: row.updatedAt.toISOString(),
       })),
+      summary,
       payout_visibility: 'liability_status_only',
+      payout_status: 'external_gated',
+      payout_execution_enabled: false,
       live_payout: false,
+      sandbox: true,
     };
   }
 

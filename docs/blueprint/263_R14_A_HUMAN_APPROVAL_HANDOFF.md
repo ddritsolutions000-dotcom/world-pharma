@@ -7,6 +7,7 @@
 
 **Prior resolution:** [262](262_R14_A_HUMAN_GATE_RESOLUTION.md) (**0/7 — no authoritative evidence in repository**)  
 **Intake record:** [247](247_R14_A_HUMAN_GATE_EVIDENCE.md)  
+**Owner fill surface:** [R14_A_OWNER_GATE_CHECKLIST.md](R14_A_OWNER_GATE_CHECKLIST.md)  
 **Engineering:** [259](259_R14_A_ENGINEERING_PREPARATION.md) + [261](261_R14_A_ENGINEERING_HARDENING.md) (**COMPLETE**)
 
 Documentation/handoff only. **No repository re-audit. No Book 35 `DECIDED` updates. No payment implementation changes.**
@@ -211,7 +212,7 @@ Engineering is ready at the **abstraction level**. **Human gates block live impl
 
 ### For project owner / stakeholders
 
-1. Complete the seven decision blocks in §2 with authoritative values and safe references.  
+1. Enter authoritative values on the single fillable checklist: [R14_A_OWNER_GATE_CHECKLIST.md](R14_A_OWNER_GATE_CHECKLIST.md) (also complete §2 below).  
 2. Submit via **`CR-R14-A-HUMAN-GATE-RESOLUTION-262`** successor intake (or owner-approved artifact bundle added to project records).  
 3. Engineering will populate [247](247_R14_A_HUMAN_GATE_EVIDENCE.md) and Book 35 `DECIDED` rows **only when genuine evidence is supplied**.
 

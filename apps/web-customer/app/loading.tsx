@@ -1,5 +1,8 @@
-import { LoadingState } from '@world-pharma/ui-kit/web';
-
 export default function Loading() {
-  return <LoadingState label="Loading workspace" />;
+  return (
+    <div className="mg-loading-page">
+      <div className="mg-loading-spinner" aria-hidden />
+      <p>Loading…</p>
+    </div>
+  );
 }

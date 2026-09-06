@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { classifyAdminViewState } from './admin-http';
+import { AdminViewLoadError } from './admin-request-error';
 import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
@@ -8,9 +10,7 @@ import {
   EmptyState,
   FormField,
   Heading,
-  Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Select,
   Text,
@@ -26,15 +26,16 @@ import {
   type QuestionModerationRow,
   type ReviewModerationRow,
 } from './reviews-api';
+import { workingCountry, MARKET_COUNTRY_CODES } from './working-country';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
 
 export function ReviewsModerationList() {
-  const { getAccessToken } = useSession();
+  const { getAccessToken, session } = useSession();
   const [reviews, setReviews] = useState<ReviewModerationRow[]>([]);
   const [questions, setQuestions] = useState<QuestionModerationRow[]>([]);
   const [viewState, setViewState] = useState<ViewState>('idle');
-  const [countryCode, setCountryCode] = useState('XX');
+  const [countryCode, setCountryCode] = useState(() => workingCountry(session.countryCode));
   const [statusFilter, setStatusFilter] = useState('SUBMITTED');
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
@@ -47,19 +48,28 @@ export function ReviewsModerationList() {
     setViewState('loading');
     setActionError(null);
     try {
-      const [reviewBody, questionBody] = await Promise.all([
+      const [reviewResult, questionResult] = await Promise.allSettled([
         listReviewModeration(token, countryCode, statusFilter || undefined),
         listQuestionModeration(token, countryCode, statusFilter || undefined),
       ]);
-      setReviews(reviewBody.data ?? []);
-      setQuestions(questionBody.data ?? []);
+      if (reviewResult.status === 'rejected' && questionResult.status === 'rejected') {
+        const err = reviewResult.reason;
+        if (err instanceof ReviewsApiError && err.status === 403) {
+          setViewState('forbidden');
+          return;
+        }
+        setViewState(classifyAdminViewState(err));
+        return;
+      }
+      setReviews(reviewResult.status === 'fulfilled' ? (reviewResult.value.data ?? []) : []);
+      setQuestions(questionResult.status === 'fulfilled' ? (questionResult.value.data ?? []) : []);
       setViewState('idle');
     } catch (err) {
       if (err instanceof ReviewsApiError && err.status === 403) {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [countryCode, getAccessToken, statusFilter]);
 
@@ -111,43 +121,43 @@ export function ReviewsModerationList() {
   if (viewState === 'forbidden') {
     return <PermissionDeniedState />;
   }
-  if (viewState === 'network' && reviews.length === 0 && questions.length === 0) {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
-  }
 
   return (
     <div className="wp-stack">
-      <Heading level={1}>Product reviews & Q&A</Heading>
-      <Text tone="secondary">
-        Moderate commerce product reviews and Q&A. Operational metadata only — no clinical moderation workflows.
-      </Text>
-      {actionError ? <Text tone="secondary">{actionError}</Text> : null}
-      <Card>
-        <div className="wp-stack">
-          <FormField label="Country code">
-            {({ id }) => (
-              <Input
-                id={id}
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
-              />
-            )}
-          </FormField>
-          <FormField label="Status filter">
-            {({ id }) => (
-              <Select id={id} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="">All statuses</option>
-                {REVIEW_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </FormField>
-          <Button onClick={() => void load()}>Refresh</Button>
-        </div>
-      </Card>
+      <header className="wp-page-header">
+        <Heading level={1}>Product reviews & Q&A</Heading>
+        <p className="wp-page-intro">
+          Moderate commerce product reviews and Q&A. Operational metadata only — no clinical moderation workflows.
+        </p>
+      </header>
+      {actionError ? <p className="wp-text-muted">{actionError}</p> : null}
+      <div className="wp-toolbar">
+        <FormField label="Country">
+          {({ id }) => (
+            <Select id={id} value={countryCode} onChange={(e) => setCountryCode(workingCountry(e.target.value))}>
+              {MARKET_COUNTRY_CODES.map((iso) => (
+                <option key={iso} value={iso}>
+                  {iso}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Status filter">
+          {({ id }) => (
+            <Select id={id} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              {REVIEW_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <Button onClick={() => void load()}>Refresh</Button>
+      </div>
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
 
       <Heading level={2}>Reviews</Heading>
       {reviews.length === 0 ? (

@@ -423,7 +423,7 @@ export class ReviewsService {
     }
     const line = await this.prisma.orderItem.findFirst({
       where: {
-        order: { customerPersonId: personId, countryId },
+        order: { customerPersonId: personId, countryId, status: 'DELIVERED' },
         variantId: { in: variants.map((v) => v.id) },
       },
       orderBy: { createdAt: 'desc' },

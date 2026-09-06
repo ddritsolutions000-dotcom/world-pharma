@@ -3,9 +3,8 @@ import { LogisticsAdminPanel } from '../../src/logistics-admin';
 
 export default function LogisticsPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="logistics">
       <LogisticsAdminPanel />
-    </>
+    </AdminShell>
   );
 }

@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "World Pharma Doctor",
+    "slug": "world-pharma-doctor",
+    "scheme": "worldpharmadoctor",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.worldpharma.doctor"
+    },
+    "android": {
+      "package": "com.worldpharma.doctor",
+      "versionCode": 1
+    },
+    "extra": {
+      "appEnv": "local"
+    }
+  }
+}

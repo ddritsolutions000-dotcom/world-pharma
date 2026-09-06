@@ -1,22 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
-  FormField,
-  Heading,
-  Input,
   LoadingState,
   NetworkErrorState,
   PermissionDeniedState,
   SessionExpiredState,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import { createSupportTicket, fetchSupportTickets, type SupportTicket } from './account-api';
+import { AccountPage } from './ui/account-hub-nav';
+import { MgBtn, MgCard, MgInput, PageIntro } from './ui/mg-ui';
 
 export function SupportScreen() {
   const { session, getAccessToken, signOut, expire } = useSession();
@@ -25,8 +20,6 @@ export function SupportScreen() {
   const [error, setError] = useState<'network' | 'forbidden' | null>(null);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
-  const [correlationPrescriptionId, setCorrelationPrescriptionId] = useState('');
-  const [correlationDispensingCaseId, setCorrelationDispensingCaseId] = useState('');
   const [correlationOrderId, setCorrelationOrderId] = useState('');
   const [message, setMessage] = useState<string | null>(null);
 
@@ -61,7 +54,21 @@ export function SupportScreen() {
   }
 
   if (session.status !== 'authenticated') {
-    return <EmptyState title="Sign in required" description="Sign in to contact support." />;
+    return (
+      <AccountPage title="Support" subtitle="Get help with orders and account.">
+        <PageIntro>
+          <p>Open a ticket for order issues, refunds, or delivery problems. Include your order number for faster resolution.</p>
+        </PageIntro>
+        <EmptyState
+          title="Sign in required"
+          description="Sign in to contact support."
+          action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }}
+        />
+        <MgBtn href="/help" variant="secondary">
+          Browse help articles
+        </MgBtn>
+      </AccountPage>
+    );
   }
 
   if (session.audience !== 'customer') {
@@ -69,7 +76,11 @@ export function SupportScreen() {
   }
 
   if (loading) {
-    return <LoadingState label="Loading support tickets" />;
+    return (
+      <AccountPage title="Support" subtitle="Get help with orders and account.">
+        <LoadingState label="Loading support tickets" />
+      </AccountPage>
+    );
   }
 
   if (error === 'forbidden') {
@@ -77,7 +88,11 @@ export function SupportScreen() {
   }
 
   if (error === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: load }} />;
+    return (
+      <AccountPage title="Support" subtitle="Get help with orders and account.">
+        <NetworkErrorState action={{ label: 'Retry', onClick: load }} />
+      </AccountPage>
+    );
   }
 
   async function submitTicket() {
@@ -86,22 +101,18 @@ export function SupportScreen() {
       return;
     }
     const correlationLines = [
-      correlationPrescriptionId.trim() ? `prescription_id: ${correlationPrescriptionId.trim()}` : null,
-      correlationDispensingCaseId.trim() ? `dispensing_case_id: ${correlationDispensingCaseId.trim()}` : null,
       correlationOrderId.trim() ? `order_id: ${correlationOrderId.trim()}` : null,
     ].filter(Boolean);
     const ticketBody =
       correlationLines.length > 0
-        ? `${body.trim()}\n\n---\nCorrelation IDs:\n${correlationLines.join('\n')}`
+        ? `${body.trim()}\n\n---\nReference:\n${correlationLines.join('\n')}`
         : body;
     const result = await createSupportTicket({ token, onUnauthorized, subject, body: ticketBody });
     if (result.ok) {
       setSubject('');
       setBody('');
-      setCorrelationPrescriptionId('');
-      setCorrelationDispensingCaseId('');
       setCorrelationOrderId('');
-      setMessage('Ticket submitted.');
+      setMessage('Ticket submitted. We will respond soon.');
       load();
     } else {
       setMessage(result.error);
@@ -109,60 +120,56 @@ export function SupportScreen() {
   }
 
   return (
-    <section>
-      <Heading level={1}>Support</Heading>
-      <Text tone="secondary">Open a ticket for order or account help. Responses are sandbox-only.</Text>
-      <Link href="/account">
-        <Button variant="tertiary" size="sm">
-          Back to account
-        </Button>
-      </Link>
+    <AccountPage title="Support" subtitle="Open a ticket for order or account help.">
+      <PageIntro>
+        <p>We typically respond within a few hours on business days. For urgent delivery issues, include your order ID below.</p>
+      </PageIntro>
       {!rows.length ? (
-        <EmptyState title="No tickets" description="You have not opened a support ticket yet." />
+        <EmptyState title="No tickets yet" description="You have not opened a support ticket." />
       ) : (
-        rows.map((row) => (
-          <Card key={row.id}>
-            <Text>{row.subject}</Text>
-            <Text size="caption">
-              {row.status} · {row.created_at}
-            </Text>
-            <Text>{row.body}</Text>
-          </Card>
-        ))
+        <ul className="mg-order-list">
+          {rows.map((row) => (
+            <li key={row.id}>
+              <MgCard className="mg-order-card">
+                <div className="mg-order-card-top">
+                  <div>
+                    <p className="mg-list-title">{row.subject}</p>
+                    <p className="mg-order-track-hint">
+                      {row.status} · {new Date(row.created_at).toLocaleString()}
+                    </p>
+                    <p className="mg-list-meta">{row.body}</p>
+                  </div>
+                  <span className="mg-status">{row.status}</span>
+                </div>
+              </MgCard>
+            </li>
+          ))}
+        </ul>
       )}
-      <Card>
-        <Heading level={3}>New ticket</Heading>
-        <FormField label="Subject">
-          {({ id }) => <Input id={id} value={subject} onChange={(e) => setSubject(e.target.value)} />}
-        </FormField>
-        <FormField label="Message">
-          {({ id }) => <Input id={id} value={body} onChange={(e) => setBody(e.target.value)} />}
-        </FormField>
-        <Text size="caption" tone="secondary">
-          Optional correlation IDs (helps support trace Rx orders — IDs only, no clinical details)
-        </Text>
-        <FormField label="Prescription ID (optional)">
-          {({ id }) => (
-            <Input id={id} value={correlationPrescriptionId} onChange={(e) => setCorrelationPrescriptionId(e.target.value)} />
-          )}
-        </FormField>
-        <FormField label="Dispensing case ID (optional)">
-          {({ id }) => (
-            <Input
-              id={id}
-              value={correlationDispensingCaseId}
-              onChange={(e) => setCorrelationDispensingCaseId(e.target.value)}
-            />
-          )}
-        </FormField>
-        <FormField label="Order ID (optional)">
-          {({ id }) => (
-            <Input id={id} value={correlationOrderId} onChange={(e) => setCorrelationOrderId(e.target.value)} />
-          )}
-        </FormField>
-        <Button onClick={() => void submitTicket()}>Submit ticket</Button>
-      </Card>
-      {message ? <Text>{message}</Text> : null}
-    </section>
+
+      <MgCard className="mg-form-card">
+        <h2 className="mg-section-title">New ticket</h2>
+        <label className="mg-field">
+          <span className="mg-field-label">Subject</span>
+          <MgInput value={subject} onChange={setSubject} placeholder="Brief summary" />
+        </label>
+        <label className="mg-field">
+          <span className="mg-field-label">Message</span>
+          <textarea
+            className="mg-input"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Describe your issue"
+            rows={4}
+          />
+        </label>
+        <label className="mg-field">
+          <span className="mg-field-label">Order ID (optional)</span>
+          <MgInput value={correlationOrderId} onChange={setCorrelationOrderId} placeholder="ord-..." />
+        </label>
+        <MgBtn onClick={() => void submitTicket()}>Submit ticket</MgBtn>
+      </MgCard>
+      {message ? <p className="mg-page-subtitle">{message}</p> : null}
+    </AccountPage>
   );
 }

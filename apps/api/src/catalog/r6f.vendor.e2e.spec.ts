@@ -21,20 +21,7 @@ import {
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
 import { MARKETPLACE_ATTESTATION_CODE } from './marketplace-eligibility.service';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { provisionSuperAdmin, signInCustomer } from '../test/sign-in';
 
 const PHI_LEAK = /diagnosis|clinical_note|prescription_instruction|dosage|encounter|patient_id|customer_person_id/i;
 
@@ -84,20 +71,9 @@ describe('R6-F marketplace attestation + pack gates (e2e)', () => {
 
   it('fail-closes empty pack, requires attestation, accepts, isolates sellers, and keeps PHI out', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r6f-admin-${suffix}@example.com`, 'admin');
-    const vendorA = await signIn(app, `r6f-va-${suffix}@example.com`);
-    const vendorB = await signIn(app, `r6f-vb-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, `r6f-admin-${suffix}`);
+    const vendorA = await signInCustomer(app, `r6f-va-${suffix}@example.com`);
+    const vendorB = await signInCustomer(app, `r6f-vb-${suffix}@example.com`);
 
     let country = await prisma.country.findUnique({ where: { isoAlpha2: 'TF' } });
     if (!country) {

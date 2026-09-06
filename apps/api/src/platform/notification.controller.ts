@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
@@ -37,6 +37,26 @@ export class NotificationController {
   @Get('inbox')
   async inbox(@CurrentPrincipal() principal: Principal) {
     const data = await this.notifications.listInbox(principal.personId);
+    return { data };
+  }
+
+  @Get('unread-count')
+  async unreadCount(@CurrentPrincipal() principal: Principal) {
+    const count = await this.notifications.unreadCount(principal.personId);
+    return { count };
+  }
+
+  @Post('inbox/read-all')
+  @HttpCode(200)
+  async markAllRead(@CurrentPrincipal() principal: Principal) {
+    const data = await this.notifications.markAllRead(principal.personId);
+    return { data };
+  }
+
+  @Post('inbox/:id/read')
+  @HttpCode(200)
+  async markRead(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    const data = await this.notifications.markRead(principal.personId, id);
     return { data };
   }
 

@@ -17,6 +17,7 @@ export interface RecommendationProduct {
   category_name: string;
   in_stock: boolean;
   href: string;
+  image_url: string | null;
 }
 
 export interface RecommendationSection {

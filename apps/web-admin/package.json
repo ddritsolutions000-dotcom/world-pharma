@@ -8,6 +8,7 @@
     "start": "next start --port 3001"
   },
   "dependencies": {
+    "@world-pharma/shared": "workspace:*",
     "@world-pharma/shell-core": "workspace:*",
     "@world-pharma/shell-web": "workspace:*",
     "@world-pharma/ui-kit": "workspace:*",

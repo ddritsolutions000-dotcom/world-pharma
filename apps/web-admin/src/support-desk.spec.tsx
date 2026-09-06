@@ -110,7 +110,7 @@ describe('SupportDeskList', () => {
       json: async () => ({ detail: 'server_error' }),
     });
     wrap(<SupportDeskList />);
-    expect(await screen.findByText(/Connection problem/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Could not load this area/i })).toBeInTheDocument();
   });
 });
 
@@ -184,11 +184,11 @@ describe('SupportDeskTicket', () => {
   });
 
   it('surfaces 409 conflict from API client', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockImplementation(async () => ({
       ok: false,
       status: 409,
       json: async () => ({ detail: 'Terminal tickets cannot change status' }),
-    });
+    }));
     const { setSupportTicketStatus } = await import('./support-desk-api');
     await expect(
       setSupportTicketStatus('token', sampleTicket.id, { status: 'CLOSED', country_code: 'XX' }),

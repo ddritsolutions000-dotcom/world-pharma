@@ -1,56 +1,48 @@
 'use client';
 
 import Link from 'next/link';
-import { useCountries } from '@world-pharma/shell-web';
-import { Button, HeaderBar, Heading, Text } from '@world-pharma/ui-kit/web';
+import { useSelectedCountry } from './use-selected-country';
+import { MgBackLink, Page } from './ui/mg-ui';
 
 export function HelpShell({
   title,
+  subtitle,
   children,
   backHref = '/help',
 }: {
   title: string;
+  subtitle?: string;
   children: React.ReactNode;
   backHref?: string;
 }) {
-  const { countries } = useCountries();
-  const country = countries[0]?.iso_alpha2 ?? 'XX';
+  const { country } = useSelectedCountry();
   const locale = 'en';
 
   return (
-    <>
-      <HeaderBar title="Help Center" />
-      <main className="shell-main">
-        <div className="wp-stack">
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            <Link href={backHref}>
-              <Button variant="secondary" size="sm">
-                Back
-              </Button>
-            </Link>
-            <Link href="/help">
-              <Button variant="tertiary" size="sm">
-                Help home
-              </Button>
-            </Link>
-            <Link href={`/help/search?country=${country}&locale=${locale}`}>
-              <Button variant="tertiary" size="sm">
-                Search
-              </Button>
-            </Link>
-            <Link href="/">
-              <Button variant="tertiary" size="sm">
-                Store
-              </Button>
-            </Link>
-          </div>
-          <Heading level={1}>{title}</Heading>
-          <Text size="caption" tone="secondary">
-            Country: {country} · Locale: {locale}
-          </Text>
-          {children}
-        </div>
-      </main>
-    </>
+    <Page>
+      <MgBackLink href={backHref}>← Help Centre</MgBackLink>
+      <section className="mg-service-hero mg-service-hero--compact" aria-label="Help">
+        <p className="mg-service-kicker">Help Centre</p>
+        <h1 className="mg-service-title">{title}</h1>
+        <p className="mg-service-sub">
+          {subtitle ?? 'Find answers about orders, medicines, lab tests, and your account.'}
+        </p>
+      </section>
+      <nav className="mg-help-nav" aria-label="Help navigation">
+        <Link href="/help" className="mg-help-nav-link">
+          Home
+        </Link>
+        <Link href={`/help/search?country=${country}&locale=${locale}`} className="mg-help-nav-link">
+          Search FAQs
+        </Link>
+        <Link href="/account/support" className="mg-help-nav-link">
+          Contact Support
+        </Link>
+        <Link href="/" className="mg-help-nav-link">
+          Shop Medicines
+        </Link>
+      </nav>
+      <div className="mg-help-content">{children}</div>
+    </Page>
   );
 }

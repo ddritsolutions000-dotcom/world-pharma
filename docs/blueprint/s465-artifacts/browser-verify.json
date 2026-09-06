@@ -1,0 +1,67 @@
+{
+  "results": [
+    {
+      "id": "P0-01",
+      "FRONTEND": "FAIL",
+      "UI": "FAIL",
+      "error": "locator.waitFor: Timeout 25000ms exceeded.\nCall log:\n  - waiting for getByLabel(/^Email$/i).or(getByLabel(/Work email|Email/i)).first() to be visible\n",
+      "shot": "s465-artifacts/screenshots/p0_logistics_fail.png",
+      "corsBlocked": []
+    },
+    {
+      "id": "P0-02",
+      "FRONTEND": "PASS",
+      "UI": "PASS",
+      "pageerrors": [],
+      "shot": "s465-artifacts/screenshots/p0_admin_launch_readiness.png",
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard A"
+    },
+    {
+      "id": "P0-03",
+      "FRONTEND": "FAIL",
+      "error": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByLabel(/One-time code/i) to be visible\n",
+      "pageerrors": []
+    },
+    {
+      "id": "P1-01_02_03",
+      "marketGateCleared": "FAIL",
+      "searchStaysOnSearch": "PASS",
+      "searchUi": "PASS",
+      "productImageSrc": "FAIL",
+      "productImageAlt": "FAIL",
+      "imgSrcPreview": "",
+      "searchShot": "s465-artifacts/screenshots/p1_customer_search_paracetamol.png",
+      "productShot": "s465-artifacts/screenshots/p1_customer_product.png",
+      "searchSample": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code Select mark"
+    },
+    {
+      "id": "P1-04_07",
+      "overflow": "PASS",
+      "rawEnum": "PASS",
+      "humanLabel": "PARTIAL",
+      "shot": "s465-artifacts/screenshots/p1_doctor_mobile.png",
+      "sample": "WorldPharma·Doctors Customer store Partner with us Admin Consult workspace Inbox Sign out Home Inbox Profile Credentials Organizations Availability Patients Appointments Earnings Prescriptions Refill "
+    },
+    {
+      "id": "P1-06_07_admin",
+      "rawEnum": "PASS",
+      "hasDashboard": "PASS",
+      "shot": "s465-artifacts/screenshots/p1_admin_mobile.png",
+      "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics COMMERCE – Orders Catalog Inventory "
+    },
+    {
+      "id": "CUSTOMER_COMMERCE_SMOKE",
+      "FRONTEND": "PASS",
+      "UI": "PASS",
+      "shot": "s465-artifacts/screenshots/customer_cart_smoke.png",
+      "sample": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India"
+    },
+    {
+      "id": "VENDOR_ORDERS",
+      "FRONTEND": "PASS",
+      "shot": "s465-artifacts/screenshots/vendor_orders.png",
+      "sample": "Seller workspace Demo Care Pharmacy 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care P"
+    }
+  ],
+  "pageErrors": []
+}

@@ -6,8 +6,10 @@ import {
   OfferStatus,
   OrganizationKind,
   Prisma,
+  ProductDuplicateStatus,
+  RegulatedClass,
 } from '@prisma/client';
-import { uuidv7 } from '@world-pharma/shared';
+import { uuidv7, parseCatalogAttributes, sanitizeCatalogAttributes } from '@world-pharma/shared';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { OutboxService } from '../events/outbox.service';
@@ -16,8 +18,12 @@ import { PolicyResolver } from '../policy/resolver';
 import { assertCanManageSeller, assertImagingOrgAccess, assertLabOrgAccess, assertVendorSellerAccess, isPlatformOperator } from './access';
 import { minorJson, toMinor } from './money';
 import { PricingService } from './pricing.service';
-import { CatalogSearchService } from './search.service';
+import { CatalogSearchService, type CatalogSearchSort } from './search.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { MarketplaceEligibilityService } from './marketplace-eligibility.service';
+import { resolveServiceability } from '../logistics/serviceability';
+import { OfferReadinessService } from './offer-readiness.service';
+import { evaluatePossibleDuplicate } from './catalog-duplicate';
 
 const itemInclude = {
   brand: true,
@@ -46,6 +52,8 @@ export class CatalogService {
     private readonly searchIndex: CatalogSearchService,
     private readonly policy: PolicyResolver,
     private readonly inventory: InventoryService,
+    private readonly marketplace: MarketplaceEligibilityService,
+    private readonly offerReadiness: OfferReadinessService,
   ) {}
 
   async resolveCountry(code: string) {
@@ -156,7 +164,7 @@ export class CatalogService {
       createdByOrgId?: string;
       title: string;
       description?: string;
-      countries: { countryCode: string; available?: boolean; rxRequired?: boolean }[];
+      countries: { countryCode: string; available?: boolean; rxRequired?: boolean; attributes?: unknown; regulatedClass?: RegulatedClass }[];
       assets?: { publicUrl: string; alt?: string }[];
     },
   ) {
@@ -191,6 +199,8 @@ export class CatalogService {
               countryId: row.country.id,
               available: row.available ?? true,
               rxRequired: row.rxRequired ?? false,
+              regulatedClass: row.regulatedClass ?? (row.rxRequired ? RegulatedClass.RX : RegulatedClass.UNCLASSIFIED),
+              attributes: sanitizeCatalogAttributes(row.attributes ?? {}) as Prisma.InputJsonValue,
               complianceNote: 'LEGAL/COMPLIANCE REVIEW REQUIRED',
             })),
           },
@@ -219,6 +229,7 @@ export class CatalogService {
     });
     for (const row of countries) {
       await this.searchIndex.reindexItem(id, row.country.id);
+      await this.recordPossibleDuplicates(id, row.country.id);
     }
     return item;
   }
@@ -254,6 +265,104 @@ export class CatalogService {
     for (const country of item.countries) {
       await this.searchIndex.reindexItem(itemId, country.countryId);
     }
+    await this.ensureStorefrontOffer(itemId);
+    return updated;
+  }
+
+  async updateItemCopy(
+    principal: Principal,
+    itemId: string,
+    input: {
+      title?: string;
+      description?: string;
+      countryCode?: string;
+      attributes?: unknown;
+      rxRequired?: boolean;
+    },
+  ) {
+    if (!(await isPlatformOperator(this.prisma, principal.personId))) {
+      throw Errors.forbidden('Only platform operators can edit catalog copy.');
+    }
+    const item = await this.prisma.catalogItem.findUnique({
+      where: { id: itemId },
+      include: { translations: true, countries: true },
+    });
+    if (!item) {
+      throw Errors.notFound('Catalog item not found.');
+    }
+    const en = item.translations.find((row) => row.locale === 'en') ?? item.translations[0];
+    if (!en) {
+      throw Errors.validation('Item has no translation to edit.');
+    }
+    await this.prisma.catalogItemI18n.update({
+      where: { id: en.id },
+      data: {
+        title: input.title?.trim() || en.title,
+        description: input.description !== undefined ? input.description : en.description,
+      },
+    });
+    if (input.attributes !== undefined || input.rxRequired !== undefined) {
+      let countryId = item.countries[0]?.countryId;
+      if (input.countryCode) {
+        countryId = (await this.resolveCountry(input.countryCode)).id;
+      }
+      const row = item.countries.find((entry) => entry.countryId === countryId);
+      if (!row) {
+        throw Errors.validation('Item is not available in this country.');
+      }
+      const nextAttributes =
+        input.attributes !== undefined
+          ? sanitizeCatalogAttributes(input.attributes)
+          : parseCatalogAttributes(row.attributes);
+      await this.prisma.catalogItemCountry.update({
+        where: { id: row.id },
+        data: {
+          attributes: nextAttributes as Prisma.InputJsonValue,
+          rxRequired: input.rxRequired !== undefined ? input.rxRequired : row.rxRequired,
+        },
+      });
+    }
+    const updated = await this.prisma.catalogItem.findUniqueOrThrow({
+      where: { id: itemId },
+      include: itemInclude,
+    });
+    for (const country of item.countries) {
+      await this.searchIndex.reindexItem(itemId, country.countryId);
+    }
+    return updated;
+  }
+
+  async archiveItem(principal: Principal, itemId: string) {
+    if (!(await isPlatformOperator(this.prisma, principal.personId))) {
+      throw Errors.forbidden('Only platform operators can archive catalog items.');
+    }
+    const item = await this.prisma.catalogItem.findUnique({
+      where: { id: itemId },
+      include: { countries: true },
+    });
+    if (!item) {
+      throw Errors.notFound('Catalog item not found.');
+    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.catalogItem.update({
+        where: { id: itemId },
+        data: { status: CatalogLifecycle.ARCHIVED },
+        include: itemInclude,
+      });
+      await this.outbox.enqueue(tx, {
+        type: 'PRODUCT_ARCHIVED',
+        aggregateType: 'CatalogItem',
+        aggregateId: itemId,
+        producer: 'catalog',
+        payload: { slug: row.slug },
+        occurrenceKey: `archive:${itemId}`,
+        actorId: principal.personId,
+      });
+      return row;
+    });
+    for (const country of item.countries) {
+      await this.searchIndex.reindexItem(itemId, country.countryId);
+    }
     return updated;
   }
 
@@ -272,7 +381,7 @@ export class CatalogService {
       throw Errors.forbidden();
     }
     try {
-      return await this.prisma.catalogVariant.create({
+      const created = await this.prisma.catalogVariant.create({
         data: {
           id: uuidv7(),
           itemId,
@@ -282,6 +391,11 @@ export class CatalogService {
           uom: input.uom ?? 'each',
         },
       });
+      const countries = await this.prisma.catalogItemCountry.findMany({ where: { itemId } });
+      for (const country of countries) {
+        await this.recordPossibleDuplicates(itemId, country.countryId);
+      }
+      return created;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw Errors.conflict('SKU code already exists.');
@@ -311,6 +425,15 @@ export class CatalogService {
     }
     this.assertOwnership(input.ownership, org.kind);
     const country = await this.resolveCountry(input.countryCode);
+    const expectedCurrency = country.defaultCurrency.toUpperCase();
+    if (input.currency.toUpperCase() !== expectedCurrency) {
+      throw Errors.problem(
+        422,
+        'CURRENCY_MISMATCH',
+        'Currency mismatch',
+        `Offer currency must match country configuration (${expectedCurrency}).`,
+      );
+    }
     const variant = await this.prisma.catalogVariant.findUnique({ where: { id: input.variantId } });
     if (!variant) {
       throw Errors.notFound('Variant not found.');
@@ -359,12 +482,31 @@ export class CatalogService {
   async publishOffer(principal: Principal, offerId: string) {
     const offer = await this.prisma.catalogOffer.findUnique({
       where: { id: offerId },
-      include: { variant: true },
+      include: { variant: { include: { item: true } } },
     });
     if (!offer) {
       throw Errors.notFound('Offer not found.');
     }
     await assertCanManageSeller(this.prisma, principal, offer.sellerOrgId);
+    const quality = await this.offerReadiness.evaluateOffer(offerId);
+    const itemKind = offer.variant.item.kind;
+    const blocking =
+      itemKind === 'MEDICINE'
+        ? quality.blockers
+        : quality.blockers.filter((code) =>
+            [
+              'PRODUCT_NAME_MISSING',
+              'SKU_MISSING',
+              'PACK_SIZE_MISSING',
+              'PRICE_MISSING',
+              'CURRENCY_MISSING',
+              'CURRENCY_MISMATCH',
+              'SELLER_MISSING',
+            ].includes(code),
+          );
+    if (blocking.length > 0) {
+      throw Errors.problem(422, 'OFFER_NOT_PUBLISHABLE', 'Offer is not publishable', blocking.join(','));
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.catalogOffer.update({
         where: { id: offerId },
@@ -463,11 +605,22 @@ export class CatalogService {
 
   async customerBrowse(
     countryCode: string,
-    query?: { q?: string; category?: string; cursor?: string; limit?: number; locale?: string },
+    query?: {
+      q?: string;
+      category?: string;
+      brand?: string;
+      manufacturer?: string;
+      rx?: boolean;
+      in_stock?: boolean;
+      sort?: CatalogSearchSort;
+      cursor?: string;
+      limit?: number;
+      locale?: string;
+    },
   ) {
     const country = await this.resolveCountry(countryCode);
     const locale = query?.locale?.trim() || country.defaultLocale || 'en';
-    const cacheKey = `catalog:browse:${country.id}:${locale}:${query?.q ?? ''}:${query?.category ?? ''}:${query?.cursor ?? ''}`;
+    const cacheKey = `catalog:browse:${country.id}:${locale}:${JSON.stringify(query ?? {})}`;
     const cached = await this.searchIndex.readBrowseCache(cacheKey);
     if (cached) {
       return cached;
@@ -478,6 +631,50 @@ export class CatalogService {
       return { country_enabled: false, data: [], next_cursor: null };
     }
     const limit = Math.min(query?.limit ?? 24, 50);
+
+    if (query?.q?.trim()) {
+      const searchPage = await this.searchIndex.searchPage(
+        country.id,
+        query.q,
+        locale,
+        limit,
+        {
+          brand: query.brand,
+          category: query.category,
+          manufacturer: query.manufacturer,
+          rx: query.rx,
+          in_stock: query.in_stock,
+        },
+        query.sort ?? 'relevance',
+        query.cursor,
+      );
+      if (!searchPage.data.length) {
+        const empty = { country_enabled: true, data: [], next_cursor: null };
+        await this.searchIndex.writeBrowseCache(cacheKey, empty);
+        return empty;
+      }
+      const itemIds = searchPage.data.map((row) => row.itemId);
+      const rows = await this.prisma.catalogItem.findMany({
+        where: {
+          id: { in: itemIds },
+          status: CatalogLifecycle.PUBLISHED,
+          countries: { some: { countryId: country.id, available: true } },
+        },
+        include: itemInclude,
+      });
+      const order = new Map(itemIds.map((id, index) => [id, index]));
+      rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+      const mapped = rows.map((item) => this.toPublicItem(item, country.id, allowed));
+      const eligibleMapped = await this.filterMarketplaceEligibleOffers(mapped);
+      const result = {
+        country_enabled: true,
+        data: await this.withAvailability(country.id, eligibleMapped),
+        next_cursor: searchPage.next_cursor,
+      };
+      await this.searchIndex.writeBrowseCache(cacheKey, result);
+      return result;
+    }
+
     const rows = await this.prisma.catalogItem.findMany({
       where: {
         status: CatalogLifecycle.PUBLISHED,
@@ -488,16 +685,6 @@ export class CatalogService {
           },
         },
         ...(query?.category ? { category: { slug: query.category } } : {}),
-        ...(query?.q
-          ? {
-              OR: [
-                { slug: { contains: query.q, mode: 'insensitive' } },
-                { translations: { some: { title: { contains: query.q, mode: 'insensitive' } } } },
-                { variants: { some: { skuCode: { contains: query.q, mode: 'insensitive' } } } },
-                { brand: { name: { contains: query.q, mode: 'insensitive' } } },
-              ],
-            }
-          : {}),
         ...(query?.cursor ? { id: { gt: query.cursor } } : {}),
       },
       include: itemInclude,
@@ -505,16 +692,18 @@ export class CatalogService {
       orderBy: { id: 'asc' },
     });
     const page = rows.slice(0, limit);
+    const mapped = page.map((item) => this.toPublicItem(item, country.id, allowed));
+    const eligibleMapped = await this.filterMarketplaceEligibleOffers(mapped);
     const result = {
       country_enabled: true,
-      data: await this.withAvailability(country.id, page.map((item) => this.toPublicItem(item, country.id, allowed))),
+      data: await this.withAvailability(country.id, eligibleMapped),
       next_cursor: rows.length > limit ? page[page.length - 1]?.id ?? null : null,
     };
     await this.searchIndex.writeBrowseCache(cacheKey, result);
     return result;
   }
 
-  async customerItem(countryCode: string, slug: string) {
+  async customerItem(countryCode: string, slug: string, postalCode?: string) {
     const country = await this.resolveCountry(countryCode);
     const flags = await this.storefrontFlags(country.isoAlpha2);
     const allowed = this.allowedOwnership(flags);
@@ -529,11 +718,47 @@ export class CatalogService {
       throw Errors.notFound('Product not found.');
     }
     const mapped = this.toPublicItem(item, country.id, allowed);
-    if (!mapped.offers.length) {
+    const visibleOffers = [];
+    for (const offer of mapped.offers) {
+      if (
+        offer.ownership === OfferOwnership.VENDOR_OWNED ||
+        offer.ownership === OfferOwnership.MARKETPLACE
+      ) {
+        if (await this.marketplace.isCustomerPurchasableSeller(offer.seller_org_id)) {
+          visibleOffers.push(offer);
+        }
+        continue;
+      }
+      visibleOffers.push(offer);
+    }
+    if (!visibleOffers.length) {
       throw Errors.notFound('Product not found.');
     }
-    const [withStock] = await this.withAvailability(country.id, [mapped]);
-    return withStock;
+    const [withStock] = await this.withAvailability(country.id, [{ ...mapped, offers: visibleOffers }]);
+    const reviewAgg = await this.prisma.productReview.aggregate({
+      where: { countryId: country.id, catalogItemId: item.id, status: 'APPROVED' },
+      _avg: { rating: true },
+      _count: { rating: true },
+    });
+    const serviceability = postalCode?.trim()
+      ? resolveServiceability(country.isoAlpha2, postalCode.trim())
+      : null;
+    return {
+      ...withStock,
+      review_summary: {
+        avg_rating: reviewAgg._avg.rating,
+        review_count: reviewAgg._count.rating,
+      },
+      serviceability: serviceability
+        ? {
+            ...serviceability,
+            purchasable:
+              serviceability.medicine_delivery &&
+              withStock.inventory.available &&
+              withStock.offers.some((offer) => (offer as { inventory?: { available?: boolean } }).inventory?.available),
+          }
+        : null,
+    };
   }
 
   async search(countryCode: string, q: string, locale = 'en') {
@@ -575,7 +800,19 @@ export class CatalogService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return { data: rows.map((row) => this.presentVendorOffer(row)) };
+    const data = await Promise.all(
+      rows.map(async (row) => {
+        const presented = this.presentVendorOffer(row);
+        const quality = await this.offerReadiness.evaluateOffer(row.id);
+        return {
+          ...presented,
+          catalog_ready: quality.catalog_ready,
+          inventory_ready: quality.inventory_ready,
+          blockers: quality.blockers,
+        };
+      }),
+    );
+    return { data };
   }
 
   /**
@@ -673,6 +910,165 @@ export class CatalogService {
     return this.prisma.commercialRule.findMany({ orderBy: { priority: 'desc' } });
   }
 
+  private async recordPossibleDuplicates(itemId: string, countryId: string): Promise<void> {
+    const item = await this.prisma.catalogItem.findUnique({
+      where: { id: itemId },
+      include: {
+        translations: true,
+        brand: true,
+        countries: true,
+        variants: true,
+      },
+    });
+    if (!item) {
+      return;
+    }
+    const countryRow = item.countries.find((row) => row.countryId === countryId);
+    const attrs = parseCatalogAttributes(countryRow?.attributes ?? {});
+    const incoming = {
+      title: item.translations[0]?.title ?? null,
+      manufacturer: attrs.manufacturer_name ?? item.brand?.name ?? null,
+      composition: attrs.composition ?? null,
+      strength: item.variants[0]?.strength ?? null,
+      packSize: item.variants[0]?.packSize ?? null,
+      sku: item.variants[0]?.skuCode ?? null,
+    };
+    const others = await this.prisma.catalogItem.findMany({
+      where: {
+        id: { not: itemId },
+        countries: { some: { countryId } },
+      },
+      include: {
+        translations: true,
+        brand: true,
+        countries: true,
+        variants: true,
+      },
+      take: 200,
+    });
+    for (const other of others) {
+      const otherAttrs = parseCatalogAttributes(
+        other.countries.find((row) => row.countryId === countryId)?.attributes ?? {},
+      );
+      const result = evaluatePossibleDuplicate(incoming, {
+        title: other.translations[0]?.title ?? null,
+        manufacturer: otherAttrs.manufacturer_name ?? other.brand?.name ?? null,
+        composition: otherAttrs.composition ?? null,
+        strength: other.variants[0]?.strength ?? null,
+        packSize: other.variants[0]?.packSize ?? null,
+        sku: other.variants[0]?.skuCode ?? null,
+      });
+      if (!result.possible) {
+        continue;
+      }
+      await this.prisma.productDuplicateCandidate.upsert({
+        where: { itemId_matchItemId: { itemId, matchItemId: other.id } },
+        update: { matchKeys: result.match_keys, status: ProductDuplicateStatus.POSSIBLE_DUPLICATE },
+        create: {
+          id: uuidv7(),
+          countryId,
+          itemId,
+          matchItemId: other.id,
+          matchKeys: result.match_keys,
+          status: ProductDuplicateStatus.POSSIBLE_DUPLICATE,
+        },
+      });
+    }
+  }
+
+  private async resolveSellerForCountry(countryId: string): Promise<{
+    orgId: string;
+    ownership: OfferOwnership;
+  } | null> {
+    const owned = await this.prisma.organization.findFirst({
+      where: { countryId, kind: { in: [OrganizationKind.PLATFORM, OrganizationKind.PHARMACY_OWNED] } },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (owned) {
+      return { orgId: owned.id, ownership: OfferOwnership.PLATFORM_OWNED };
+    }
+    const vendor = await this.prisma.organization.findFirst({
+      where: { countryId, kind: OrganizationKind.VENDOR },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (vendor) {
+      return { orgId: vendor.id, ownership: OfferOwnership.VENDOR_OWNED };
+    }
+    return null;
+  }
+
+  private async ensureStorefrontOffer(itemId: string): Promise<void> {
+    const item = await this.prisma.catalogItem.findUnique({
+      where: { id: itemId },
+      include: {
+        countries: { include: { country: true } },
+        variants: { include: { offers: true } },
+      },
+    });
+    if (!item) {
+      return;
+    }
+    let variantId = item.variants[0]?.id;
+    if (!variantId) {
+      const created = await this.prisma.catalogVariant.create({
+        data: {
+          id: uuidv7(),
+          itemId,
+          skuCode: `SKU-${item.slug}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || uuidv7().slice(0, 12),
+          packSize: '1',
+          uom: 'each',
+        },
+      });
+      variantId = created.id;
+    }
+    const variant = await this.prisma.catalogVariant.findUniqueOrThrow({
+      where: { id: variantId },
+      include: { offers: true },
+    });
+    for (const row of item.countries) {
+      const existing = variant.offers.find((offer) => offer.countryId === row.countryId);
+      if (existing) {
+        if (existing.status !== OfferStatus.PUBLISHED) {
+          await this.prisma.catalogOffer.update({
+            where: { id: existing.id },
+            data: { status: OfferStatus.PUBLISHED, publishedAt: new Date() },
+          });
+        }
+        continue;
+      }
+      const seller = await this.resolveSellerForCountry(row.countryId);
+      if (!seller) {
+        continue;
+      }
+      const offerId = uuidv7();
+      const currency = row.country.defaultCurrency;
+      await this.prisma.$transaction(async (tx) => {
+        await tx.catalogOffer.create({
+          data: {
+            id: offerId,
+            variantId: variant.id,
+            sellerOrgId: seller.orgId,
+            countryId: row.countryId,
+            ownership: seller.ownership,
+            status: OfferStatus.PUBLISHED,
+            currency,
+            publishedAt: new Date(),
+          },
+        });
+        await this.pricing.createVersion(tx, {
+          offerId,
+          currency,
+          costMinor: toMinor('1'),
+          listMinor: toMinor('19900'),
+          sellMinor: toMinor('9900'),
+          validFrom: new Date(),
+          validTo: null,
+        });
+      });
+      await this.searchIndex.reindexItem(itemId, row.countryId);
+    }
+  }
+
   private allowedOwnership(flags: {
     pharmacy: boolean;
     marketplace: boolean;
@@ -718,12 +1114,51 @@ export class CatalogService {
     }
   }
 
+  private async filterMarketplaceEligibleOffers<
+    T extends { offers: { seller_org_id: string; ownership: OfferOwnership | string }[] },
+  >(items: T[]): Promise<T[]> {
+    const sellerIds = [
+      ...new Set(
+        items.flatMap((item) =>
+          item.offers
+            .filter(
+              (offer) =>
+                offer.ownership === OfferOwnership.VENDOR_OWNED ||
+                offer.ownership === OfferOwnership.MARKETPLACE,
+            )
+            .map((offer) => offer.seller_org_id),
+        ),
+      ),
+    ];
+    const eligible = new Map<string, boolean>();
+    await Promise.all(
+      sellerIds.map(async (sellerOrgId) => {
+        eligible.set(sellerOrgId, await this.marketplace.isCustomerPurchasableSeller(sellerOrgId));
+      }),
+    );
+    return items
+      .map((item) => ({
+        ...item,
+        offers: item.offers.filter((offer) => {
+          if (
+            offer.ownership !== OfferOwnership.VENDOR_OWNED &&
+            offer.ownership !== OfferOwnership.MARKETPLACE
+          ) {
+            return true;
+          }
+          return eligible.get(offer.seller_org_id) === true;
+        }),
+      }))
+      .filter((item) => item.offers.length > 0);
+  }
+
   private toPublicItem(
     item: Prisma.CatalogItemGetPayload<{ include: typeof itemInclude }>,
     countryId: string,
     allowedOwnership: OfferOwnership[],
   ) {
     const assortment = item.countries.find((row) => row.countryId === countryId);
+    const attributes = parseCatalogAttributes(assortment?.attributes);
     const translation = item.translations[0];
     const offers = item.variants.flatMap((variant) =>
       variant.offers
@@ -731,6 +1166,12 @@ export class CatalogService {
         .filter((offer) => allowedOwnership.includes(offer.ownership))
         .map((offer) => {
           const price = offer.prices[0];
+          const sellMinor = price ? price.sellMinor : null;
+          const listMinor = price?.listMinor ?? null;
+          const discountMinor =
+            sellMinor !== null && listMinor !== null && listMinor > sellMinor
+              ? (listMinor - sellMinor).toString()
+              : null;
           return {
             id: offer.id,
             seller_org_id: offer.sellerOrgId,
@@ -739,10 +1180,12 @@ export class CatalogService {
             currency: offer.currency,
             sku: variant.skuCode,
             pack_size: variant.packSize,
+            strength: variant.strength,
             price: price
               ? {
                   sell_minor: minorJson(price.sellMinor),
                   list_minor: price.listMinor === null ? null : minorJson(price.listMinor),
+                  discount_minor: discountMinor,
                   version: price.version,
                 }
               : null,
@@ -762,14 +1205,14 @@ export class CatalogService {
       rx_required: assortment?.rxRequired ?? false,
       availability: assortment?.available ? 'listed' : 'unavailable',
       inventory: { available: false },
+      attributes,
       offers,
     };
   }
 
-  private async withAvailability<T extends { kind?: string; offers: { seller_org_id: string; sku: string }[] }>(
-    countryId: string,
-    items: T[],
-  ): Promise<(T & { inventory: { available: boolean } })[]> {
+  private async withAvailability<
+    T extends { kind?: string; offers: { id: string; seller_org_id: string; sku: string }[] },
+  >(countryId: string, items: T[]): Promise<(T & { inventory: { available: boolean } })[]> {
     const commerceItems = items.filter((item) => item.kind !== 'LAB_TEST' && item.kind !== 'IMAGING_STUDY');
     const pairs = commerceItems.flatMap((item) =>
       item.offers.map((offer) => ({
@@ -782,26 +1225,34 @@ export class CatalogService {
       select: { id: true, skuCode: true },
     });
     const skuToId = new Map(variants.map((row) => [row.skuCode, row.id]));
-    const offers = pairs
+    const offerKeys = pairs
       .map((row) => {
         const variantId = skuToId.get(row.sku);
         return variantId ? { variantId, sellerOrgId: row.sellerOrgId } : null;
       })
       .filter((row): row is { variantId: string; sellerOrgId: string } => row !== null);
-    const inStock = offers.length
-      ? await this.inventory.availabilityForOffers(countryId, offers)
-      : new Set<string>();
-    const skus = new Set(
-      variants.filter((row) => inStock.has(row.id)).map((row) => row.skuCode),
-    );
-    return items.map((item) => ({
-      ...item,
-      inventory: {
-        available:
-          item.kind === 'LAB_TEST' || item.kind === 'IMAGING_STUDY'
-            ? item.offers.length > 0
-            : item.offers.some((offer) => skus.has(offer.sku)),
-      },
-    }));
+    const availability = offerKeys.length
+      ? await this.inventory.availabilityForOffers(countryId, offerKeys)
+      : new Map<string, number>();
+
+    return items.map((item) => {
+      const enrichedOffers = item.offers.map((offer) => {
+        const variantId = skuToId.get(offer.sku);
+        const qty = variantId ? availability.get(`${variantId}:${offer.seller_org_id}`) ?? 0 : 0;
+        return {
+          ...offer,
+          inventory: { available: qty > 0, qty },
+        };
+      });
+      const anyAvailable =
+        item.kind === 'LAB_TEST' || item.kind === 'IMAGING_STUDY'
+          ? item.offers.length > 0
+          : enrichedOffers.some((offer) => offer.inventory.available);
+      return {
+        ...item,
+        offers: enrichedOffers,
+        inventory: { available: anyAvailable },
+      };
+    });
   }
 }

@@ -373,7 +373,7 @@ Until then: sandbox/mock only.
 
 Existing [35](35_OPEN_DECISIONS.md) (country, brand, MoR, PSP, cloud, OT-OBS, video vendor, wallet, WhatsApp, etc.) **plus** CR-ECO-92: OD-CARE-01/02, OD-RAD-01/02, OD-CMS-01, OD-SUP-01, OD-RX-REFILL, OD-RATE-01, **OD-ROAD-01** (calendar).
 
-**Default next coding authorization:** **ROADMAP_ENGINEERING_PAUSE** [300](300_POST_R10_ROADMAP_AUDIT.md) [302](302_NEXT_UNBLOCKED_ENGINEERING_WAVE.md). R10 optional health expansion **COMPLETE** [297–299]. R5-F e-Rx **kernel COMPLETE** (sandbox adapter only; L-RX-01 blocks live country enablement). R14-A human gates **0/7** [301] — owner evidence required, not another gate template CR. Await explicit authorization for R14-A live, named live e-Rx provider, R4 production, or another track.
+**Default next coding authorization:** Live PSP still paused ([324](324_FINAL_ENGINEERING_HANDOFF.md)). [326](326_R14_A_ENGINEERING_CONFIG.md) is **engineering config only** (`R14_A_ENGINEERING_CONFIG_READY`, live **blocked**). PATH A checklist **0/7**. Not CR-244.
 
 **Pre-R4 UI gate:** [100](100_GLOBAL_UI_UX_COMPLETENESS_AUDIT.md) (**CR-UI-AUDIT-100**) — R4 prerequisite checklist §12; overall ecosystem ~28–32% UI/product complete (judgment, not a repo metric).
 

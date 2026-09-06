@@ -178,6 +178,13 @@ export type LabBookingCollection = {
     created_at: string;
   }>;
   note?: string;
+  phlebotomist?: {
+    job_id: string;
+    status: string;
+    assigned: boolean;
+    live_tracking: boolean;
+    eta_label: string;
+  } | null;
   boundary?: { pathology: boolean; results_available: boolean };
 };
 

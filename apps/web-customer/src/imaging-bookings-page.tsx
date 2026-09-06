@@ -14,7 +14,6 @@ import {
   SessionExpiredState,
   Text,
 } from '@world-pharma/ui-kit/web';
-import { CustomerShell } from './customer-shell';
 import {
   cancelImagingBooking,
   cancelImagingPhysicalReport,
@@ -26,6 +25,7 @@ import {
   fetchImagingProgress,
   fetchImagingReport,
   fetchImagingReportStatus,
+  fetchImagingStudyMetadata,
   ImagingCustomerApiError,
   payImagingBooking,
   requestImagingPhysicalReport,
@@ -36,6 +36,14 @@ import {
   type ImagingReportStatus,
 } from './imaging-api';
 import { fetchAddresses, type CustomerAddress } from './account-api';
+import { formatMoney } from './format-money';
+import {
+  IMAGING_TRACK_STEPS,
+  imagingBookingStatusLabel,
+  imagingProgressLabel,
+  imagingTrackStepIndex,
+} from './imaging-status-labels';
+import { MgBackLink, MgBtn, MgCard, Page, PageIntro, ServiceHero } from './ui/mg-ui';
 
 function newIdempotencyKey(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -88,43 +96,76 @@ export function ImagingBookingsScreen() {
     return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
   }
 
+  if (session.status !== 'authenticated') {
+    return (
+      <Page>
+        <ServiceHero
+          kicker="Radiology"
+          title="Imaging bookings"
+          subtitle="Track radiology appointments and reports."
+          tone="scan"
+          compact
+        />
+        <EmptyState title="Sign in required" description="Login to view your imaging bookings." action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }} />
+        <MgBtn href="/radiology" variant="secondary">Browse imaging studies</MgBtn>
+      </Page>
+    );
+  }
+
   return (
-    <CustomerShell apiReachable={true} countryLabel="session">
-      <Heading level={2}>Imaging bookings</Heading>
-      <Text tone="secondary">Your radiology bookings and published imaging reports.</Text>
-      <Button onClick={() => (window.location.href = '/radiology')}>Browse imaging studies</Button>
-      {loading ? <LoadingState label="Loading imaging bookings…" /> : null}
+    <Page>
+      <ServiceHero
+        kicker="Radiology"
+        title="Imaging bookings"
+        subtitle="Radiology appointments — reports unlock when published."
+        tone="scan"
+        compact
+      />
+      <PageIntro>
+        <p>MRI, CT, ultrasound, and X-ray bookings. Preparation instructions and final reports appear in booking details.</p>
+      </PageIntro>
+      <MgBtn href="/radiology" variant="secondary">Browse imaging studies</MgBtn>
+      {loading ? <LoadingState label="Loading imaging bookings" /> : null}
       {error === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} /> : null}
       {error === 'forbidden' ? <PermissionDeniedState /> : null}
       {!loading && !error && rows.length === 0 ? (
-        <EmptyState title="No imaging bookings" description="Book an imaging study to see status here." />
+        <EmptyState
+          title="No imaging bookings"
+          description="Book an imaging study to see status here."
+          action={{ label: 'Browse studies', onClick: () => (window.location.href = '/radiology') }}
+        />
       ) : null}
-      {rows.map((row) => (
-        <Card key={row.id}>
-          <Text>{row.lines[0]?.title ?? 'Imaging booking'}</Text>
-          <Text>
-            {row.status} · {row.currency} {row.total_minor}
-          </Text>
-          <Text size="caption">{row.imaging_display_name}</Text>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => (window.location.href = `/radiology/bookings/${row.id}`)}
-          >
-            Details
-          </Button>
-          {row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED' ? (
-            <Button
-              size="sm"
-              variant="tertiary"
-              onClick={() => void cancelImagingBooking(getAccessToken() ?? '', row.id).then(load)}
-            >
-              Cancel
-            </Button>
-          ) : null}
-        </Card>
-      ))}
-    </CustomerShell>
+      <ul className="mg-order-list">
+        {rows.map((row) => (
+          <li key={row.id}>
+            <MgCard className="mg-order-card">
+              <div className="mg-order-card-top">
+                <div>
+                  <p className="mg-list-title">{row.lines[0]?.title ?? 'Imaging booking'}</p>
+                  <p className="mg-list-meta">{formatMoney(row.total_minor, row.currency)}</p>
+                  <p className="mg-order-track-hint">{row.imaging_display_name}</p>
+                </div>
+                <span className="mg-status">{imagingBookingStatusLabel(row.status)}</span>
+              </div>
+              <div className="mg-list-actions">
+                <MgBtn size="sm" variant="secondary" href={`/radiology/bookings/${row.id}`}>
+                  Details
+                </MgBtn>
+                {row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED' ? (
+                  <MgBtn
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void cancelImagingBooking(getAccessToken() ?? '', row.id).then(load)}
+                  >
+                    Cancel
+                  </MgBtn>
+                ) : null}
+              </div>
+            </MgCard>
+          </li>
+        ))}
+      </ul>
+    </Page>
   );
 }
 
@@ -137,6 +178,8 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
   const [report, setReport] = useState<ImagingCustomerReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<'network' | 'forbidden' | 'unavailable' | 'generic' | null>(null);
+  const [viewerAvailable, setViewerAvailable] = useState(false);
+  const [viewerReason, setViewerReason] = useState<string | null>(null);
   const [physicalEligibility, setPhysicalEligibility] = useState<ImagingPhysicalReportEligibility | null>(null);
   const [physicalStatus, setPhysicalStatus] = useState<ImagingPhysicalReportStatus | null>(null);
   const [physicalLoading, setPhysicalLoading] = useState(false);
@@ -156,11 +199,12 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
     setLoading(true);
     setError(null);
     try {
-      const [booking, preparation, prog, status] = await Promise.all([
+      const [booking, preparation, prog, status, studyMeta] = await Promise.all([
         fetchImagingBooking(token, id),
         fetchImagingPreparation(token, id),
         fetchImagingProgress(token, id),
         fetchImagingReportStatus(token, id),
+        fetchImagingStudyMetadata(token, id).catch(() => null),
       ]);
       setRow(booking);
       setPrep(preparation);
@@ -168,6 +212,8 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
       setReportStatus(status);
       setReport(null);
       setReportError(null);
+      setViewerAvailable(Boolean(studyMeta?.viewer?.available));
+      setViewerReason(studyMeta?.viewer?.reason ?? null);
       const addrRes = await fetchAddresses({ token });
       const addressRows = addrRes.ok && Array.isArray(addrRes.data) ? addrRes.data : [];
       setAddresses(addressRows);
@@ -266,53 +312,122 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
     return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
   }
 
+  if (session.status !== 'authenticated') {
+    return (
+      <Page>
+        <MgBackLink href="/radiology/bookings">← Back to bookings</MgBackLink>
+        <EmptyState title="Sign in required" description="Login to view your imaging bookings." action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }} />
+      </Page>
+    );
+  }
+
   return (
-    <CustomerShell apiReachable={true} countryLabel="session">
-      <Button variant="tertiary" size="sm" onClick={() => (window.location.href = '/radiology/bookings')}>
-        Back to bookings
-      </Button>
+    <Page>
+      <MgBackLink href="/radiology/bookings">← Back to bookings</MgBackLink>
       {loading ? <LoadingState label="Loading booking…" /> : null}
       {error === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} /> : null}
       {error === 'forbidden' ? <PermissionDeniedState /> : null}
       {error === 'generic' ? <EmptyState title="Booking unavailable" description="Could not load this booking." /> : null}
       {row ? (
-        <Card>
-          <Heading level={2}>{row.lines[0]?.title ?? 'Imaging booking'}</Heading>
-          <Text>Status: {row.status}</Text>
-          <Text>
-            {row.currency} {row.total_minor}
-          </Text>
-          <Text size="caption">{row.imaging_display_name}</Text>
-          {row.slot_starts_at ? <Text>Slot: {new Date(row.slot_starts_at).toLocaleString()}</Text> : null}
-          {row.imaging_location ? (
-            <Text>
-              Center: {row.imaging_location.name}
-              {row.imaging_location.city ? ` · ${row.imaging_location.city}` : ''}
-            </Text>
+        <>
+          <MgCard className="mg-order-hero">
+            <h2 className="mg-section-title">{row.lines[0]?.title ?? 'Imaging booking'}</h2>
+            <span className="mg-status">{imagingBookingStatusLabel(row.status)}</span>
+            <p className="mg-text-muted">{formatMoney(row.total_minor, row.currency)}</p>
+            <p className="mg-text-muted">{row.imaging_display_name}</p>
+            {row.slot_starts_at ? (
+              <p className="mg-detail-datetime">Slot: {new Date(row.slot_starts_at).toLocaleString()}</p>
+            ) : null}
+            {row.imaging_location ? (
+              <p className="mg-text-muted">
+                Center: {row.imaging_location.name}
+                {row.imaging_location.city ? ` · ${row.imaging_location.city}` : ''}
+              </p>
+            ) : null}
+            {progress ? (
+              <p className="mg-list-meta">
+                {imagingProgressLabel(progress.progress)}
+                {progress.accession_number ? ` · Accession ${progress.accession_number}` : ''}
+              </p>
+            ) : null}
+            {progress?.note ? <p className="mg-text-muted">{progress.note}</p> : null}
+            {(() => {
+              const trackIndex = imagingTrackStepIndex({
+                bookingStatus: row.status,
+                progress: progress?.progress,
+                reportAvailable: Boolean(reportStatus?.report_available),
+                viewerAvailable,
+                boundary: progress?.boundary ?? null,
+              });
+              if (trackIndex < 0) return null;
+              return (
+                <div className="mg-track" aria-label="Imaging booking progress">
+                  {IMAGING_TRACK_STEPS.map((step, index) => (
+                    <div
+                      key={step}
+                      className={`mg-track-step${index <= trackIndex ? ' is-done' : ''}${index === trackIndex ? ' is-current' : ''}`}
+                    >
+                      <span className="mg-track-dot" aria-hidden />
+                      <span className="mg-track-label">{step}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </MgCard>
+
+          {prep && prep.instructions.length ? (
+            <MgCard>
+              <h2 className="mg-section-title">Preparation</h2>
+              <ul className="mg-rx-steps">
+                {prep.instructions.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </MgCard>
           ) : null}
-          {progress ? (
-            <>
-              <Text size="caption">Progress: {progress.progress}</Text>
-              {progress.accession_number ? <Text size="caption">Accession: {progress.accession_number}</Text> : null}
-              <Text size="caption">{progress.note}</Text>
-            </>
+
+          {viewerAvailable ? (
+            <MgCard>
+              <h2 className="mg-section-title">Study images</h2>
+              <p className="mg-text-muted">
+                Open the diagnostic viewer for this study. Images are separate from the written report. Sandbox
+                frames only — not a certified diagnostic workstation.
+              </p>
+              <MgBtn href={`/radiology/bookings/${id}/viewer`} size="sm">
+                View study
+              </MgBtn>
+            </MgCard>
+          ) : row.status !== 'BOOKED' && row.status !== 'PAYMENT_FAILED' && row.status !== 'CANCELLED' ? (
+            <MgCard>
+              <h2 className="mg-section-title">Study images</h2>
+              <p className="mg-text-muted">
+                {viewerReason
+                  ? viewerReason.replaceAll('_', ' ').toLowerCase()
+                  : 'Study images are not available yet. The written report, when published, remains separate from image viewing.'}
+              </p>
+              <p className="mg-text-muted">
+                Live PACS remains external-gated. No public DICOM URLs are exposed.
+              </p>
+            </MgCard>
           ) : null}
+
           {reportStatus ? (
-            <Card>
-              <Heading level={3}>Imaging report</Heading>
-              <Text size="caption">{reportStatus.note}</Text>
+            <MgCard>
+              <h2 className="mg-section-title">Imaging report</h2>
+              {reportStatus.note ? <p className="mg-text-muted">{reportStatus.note}</p> : null}
               {reportStatus.report_available ? (
                 <>
-                  <Text size="caption">
+                  <p className="mg-list-meta">
                     Version {reportStatus.version_number}
-                    {reportStatus.amendment_reason ? ` · Amended` : ''}
-                  </Text>
-                  <Button size="sm" variant="secondary" disabled={reportLoading} onClick={loadReport}>
+                    {reportStatus.amendment_reason ? ' · Amended' : ''}
+                  </p>
+                  <MgBtn size="sm" variant="secondary" disabled={reportLoading} onClick={loadReport}>
                     {reportLoading ? 'Loading report…' : 'View final report'}
-                  </Button>
+                  </MgBtn>
                 </>
               ) : (
-                <Text size="caption">Final report not available yet.</Text>
+                <p className="mg-text-muted">Final report not available yet.</p>
               )}
               {reportError === 'forbidden' ? <PermissionDeniedState /> : null}
               {reportError === 'unavailable' ? (
@@ -321,28 +436,39 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
                   description="The final imaging report is not published yet or is no longer available."
                 />
               ) : null}
-              {reportError === 'network' ? (
-                <NetworkErrorState action={{ label: 'Retry', onClick: loadReport }} />
-              ) : null}
+              {reportError === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: loadReport }} /> : null}
               {reportError === 'generic' ? (
                 <EmptyState title="Could not load report" description="An unexpected error occurred." />
               ) : null}
               {report ? (
-                <>
-                  <Text>{report.summary}</Text>
+                <div className="mg-prose">
+                  {report.summary ? <p>{report.summary}</p> : null}
                   {report.amendment_reason ? (
-                    <Text size="caption">Amendment: {report.amendment_reason}</Text>
+                    <p className="mg-text-muted">Amendment: {report.amendment_reason}</p>
                   ) : null}
-                  {report.findings.map((line) => (
-                    <Text key={`${line.finding_code}-${line.finding_text}`} size="caption">
-                      {line.finding_code}: {line.finding_text}
-                    </Text>
-                  ))}
-                  {report.note ? <Text size="caption">{report.note}</Text> : null}
-                </>
+                  <ul>
+                    {report.findings.map((line) => (
+                      <li key={`${line.finding_code}-${line.finding_text}`}>
+                        {line.finding_code}: {line.finding_text}
+                      </li>
+                    ))}
+                  </ul>
+                  {report.note ? <p className="mg-text-muted">{report.note}</p> : null}
+                  <div className="mg-toolbar">
+                    <MgBtn href="/doctors" variant="secondary">
+                      Discuss report with a doctor
+                    </MgBtn>
+                    {viewerAvailable ? (
+                      <MgBtn href={`/radiology/bookings/${id}/viewer`} variant="ghost">
+                        View study images
+                      </MgBtn>
+                    ) : null}
+                  </div>
+                </div>
               ) : null}
-            </Card>
+            </MgCard>
           ) : null}
+
           {reportStatus?.report_available ? (
             <Card>
               <Heading level={3}>Physical report delivery</Heading>
@@ -404,18 +530,18 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
                 <>
                   {addresses.length ? (
                     <FormField label="Delivery address">
-                      {({ id }) => (
+                      {({ id: fieldId }) => (
                         <select
-                          id={id}
+                          id={fieldId}
                           className="wp-input"
                           value={selectedAddressId}
                           onChange={(e) => setSelectedAddressId(e.target.value)}
                           aria-label="Delivery address"
                         >
                           <option value="">Select address…</option>
-                          {addresses.map((row) => (
-                            <option key={row.id} value={row.id}>
-                              {row.recipient_name} · {row.line1}, {row.city}
+                          {addresses.map((addr) => (
+                            <option key={addr.id} value={addr.id}>
+                              {addr.recipient_name} · {addr.line1}, {addr.city}
                             </option>
                           ))}
                         </select>
@@ -516,44 +642,30 @@ export function ImagingBookingDetailScreen({ id }: { id: string }) {
               ) : null}
             </Card>
           ) : null}
-          {prep ? (
-            <>
-              <Heading level={3}>Preparation</Heading>
-              <ul>
-                {prep.instructions.map((line) => (
-                  <li key={line}>
-                    <Text size="caption">{line}</Text>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-          {row.boundary ? (
-            <Text size="caption">
-              Sandbox={String(row.sandbox)} · Order={String(row.boundary.creates_order)} · Acquisition=
-              {String(row.boundary.acquisition)}
-            </Text>
-          ) : null}
-          {formError ? <Text>{formError}</Text> : null}
+
+          {formError ? <p className="mg-text-muted">{formError}</p> : null}
           {busy ? <LoadingState label="Processing sandbox payment…" /> : null}
           {row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED' ? (
-            <>
-              <Button disabled={busy} onClick={() => void retryPay('success')}>
-                Pay (sandbox success)
-              </Button>
-              <Button variant="secondary" disabled={busy} onClick={() => void retryPay('failed')}>
-                Simulate payment failure
-              </Button>
-              <Button
-                variant="tertiary"
-                onClick={() => void cancelImagingBooking(getAccessToken() ?? '', row.id).then(() => void load())}
-              >
-                Cancel booking
-              </Button>
-            </>
+            <MgCard>
+              <h2 className="mg-section-title">Complete booking</h2>
+              <div className="mg-toolbar">
+                <MgBtn disabled={busy} onClick={() => void retryPay('success')}>
+                  Pay (sandbox success)
+                </MgBtn>
+                <MgBtn variant="secondary" disabled={busy} onClick={() => void retryPay('failed')}>
+                  Simulate payment failure
+                </MgBtn>
+                <MgBtn
+                  variant="ghost"
+                  onClick={() => void cancelImagingBooking(getAccessToken() ?? '', row.id).then(() => void load())}
+                >
+                  Cancel booking
+                </MgBtn>
+              </div>
+            </MgCard>
           ) : null}
-        </Card>
+        </>
       ) : null}
-    </CustomerShell>
+    </Page>
   );
 }

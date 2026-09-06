@@ -5,7 +5,7 @@ const NEXT: Record<ShipmentStatus, ShipmentStatus[]> = {
   READY: [ShipmentStatus.BOOKING, ShipmentStatus.CANCELLED],
   BOOKING: [ShipmentStatus.BOOKED, ShipmentStatus.BOOKING_FAILED, ShipmentStatus.BOOKING_UNKNOWN],
   BOOKED: [ShipmentStatus.LABEL_CREATED, ShipmentStatus.CANCEL_REQUESTED],
-  LABEL_CREATED: [ShipmentStatus.PICKUP_SCHEDULED, ShipmentStatus.PICKED_UP],
+  LABEL_CREATED: [ShipmentStatus.PICKUP_SCHEDULED, ShipmentStatus.PICKED_UP, ShipmentStatus.CANCEL_REQUESTED],
   PICKUP_SCHEDULED: [ShipmentStatus.PICKED_UP, ShipmentStatus.CANCEL_REQUESTED],
   PICKED_UP: [ShipmentStatus.IN_TRANSIT, ShipmentStatus.DELIVERY_FAILED],
   IN_TRANSIT: [ShipmentStatus.OUT_FOR_DELIVERY, ShipmentStatus.DELIVERY_FAILED, ShipmentStatus.LOST, ShipmentStatus.DAMAGED],
@@ -54,6 +54,8 @@ export function eventForShipment(status: ShipmentStatus): string | null {
       return 'SHIPMENT_OUT_FOR_DELIVERY';
     case ShipmentStatus.DELIVERED:
       return 'SHIPMENT_DELIVERED';
+    case ShipmentStatus.CANCELLED:
+      return 'SHIPMENT_CANCELLED';
     case ShipmentStatus.DELIVERY_FAILED:
       return 'SHIPMENT_FAILED';
     case ShipmentStatus.RETURN_TO_ORIGIN:

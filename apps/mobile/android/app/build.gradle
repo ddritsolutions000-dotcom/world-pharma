@@ -175,3 +175,14 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+
+android.applicationVariants.configureEach { /* s130FixExpoModulesPackage */ }
+tasks.withType(JavaCompile).configureEach {
+  doFirst {
+    def pkg = file("${project.projectDir}/build/generated/autolinking/src/main/java/com/facebook/react/PackageList.java")
+    if (pkg.exists()) {
+      pkg.text = pkg.text.replace("expo.core.ExpoModulesPackage", "expo.modules.ExpoModulesPackage")
+    }
+  }
+}

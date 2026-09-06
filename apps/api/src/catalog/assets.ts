@@ -12,7 +12,11 @@ export interface CatalogAssetStore {
 export class LocalCatalogAssetStore implements CatalogAssetStore {
   publicUrl(storageKey: string): string {
     if (storageKey.startsWith('http://') || storageKey.startsWith('https://')) {
+      // Pass-through only for already-stored keys; write paths must use isSafeExternalHttpUrl.
       return storageKey;
+    }
+    if (storageKey.includes('..') || storageKey.includes('\\') || storageKey.startsWith('/')) {
+      return '/assets/catalog/invalid';
     }
     return `/assets/catalog/${storageKey}`;
   }

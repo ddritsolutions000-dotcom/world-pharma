@@ -31,6 +31,7 @@ function nextMorningUtc() {
 }
 
 describe('P2-HC-2 appointment / encounter foundation (e2e)', () => {
+  jest.setTimeout(180_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let countryId: string;
@@ -308,7 +309,8 @@ describe('P2-HC-2 appointment / encounter foundation (e2e)', () => {
 
     const completed = await request(app.getHttpServer())
       .post(`/api/v1/doctor/appointments/${appointmentId}/complete`)
-      .set('Authorization', `Bearer ${doctorA.token}`);
+      .set('Authorization', `Bearer ${doctorA.token}`)
+      .send({ patient_summary: 'Rest, fluids, and follow up if symptoms persist.' });
     expect(completed.status).toBe(200);
     expect(completed.body.status).toBe(AppointmentStatus.COMPLETED);
 

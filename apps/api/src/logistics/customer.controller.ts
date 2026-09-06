@@ -2,10 +2,22 @@ import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { LogisticsService } from './logistics.service';
+import { ServiceabilityZoneService } from './serviceability-zone.service';
 
 @Controller()
 export class LogisticsCustomerController {
-  constructor(private readonly logistics: LogisticsService) {}
+  constructor(
+    private readonly logistics: LogisticsService,
+    private readonly zones: ServiceabilityZoneService,
+  ) {}
+
+  @Get('serviceability')
+  serviceability(
+    @Query('country') country: string,
+    @Query('postal_code') postalCode: string,
+  ) {
+    return this.zones.check(country ?? 'XX', postalCode ?? '');
+  }
 
   @Get('shipping/quotes')
   quote(

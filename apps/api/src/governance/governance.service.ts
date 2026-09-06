@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
+import { OrganizationStatus } from '@prisma/client';
 import { PrismaService } from '../app/prisma.service';
+import { Errors } from '../common/problem';
 
 @Injectable()
 export class GovernanceService {
@@ -116,6 +118,37 @@ export class GovernanceService {
             identifiers: { select: { type: true, valueNormalized: true, verifiedAt: true } },
           },
         },
+      },
+    });
+  }
+
+  async patchOrganization(
+    id: string,
+    input: { display_name?: string; legal_name?: string; status?: OrganizationStatus },
+  ) {
+    const existing = await this.prisma.organization.findUnique({ where: { id } });
+    if (!existing) {
+      throw Errors.notFound('Organization not found.');
+    }
+    if (!input.display_name && !input.legal_name && !input.status) {
+      throw Errors.validation('display_name, legal_name or status is required.');
+    }
+    if (input.status && !Object.values(OrganizationStatus).includes(input.status)) {
+      throw Errors.validation('Invalid organization status.');
+    }
+    return this.prisma.organization.update({
+      where: { id },
+      data: {
+        displayName: input.display_name?.trim() || undefined,
+        legalName: input.legal_name?.trim() || undefined,
+        status: input.status,
+      },
+      select: {
+        id: true,
+        kind: true,
+        legalName: true,
+        displayName: true,
+        status: true,
       },
     });
   }

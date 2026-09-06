@@ -13,10 +13,20 @@ try {
       continue;
     }
     const key = trimmed.slice(0, eq);
-    process.env[key] = trimmed.slice(eq + 1).trim();
+    const value = trimmed.slice(eq + 1).trim();
+    // Prefer process env (CI / local overrides) over .env defaults.
+    if (process.env[key] === undefined || process.env[key] === '') {
+      process.env[key] = value;
+    }
   }
 } catch {
   // CI supplies env vars.
 }
 
 require('./src/test/isolate-runtime.cjs').applyTestIsolation();
+process.env.NODE_ENV = 'test';
+process.env.DEV_SANDBOX_SEED = 'false';
+process.env.AUTH_DEV_REVEAL_OTP = process.env.AUTH_DEV_REVEAL_OTP ?? 'true';
+process.env.JWT_ACCESS_SECRET =
+  process.env.JWT_ACCESS_SECRET ?? 'test-access-secret-must-be-32-chars-min';
+process.env.OTP_PEPPER = process.env.OTP_PEPPER ?? 'test-otp-pepper-must-be-32-chars-minx';

@@ -9,7 +9,6 @@ import {
   Heading,
   Input,
   LoadingState,
-  Table,
   Text,
 } from '@world-pharma/ui-kit/web';
 import {
@@ -22,6 +21,7 @@ import {
   replaceVendorOfferPrice,
   type VendorOffer,
 } from './vendor-api';
+import { currencyForCountry, formatCurrencyMinor, statusBadgeClass } from './vendor-format';
 
 function slugify(value: string): string {
   return value
@@ -78,6 +78,12 @@ export function VendorCatalogPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!currency && countryCode) {
+      setCurrency(currencyForCountry(countryCode));
+    }
+  }, [countryCode, currency]);
 
   const handleCreatePublish = async () => {
     setFormError(null);
@@ -198,7 +204,8 @@ export function VendorCatalogPanel({
       <Card>
         <Heading level={2}>Create offer</Heading>
         <Text tone="secondary">
-          Uses existing vendor catalog APIs. Country comes from your seller organization — no hardcoded market.
+          Publish as a marketplace seller. The same medicine can be listed by multiple pharmacies — customers pick your
+          price on the product page. Inventory, orders, and settlements stay isolated to this organization.
         </Text>
         <FormField label="Title">
           {({ id }) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} />}
@@ -267,39 +274,60 @@ export function VendorCatalogPanel({
           description="Create your first seller offer above. Another vendor cannot see or mutate your catalog."
         />
       ) : (
-        <>
-          <Table
-            caption="Vendor catalog offers"
-            columns={['Offer', 'Title', 'Country', 'Currency', 'Sell', 'Status']}
-            rows={rows.map((row) => [
-              row.id.slice(0, 8),
-              row.title ?? '—',
-              row.country_code ?? '—',
-              row.currency ?? '—',
-              String(row.sell_minor ?? '—'),
-              row.status ?? '—',
-            ])}
-          />
-          {rows.some((row) => row.status === 'DRAFT') ? (
-            <Card>
-              <Heading level={3}>Draft offers</Heading>
-              <div className="wp-stack">
-                {rows
-                  .filter((row) => row.status === 'DRAFT')
-                  .map((row) => (
-                    <div key={row.id} className="wp-stack" style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                      <Text>
-                        {row.title ?? row.id.slice(0, 8)} ({row.id.slice(0, 8)})
-                      </Text>
-                      <Button size="sm" disabled={busy} onClick={() => void handlePublish(row.id)}>
-                        Publish
-                      </Button>
-                    </div>
-                  ))}
-              </div>
-            </Card>
-          ) : null}
-        </>
+        <Card>
+          <Heading level={2}>Your offers ({rows.length})</Heading>
+          <ul className="wp-mini-list">
+            {rows.map((row) => (
+              <li key={row.id} className="wp-mini-row">
+                <div className="wp-mini-main">
+                  <p className="wp-mini-title">
+                    <span className="wp-mini-id">{row.title ?? row.id.slice(0, 8)}</span>
+                    <span className={statusBadgeClass(row.status ?? 'DRAFT')}>{row.status ?? 'DRAFT'}</span>
+                  </p>
+                  <p className="wp-mini-meta">
+                    {row.country_code ?? countryCode} · SKU {row.sku ?? row.id.slice(0, 8)}
+                    {row.catalog_ready ? ' · CATALOG_READY' : ''}
+                    {row.inventory_ready ? ' · INVENTORY_READY' : ''}
+                  </p>
+                  {row.blockers && row.blockers.length > 0 ? (
+                    <p className="wp-mini-meta">
+                      {row.blockers.length
+                        ? `Blocked: ${row.blockers.join(' · ')} — fix pricing/inventory/eligibility, then refresh. Admin approvals are not self-service.`
+                        : 'Ready'}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="wp-mini-right wp-stack" style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <Text size="bodyLg">
+                    {formatCurrencyMinor(row.sell_minor, row.currency ?? currencyForCountry(countryCode))}
+                  </Text>
+                  {row.cost_minor ? (
+                    <Text size="caption" tone="secondary">
+                      Cost {formatCurrencyMinor(row.cost_minor, row.currency ?? currencyForCountry(countryCode))}
+                    </Text>
+                  ) : null}
+                  {row.status === 'DRAFT' ? (
+                    <Button size="sm" disabled={busy} onClick={() => void handlePublish(row.id)}>
+                      Publish
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setPriceOfferId(row.id);
+                      setPriceCost(String(row.cost_minor ?? ''));
+                      setPriceSell(String(row.sell_minor ?? ''));
+                    }}
+                  >
+                    Update price
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
     </div>
   );

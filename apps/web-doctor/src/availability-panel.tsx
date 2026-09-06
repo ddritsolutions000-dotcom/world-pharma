@@ -6,11 +6,12 @@ import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
   Card,
+  FormField,
+  Input,
   LoadingState,
-  NetworkErrorState,
-  PermissionDeniedState,
   Text,
 } from '@world-pharma/ui-kit/web';
+import { DoctorLoadFailure, mapDoctorApiFailure, type DoctorLoadError } from './doctor-load-state';
 
 type AvailabilityWindow = {
   id: string;
@@ -34,7 +35,10 @@ export function DoctorAvailabilityPanel() {
   const [data, setData] = useState<AvailabilityData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<'network' | 'forbidden' | 'error' | null>(null);
+  const [error, setError] = useState<DoctorLoadError | null>(null);
+  const [startLocal, setStartLocal] = useState('09:00');
+  const [endLocal, setEndLocal] = useState('17:00');
+  const [includeSaturday, setIncludeSaturday] = useState(false);
 
   const load = useCallback(async () => {
     const token = getAccessToken();
@@ -46,10 +50,11 @@ export function DoctorAvailabilityPanel() {
     setError(null);
     const result = await apiCall<AvailabilityData>('api/v1/doctor/me/availability/windows', {
       token,
+      baseUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
       onUnauthorized: () => expire(),
     });
     if (!result.ok) {
-      setError(result.kind === 'forbidden' ? 'forbidden' : result.kind === 'network' ? 'network' : 'error');
+      setError(mapDoctorApiFailure(result.kind));
       setData(null);
     } else {
       setData(result.data);
@@ -70,15 +75,17 @@ export function DoctorAvailabilityPanel() {
     }
     setSaving(true);
     setError(null);
+    const weekdays = includeSaturday ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5];
     const result = await apiCall('api/v1/doctor/me/availability/windows', {
       method: 'PUT',
       token,
+      baseUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
       body: {
-        timezone: 'UTC',
-        windows: [1, 2, 3, 4, 5].map((weekday) => ({
+        timezone: data?.timezone || 'UTC',
+        windows: weekdays.map((weekday) => ({
           weekday,
-          start_local: '09:00',
-          end_local: '17:00',
+          start_local: startLocal.trim() || '09:00',
+          end_local: endLocal.trim() || '17:00',
           slot_minutes: 30,
           buffer_minutes: 0,
         })),
@@ -87,7 +94,7 @@ export function DoctorAvailabilityPanel() {
     });
     setSaving(false);
     if (!result.ok) {
-      setError(result.kind === 'forbidden' ? 'forbidden' : result.kind === 'network' ? 'network' : 'error');
+      setError(mapDoctorApiFailure(result.kind));
       return;
     }
     await load();
@@ -96,24 +103,28 @@ export function DoctorAvailabilityPanel() {
   if (loading) {
     return <LoadingState label="Loading availability" />;
   }
-  if (error === 'forbidden') {
-    return <PermissionDeniedState />;
+  if (error && !data) {
+    return <DoctorLoadFailure error={error} onRetry={() => void load()} />;
   }
 
   const windows = data?.windows ?? [];
 
   return (
     <Card>
-      {error === 'network' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
-      ) : null}
-      {error === 'error' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
-      ) : null}
-      <Text>Timezone-aware weekly windows. Server is authoritative for slots.</Text>
+      {error ? <DoctorLoadFailure error={error} onRetry={() => void load()} /> : null}
+      <Text>Set weekly consult windows. The server generates bookable slots from these hours.</Text>
       {data?.timezone ? <Text size="caption">Timezone: {data.timezone}</Text> : null}
+      <FormField label="Start (local)">
+        {({ id }) => <Input id={id} value={startLocal} onChange={(e) => setStartLocal(e.target.value)} />}
+      </FormField>
+      <FormField label="End (local)">
+        {({ id }) => <Input id={id} value={endLocal} onChange={(e) => setEndLocal(e.target.value)} />}
+      </FormField>
+      <label>
+        <input type="checkbox" checked={includeSaturday} onChange={(e) => setIncludeSaturday(e.target.checked)} /> Saturdays
+      </label>
       <Button disabled={saving} onClick={() => void saveWeekdays()}>
-        {saving ? 'Saving…' : 'Set weekday 09:00–17:00 UTC'}
+        {saving ? 'Saving…' : 'Save weekly hours'}
       </Button>
       {windows.length === 0 ? (
         <Text tone="secondary">No windows loaded.</Text>

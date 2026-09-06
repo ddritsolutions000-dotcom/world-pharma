@@ -4,7 +4,12 @@ import { PrismaService } from '../app/prisma.service';
 import { DispensingService } from '../clinical/dispensing.service';
 import { Errors } from '../common/problem';
 import type { Principal } from '../identity/current-principal';
-import { assertInventoryOwner, requireInventoryLocation } from '../inventory/access';
+import {
+  assertInventoryOwner,
+  INVENTORY_LOCATION_KINDS,
+  locationScopeIds,
+  requireInventoryLocation,
+} from '../inventory/access';
 import { InventoryService } from '../inventory/inventory.service';
 import { OrderService } from '../orders/order.service';
 
@@ -234,7 +239,23 @@ export class StoreService {
         });
       }
     }
-    return { data: [...seen.values()] };
+    const scoped = await locationScopeIds(this.prisma, principal.personId);
+    const data: Array<{ id: string; display_name: string; legal_name: string }> = [];
+    for (const org of seen.values()) {
+      const loc = await this.prisma.location.findFirst({
+        where: {
+          organizationId: org.id,
+          isActive: true,
+          kind: { in: INVENTORY_LOCATION_KINDS },
+          ...(scoped ? { id: { in: scoped } } : {}),
+        },
+        select: { id: true },
+      });
+      if (loc) {
+        data.push(org);
+      }
+    }
+    return { data };
   }
 
   async markGrnReceived(principal: Principal, organizationId: string, locationId: string, receiptId: string) {

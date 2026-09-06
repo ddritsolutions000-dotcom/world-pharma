@@ -1,4 +1,5 @@
 import { Errors } from '../common/problem';
+import { assertHumanGatesAllowLive, type R14AGateSnapshot } from './r14a-gate';
 
 /** Active payment runtime environment. Live production requires explicit human-gate authorization. */
 export type PaymentRuntimeEnvironment = 'sandbox' | 'production';
@@ -130,7 +131,7 @@ export function assertProductionCountryAuthorized(countryIso2: string, context: 
  */
 export function assertLiveProductionPrerequisites(
   context: string,
-  opts: { gatewayCode?: string; countryIso2?: string } = {},
+  opts: { gatewayCode?: string; countryIso2?: string; humanGates?: readonly R14AGateSnapshot[] } = {},
 ): void {
   if (!isLivePaymentEnabled()) {
     throw Errors.problem(
@@ -140,6 +141,7 @@ export function assertLiveProductionPrerequisites(
       `${context}: PAYMENT_LIVE_ENABLED=true required for production payment paths.`,
     );
   }
+  assertHumanGatesAllowLive(opts.humanGates, context);
   if (opts.gatewayCode) {
     assertSandboxGatewayCode(opts.gatewayCode, 'production');
     assertProductionCredentialsPresent(opts.gatewayCode, context);

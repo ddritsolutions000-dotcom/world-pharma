@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useSession } from '@world-pharma/shell-web';
+import { useSession, PortalAuthPage } from '@world-pharma/shell-web';
 import {
   Button,
   Card,
@@ -37,9 +37,8 @@ type ApplicationRow = {
 };
 
 export function JoinHome() {
-  const { session, signInWithOtp, signOut, getAccessToken } = useSession();
+  const { session, signOut, getAccessToken } = useSession();
   const [country, setCountry] = useState('XX');
-  const [email, setEmail] = useState('');
   const [publicJoin, setPublicJoin] = useState<boolean | null>(null);
   const [types, setTypes] = useState<PartnerTypeRow[]>([]);
   const [applications, setApplications] = useState<ApplicationRow[]>([]);
@@ -106,31 +105,7 @@ export function JoinHome() {
   }
 
   if (session.status !== 'authenticated') {
-    return (
-      <main className="shell-main">
-        <Heading level={1}>Partner join</Heading>
-        <Text tone="secondary">
-          Sign in to start or track an application. Status tracking works even when public join is disabled.
-        </Text>
-        <FormField label="Country code">
-          {({ id }) => <Input id={id} value={country} onChange={(e) => setCountry(e.target.value)} />}
-        </FormField>
-        <FormField label="Email">
-          {({ id }) => <Input id={id} value={email} onChange={(e) => setEmail(e.target.value)} />}
-        </FormField>
-        <Button
-          onClick={() => {
-            void signInWithOtp(email, 'partner_applicant')
-              .then(() => setError(null))
-              .catch((err: Error) => setError(err.message));
-          }}
-        >
-          Sign in with OTP
-        </Button>
-        {networkError ? <NetworkErrorState /> : null}
-        {error ? <Text tone="secondary">{error}</Text> : null}
-      </main>
-    );
+    return <PortalAuthPage portalId="join" />;
   }
 
   if (session.audience !== 'partner_applicant' && session.audience !== 'customer') {
@@ -139,8 +114,11 @@ export function JoinHome() {
 
   return (
     <main className="shell-main">
-      <Heading level={1}>Partner application</Heading>
-      <Text tone="secondary">Country: {country}. Document types come from country pack only.</Text>
+      <section className="join-hero">
+        <p className="join-hero-kicker">World-Pharma™ partners</p>
+        <Heading level={1}>Partner application</Heading>
+        <Text tone="secondary">Country: {country}. Document types come from country pack only.</Text>
+      </section>
       {loading ? <LoadingState label="Working" /> : null}
       {networkError ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void refreshApps() }} /> : null}
 
@@ -183,36 +161,56 @@ export function JoinHome() {
         <EmptyState title="No applications" description="Your partner applications appear here after you apply." />
       ) : null}
 
-      {applications.map((app) => (
-        <Card key={app.id}>
-          <Text>
-            {app.partner_type_code} — {app.status}
-          </Text>
-          {app.rejection_reason ? <Text tone="secondary">Rejection: {app.rejection_reason}</Text> : null}
-          {app.info_request ? <Text tone="secondary">Info requested: {app.info_request}</Text> : null}
-          <Button size="sm" variant="secondary" onClick={() => void loadAppDetail(app.id)}>
-            Documents & status
-          </Button>
-          {app.status === 'DRAFT' ||
-          app.status === 'DOCUMENTS_REQUIRED' ||
-          app.status === 'ADDITIONAL_INFORMATION_REQUIRED' ? (
-            <Button
-              size="sm"
-              onClick={() => {
-                const token = getAccessToken();
-                if (!token) {
-                  return;
-                }
-                void submitApplication(token, app.id)
-                  .then(() => refreshApps())
-                  .catch((err: Error) => setError(err.message));
-              }}
-            >
-              {app.status === 'ADDITIONAL_INFORMATION_REQUIRED' ? 'Resubmit' : 'Submit'}
-            </Button>
-          ) : null}
-        </Card>
-      ))}
+      {applications.length ? (
+        <table className="wp-data-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {applications.map((app) => (
+              <tr key={app.id}>
+                <td>{app.partner_type_code}</td>
+                <td>{app.status}</td>
+                <td>
+                  {app.rejection_reason ? `Rejection: ${app.rejection_reason}` : null}
+                  {app.info_request ? ` Info requested: ${app.info_request}` : null}
+                  {!app.rejection_reason && !app.info_request ? '—' : null}
+                </td>
+                <td>
+                  <div className="join-cta-row">
+                    <Button size="sm" variant="secondary" onClick={() => void loadAppDetail(app.id)}>
+                      Documents & status
+                    </Button>
+                    {app.status === 'DRAFT' ||
+                    app.status === 'DOCUMENTS_REQUIRED' ||
+                    app.status === 'ADDITIONAL_INFORMATION_REQUIRED' ? (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const token = getAccessToken();
+                          if (!token) {
+                            return;
+                          }
+                          void submitApplication(token, app.id)
+                            .then(() => refreshApps())
+                            .catch((err: Error) => setError(err.message));
+                        }}
+                      >
+                        {app.status === 'ADDITIONAL_INFORMATION_REQUIRED' ? 'Resubmit' : 'Submit'}
+                      </Button>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
 
       {selectedAppId ? (
         <Card>

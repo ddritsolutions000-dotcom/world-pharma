@@ -1,11 +1,10 @@
 import { AdminShell } from '../../src/admin-shell';
 import { AppointmentsAdminPanel } from '../../src/appointments-admin';
 
-export default function AdminAppointmentsPage() {
+export default function AppointmentsPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="appointments">
       <AppointmentsAdminPanel />
-    </>
+    </AdminShell>
   );
 }

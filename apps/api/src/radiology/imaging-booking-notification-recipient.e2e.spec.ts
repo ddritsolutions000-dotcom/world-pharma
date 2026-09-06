@@ -17,20 +17,7 @@ import { PolicyCache } from '../policy/cache';
 import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateImagingPartner, enableImagingPartnerPack } from '../test/imaging-partner';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('CR-318 imaging booking notification dispatch parity (e2e)', () => {
   jest.setTimeout(120_000);
@@ -79,21 +66,10 @@ describe('CR-318 imaging booking notification dispatch parity (e2e)', () => {
   }
 
   async function seedImagingBooking(suffix: string) {
-    const admin = await signIn(app, `cr318-admin-${suffix}@example.com`, 'admin');
-    const imagingUser = await signIn(app, `cr318-ia-${suffix}@example.com`);
-    const customer = await signIn(app, `cr318-ca-${suffix}@example.com`);
-    const otherCustomer = await signIn(app, `cr318-cb-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `cr318-admin-${suffix}@example.com`);
+    const imagingUser = await signInAudience(app, `cr318-ia-${suffix}@example.com`);
+    const customer = await signInAudience(app, `cr318-ca-${suffix}@example.com`);
+    const otherCustomer = await signInAudience(app, `cr318-cb-${suffix}@example.com`);
 
     let country = await prisma.country.findUnique({ where: { isoAlpha2: 'X8' } });
     if (!country) {

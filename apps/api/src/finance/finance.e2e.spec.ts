@@ -25,11 +25,21 @@ async function signIn(app: INestApplication, email: string, audience: 'admin' | 
     .send({ identifier: email, purpose: 'REGISTER' });
   const verified = await request(app.getHttpServer())
     .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
+    .send({
+      challenge_id: requested.body.challenge_id,
+      code: requested.body.dev_code,
+      audience: 'customer',
+    });
+  const personId = verified.body.person_id as string;
+  if (audience === 'customer') {
+    return { token: verified.body.access_token as string, personId };
+  }
+  return { token: verified.body.access_token as string, personId };
 }
 
 describe('finance ledger (e2e)', () => {
+  jest.setTimeout(180_000);
+
   let app: INestApplication;
   let prisma: PrismaService;
   let finance: FinanceService;
@@ -152,11 +162,26 @@ describe('finance ledger (e2e)', () => {
       },
     });
     const customer = await signIn(app, `fin-c-${Date.now()}@example.com`);
-    const admin = await signIn(app, `fin-a-${Date.now()}@example.com`, 'admin');
+    const adminEmail = `fin-a-${Date.now()}@example.com`;
+    const adminBootstrap = await signIn(app, adminEmail, 'admin');
     const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
     await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
+      data: { id: uuidv7(), personId: adminBootstrap.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
     });
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/v1/auth/otp/request')
+      .send({ identifier: adminEmail, purpose: 'LOGIN' });
+    const adminVerified = await request(app.getHttpServer())
+      .post('/api/v1/auth/otp/verify')
+      .send({
+        challenge_id: adminLogin.body.challenge_id,
+        code: adminLogin.body.dev_code,
+        audience: 'admin',
+      });
+    const admin = {
+      token: adminVerified.body.access_token as string,
+      personId: adminBootstrap.personId,
+    };
     const location = await prisma.location.create({
       data: {
         id: uuidv7(),

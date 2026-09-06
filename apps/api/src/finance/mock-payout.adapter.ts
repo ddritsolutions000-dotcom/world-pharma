@@ -7,16 +7,23 @@ export class MockPayoutAdapter extends PayoutPort {
   readonly code = 'MOCK';
 
   async submit(input: PayoutSubmitInput): Promise<PayoutSubmitResult> {
-    switch (input.scenario) {
+    switch (input.scenario ?? 'SUCCESS') {
       case 'FAILURE':
-        return { submitted: false, failed: true, errorCode: 'MOCK_PAYOUT_REJECTED' };
+        return { submitted: false, failed: true, errorCode: 'MOCK_PAYOUT_REJECTED', mode: 'sandbox' };
       case 'UNKNOWN':
-        return { submitted: true, unknown: true, providerRef: `mock_payout_unk_${input.payoutId}`, errorCode: 'MOCK_PAYOUT_TIMEOUT' };
+        return {
+          submitted: true,
+          unknown: true,
+          providerRef: `mock_payout_unk_${input.payoutId}`,
+          errorCode: 'MOCK_PAYOUT_TIMEOUT',
+          mode: 'sandbox',
+        };
       default:
         return {
           submitted: true,
           paid: true,
           providerRef: `mock_payout_${input.payoutId}`,
+          mode: 'sandbox',
         };
     }
   }

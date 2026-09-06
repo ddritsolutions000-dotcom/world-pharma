@@ -21,7 +21,10 @@ function loadDotenv() {
         continue;
       }
       const key = trimmed.slice(0, eq);
-      process.env[key] = trimmed.slice(eq + 1).trim();
+      const value = trimmed.slice(eq + 1).trim();
+      if (process.env[key] === undefined || process.env[key] === '') {
+        process.env[key] = value;
+      }
     }
   } catch {
     // CI supplies env.

@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import { Button, Card, EmptyState, Heading, Text } from '@world-pharma/ui-kit/web';
+import { Button, Card, Checkbox, EmptyState, FormField, Heading, Input, Select, Text } from '@world-pharma/ui-kit/web';
+import { StatusBadge } from './admin-status';
+import { type CountryPickRow } from './eligibility-admin-present';
 import {
   BREAK_SOURCE_KINDS,
   BREAK_WORKFLOW_STATUSES,
@@ -20,6 +22,7 @@ export type BreakQueuePanelProps = {
   getAccessToken: () => string | null;
   canReconcile: boolean;
   onForbidden: () => void;
+  countries?: CountryPickRow[];
 };
 
 function matchesRefSearch(row: FinanceBreakRow, query: string): boolean {
@@ -41,7 +44,7 @@ function matchesRefSearch(row: FinanceBreakRow, query: string): boolean {
   return haystack.includes(q);
 }
 
-export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden }: BreakQueuePanelProps) {
+export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden, countries = [] }: BreakQueuePanelProps) {
   const [filters, setFilters] = useState<FinanceBreakListQuery>({ limit: 100 });
   const [refSearch, setRefSearch] = useState('');
   const [breaks, setBreaks] = useState<FinanceBreakRow[]>([]);
@@ -181,78 +184,83 @@ export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden }: B
         Unified OPEN → INVESTIGATING → RESOLVED → CLOSED workflow. Backend authoritative; sandbox only.
       </Text>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(10rem, 1fr))',
-          gap: '0.5rem',
-          marginTop: '0.75rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <label>
-          Status
-          <select
-            value={filters.workflow_status ?? ''}
-            onChange={(e) => updateFilter('workflow_status', e.target.value || undefined)}
-          >
-            <option value="">Active (excl. closed)</option>
-            {BREAK_WORKFLOW_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Source
-          <select
-            value={filters.source_kind ?? ''}
-            onChange={(e) => updateFilter('source_kind', e.target.value || undefined)}
-          >
-            <option value="">All sources</option>
-            {BREAK_SOURCE_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Classification
-          <input
-            placeholder="e.g. UNMATCHED"
-            value={filters.classification ?? ''}
-            onChange={(e) => updateFilter('classification', e.target.value || undefined)}
-          />
-        </label>
-        <label>
-          Country ID
-          <input
-            placeholder="UUID"
-            value={filters.country_id ?? ''}
-            onChange={(e) => updateFilter('country_id', e.target.value || undefined)}
-          />
-        </label>
-        <label>
-          Reference search
-          <input
-            placeholder="ID / ref / detail"
-            value={refSearch}
-            onChange={(e) => {
-              setRefSearch(e.target.value);
-              setPage(0);
-            }}
-          />
-        </label>
-        <label style={{ display: 'flex', alignItems: 'end', gap: '0.5rem' }}>
-          <input
-            type="checkbox"
-            checked={Boolean(filters.include_closed)}
-            onChange={(e) => updateFilter('include_closed', e.target.checked || undefined)}
-          />
-          Include closed
-        </label>
+      <div className="wp-filter-grid">
+        <FormField label="Status">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={filters.workflow_status ?? ''}
+              onChange={(e) => updateFilter('workflow_status', e.target.value || undefined)}
+            >
+              <option value="">Active (excl. closed)</option>
+              {BREAK_WORKFLOW_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Source">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={filters.source_kind ?? ''}
+              onChange={(e) => updateFilter('source_kind', e.target.value || undefined)}
+            >
+              <option value="">All sources</option>
+              {BREAK_SOURCE_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kind}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Classification">
+          {({ id }) => (
+            <Input
+              id={id}
+              placeholder="e.g. UNMATCHED"
+              value={filters.classification ?? ''}
+              onChange={(e) => updateFilter('classification', e.target.value || undefined)}
+            />
+          )}
+        </FormField>
+        <FormField label="Country">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={filters.country_id ?? ''}
+              onChange={(e) => updateFilter('country_id', e.target.value || undefined)}
+            >
+              <option value="">All countries</option>
+              {countries.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.iso2} · {row.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Reference search">
+          {({ id }) => (
+            <Input
+              id={id}
+              placeholder="ID / ref / detail"
+              value={refSearch}
+              onChange={(e) => {
+                setRefSearch(e.target.value);
+                setPage(0);
+              }}
+            />
+          )}
+        </FormField>
+        <Checkbox
+          checked={Boolean(filters.include_closed)}
+          onChange={(e) => updateFilter('include_closed', e.target.checked || undefined)}
+          label="Show closed breaks"
+        />
       </div>
 
       <Button onClick={() => void loadBreaks()} disabled={loading}>
@@ -268,7 +276,7 @@ export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden }: B
       ) : null}
 
       {pageRows.length ? (
-        <div style={{ marginTop: '1rem' }}>
+        <div className="wp-stack">
           <Text tone="secondary">
             Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filteredBreaks.length)} of{' '}
             {filteredBreaks.length}
@@ -276,12 +284,7 @@ export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden }: B
           {pageRows.map((row) => (
             <div
               key={row.id}
-              style={{
-                marginTop: '0.5rem',
-                padding: '0.5rem',
-                border: selectedId === row.id ? '2px solid var(--color-border-strong, #333)' : '1px solid #ccc',
-                cursor: 'pointer',
-              }}
+              className={`wp-break-row${selectedId === row.id ? ' is-selected' : ''}`}
               onClick={() => void selectBreak(row.id)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -291,13 +294,15 @@ export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden }: B
               role="button"
               tabIndex={0}
             >
-              <Text>
-                {row.workflow_status} · {row.classification ?? row.break_type} · {row.source_kind ?? row.domain}
-              </Text>
+              <div className="wp-toolbar">
+                <StatusBadge status={row.workflow_status} />
+                <Text>{row.classification ?? row.break_type}</Text>
+              </div>
+              <Text tone="secondary">{row.source_kind ?? row.domain}</Text>
               <Text tone="secondary">{row.detail}</Text>
             </div>
           ))}
-          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+          <div className="wp-toolbar">
             <Button disabled={page <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
               Previous
             </Button>
@@ -312,7 +317,7 @@ export function BreakQueuePanel({ getAccessToken, canReconcile, onForbidden }: B
       ) : null}
 
       {selectedId ? (
-        <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #ccc' }}>
+        <div className="wp-break-detail">
           <Heading level={3}>Break detail</Heading>
           {detailLoading ? <Text>Loading detail…</Text> : null}
           {detailError ? <Text>{detailError}</Text> : null}

@@ -2,7 +2,7 @@ import { CheckoutStatus, Prisma } from '@prisma/client';
 import type { OutboxService } from '../events/outbox.service';
 import { Errors } from '../common/problem';
 
-export type CheckoutPaymentOutcome = 'paid' | 'pre_submit_failed';
+export type CheckoutPaymentOutcome = 'paid' | 'pre_submit_failed' | 'order_creation_failed';
 
 const RETRYABLE_PAY_STATUSES: readonly CheckoutStatus[] = [
   CheckoutStatus.READY_FOR_PAYMENT,
@@ -36,6 +36,18 @@ export function resolveCheckoutSessionPaymentTarget(
       return null;
     }
     return CheckoutStatus.PAID;
+  }
+  if (outcome === 'order_creation_failed') {
+    if (current === CheckoutStatus.PAID) {
+      return CheckoutStatus.FAILED;
+    }
+    if (current === CheckoutStatus.FAILED) {
+      return null;
+    }
+    if (current === CheckoutStatus.READY_FOR_PAYMENT || current === CheckoutStatus.QUOTED) {
+      return CheckoutStatus.FAILED;
+    }
+    return null;
   }
   if (current === CheckoutStatus.PAID) {
     return null;

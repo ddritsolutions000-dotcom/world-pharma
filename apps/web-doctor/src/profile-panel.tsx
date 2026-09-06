@@ -4,12 +4,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiCall } from '@world-pharma/shell-core';
 import { useSession } from '@world-pharma/shell-web';
 import {
+  Button,
   Card,
+  FormField,
+  Input,
   LoadingState,
-  NetworkErrorState,
-  PermissionDeniedState,
   Text,
+  TextArea,
 } from '@world-pharma/ui-kit/web';
+import { updateDoctorMe } from './doctor-api';
+import { DoctorLoadFailure, mapDoctorApiFailure, type DoctorLoadError } from './doctor-load-state';
 
 type DoctorProfileData = {
   partner_id?: string;
@@ -30,8 +34,17 @@ type DoctorProfileData = {
 export function DoctorProfilePanel() {
   const { getAccessToken, session, expire } = useSession();
   const [data, setData] = useState<DoctorProfileData | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  const [professionalName, setProfessionalName] = useState('');
+  const [bio, setBio] = useState('');
+  const [timezone, setTimezone] = useState('');
+  const [specialties, setSpecialties] = useState('');
+  const [languages, setLanguages] = useState('');
+  const [onlineCapable, setOnlineCapable] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<'network' | 'forbidden' | 'error' | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<DoctorLoadError | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const token = getAccessToken();
@@ -43,19 +56,22 @@ export function DoctorProfilePanel() {
     setError(null);
     const result = await apiCall<DoctorProfileData>('api/v1/doctor/me', {
       token,
+      baseUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
       onUnauthorized: () => expire(),
     });
     if (!result.ok) {
-      if (result.kind === 'forbidden') {
-        setError('forbidden');
-      } else if (result.kind === 'network') {
-        setError('network');
-      } else {
-        setError('error');
-      }
+      setError(mapDoctorApiFailure(result.kind));
       setData(null);
     } else {
       setData(result.data);
+      const profile = result.data.profile;
+      setDisplayName(profile?.display_name ?? '');
+      setProfessionalName(profile?.professional_name ?? '');
+      setBio(profile?.bio ?? '');
+      setTimezone(profile?.timezone ?? '');
+      setSpecialties((profile?.specialties ?? []).join(', '));
+      setLanguages((profile?.languages ?? []).join(', '));
+      setOnlineCapable(profile?.online_capable ?? false);
     }
     setLoading(false);
   }, [getAccessToken, expire]);
@@ -66,44 +82,93 @@ export function DoctorProfilePanel() {
     }
   }, [session.status, load]);
 
+  async function save() {
+    const token = getAccessToken();
+    if (!token) {
+      return;
+    }
+    setSaving(true);
+    setSaveMessage(null);
+    const result = await updateDoctorMe({
+      token,
+      onUnauthorized: () => expire(),
+      display_name: displayName.trim() || undefined,
+      professional_name: professionalName.trim() || undefined,
+      bio: bio.trim() || null,
+      timezone: timezone.trim() || undefined,
+      specialties: specialties
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      languages: languages
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      online_capable: onlineCapable,
+    });
+    setSaving(false);
+    if (result.ok) {
+      setSaveMessage('Profile saved.');
+      void load();
+    } else {
+      setSaveMessage('Could not save profile.');
+    }
+  }
+
   if (loading) {
     return <LoadingState label="Loading profile" />;
   }
-  if (error === 'forbidden') {
-    return <PermissionDeniedState />;
-  }
-  if (error === 'network') {
+  if (error) {
     return (
-      <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
+      <DoctorLoadFailure
+        error={error}
+        onRetry={() => void load()}
+        forbiddenTitle="Doctor profile unavailable"
+        forbiddenDescription="Sign in with sandbox-doctor@dev.local (or your verified doctor partner email)."
+      />
     );
-  }
-  if (error === 'error') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
   }
 
   if (!data) {
     return <Text>No profile data.</Text>;
   }
 
-  const profile = data.profile;
-  const displayName = profile?.display_name || profile?.professional_name || 'Doctor';
-
   return (
     <Card>
-      <Text>{displayName}</Text>
       {data.country_code ? <Text size="caption">Country: {data.country_code}</Text> : null}
       {data.partner_status ? <Text size="caption">Partner status: {data.partner_status}</Text> : null}
-      {profile?.specialties?.length ? (
-        <Text size="caption">Specialties: {profile.specialties.join(', ')}</Text>
-      ) : null}
-      {profile?.languages?.length ? (
-        <Text size="caption">Languages: {profile.languages.join(', ')}</Text>
-      ) : null}
-      {profile?.timezone ? <Text size="caption">Timezone: {profile.timezone}</Text> : null}
-      {profile?.online_capable !== undefined ? (
-        <Text size="caption">Online capable: {profile.online_capable ? 'Yes' : 'No'}</Text>
-      ) : null}
-      {profile?.bio ? <Text size="caption">{profile.bio}</Text> : null}
+      <FormField label="Display name">
+        {({ id }) => <Input id={id} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />}
+      </FormField>
+      <FormField label="Professional name">
+        {({ id }) => (
+          <Input id={id} value={professionalName} onChange={(e) => setProfessionalName(e.target.value)} />
+        )}
+      </FormField>
+      <FormField label="Specialties (comma-separated)">
+        {({ id }) => <Input id={id} value={specialties} onChange={(e) => setSpecialties(e.target.value)} />}
+      </FormField>
+      <FormField label="Languages (comma-separated)">
+        {({ id }) => <Input id={id} value={languages} onChange={(e) => setLanguages(e.target.value)} />}
+      </FormField>
+      <FormField label="Timezone">
+        {({ id }) => <Input id={id} value={timezone} onChange={(e) => setTimezone(e.target.value)} />}
+      </FormField>
+      <FormField label="Bio">
+        {({ id }) => <TextArea id={id} value={bio} onChange={(e) => setBio(e.target.value)} rows={4} />}
+      </FormField>
+      <label>
+        <input
+          type="checkbox"
+          checked={onlineCapable}
+          onChange={(e) => setOnlineCapable(e.target.checked)}
+        />{' '}
+        Online consultations capable
+      </label>
+      <Button disabled={saving} onClick={() => void save()}>
+        {saving ? 'Saving…' : 'Save profile'}
+      </Button>
+      {saveMessage ? <Text size="caption">{saveMessage}</Text> : null}
     </Card>
   );
 }

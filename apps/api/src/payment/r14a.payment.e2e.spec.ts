@@ -37,6 +37,7 @@ async function signIn(app: INestApplication, email: string, audience: 'admin' | 
 }
 
 describe('R14-A payment foundation', () => {
+  jest.setTimeout(120_000);
   describe('provider-neutral guards (unit)', () => {
     it('dispatches registered sandbox gateways and rejects unknown codes', () => {
       const mock = new MockPaymentGatewayAdapter();

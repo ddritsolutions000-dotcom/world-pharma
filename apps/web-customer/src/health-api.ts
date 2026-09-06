@@ -10,14 +10,69 @@ export type HealthTimelineItem = {
   source_module: string;
   source_id: string;
   title: string;
+  summary?: string | null;
   status: string;
   occurred_at: string;
   sandbox: boolean;
+  subject_family_member_id?: string | null;
+  deep_link?: string | null;
 };
 
 export type HealthTimelineResponse = {
   items: HealthTimelineItem[];
   next_cursor: string | null;
+};
+
+export type HealthDashboardPendingAction = {
+  kind: string;
+  id: string;
+  title: string;
+  status: string;
+  occurred_at: string;
+};
+
+export type HealthInsight = {
+  code: string;
+  title: string;
+  detail: string;
+  priority: number;
+  href: string | null;
+};
+
+export type HealthDashboardCarePlan = {
+  plan_code: string;
+  name: string;
+} | null;
+
+export type HealthDashboardReminder = {
+  id: string;
+  medicine_label: string;
+  schedule_times: string[];
+  enabled: boolean;
+};
+
+export type HealthDashboardResponse = {
+  country_code: string;
+  timeline_enabled: boolean;
+  viewing_subject?: {
+    kind: 'self' | 'family_member';
+    family_member_id: string | null;
+    display_name: string;
+    relationship_code: string | null;
+  };
+  overview: {
+    upcoming_appointments: Array<Record<string, unknown>>;
+    recent_consultations: Array<Record<string, unknown>>;
+    recent_prescriptions: Array<Record<string, unknown>>;
+    recent_orders: Array<Record<string, unknown>>;
+    recent_lab_bookings: Array<Record<string, unknown>>;
+    recent_imaging_bookings: Array<Record<string, unknown>>;
+    pending_actions: HealthDashboardPendingAction[];
+    active_care_plan: HealthDashboardCarePlan;
+    medication_reminders: HealthDashboardReminder[];
+    health_insights: HealthInsight[];
+  };
+  recent_activity: HealthTimelineResponse;
 };
 
 export type HealthArtifactMetadata = {
@@ -68,10 +123,14 @@ type TokenOpts = {
   token: string;
   onUnauthorized?: () => void;
   countryCode: string;
+  familyMemberId?: string | null;
 };
 
 function timelineQuery(opts: TokenOpts & { cursor?: string; limit?: number }) {
   const qs = new URLSearchParams({ country_code: opts.countryCode });
+  if (opts.familyMemberId) {
+    qs.set('family_member_id', opts.familyMemberId);
+  }
   if (opts.cursor) {
     qs.set('cursor', opts.cursor);
   }
@@ -85,6 +144,19 @@ export function fetchHealthTimeline(
   opts: TokenOpts & { cursor?: string; limit?: number },
 ): Promise<ApiCallResult<HealthTimelineResponse>> {
   return apiCall<HealthTimelineResponse>(timelineQuery(opts), {
+    token: opts.token,
+    onUnauthorized: opts.onUnauthorized,
+  });
+}
+
+export function fetchHealthDashboard(
+  opts: TokenOpts,
+): Promise<ApiCallResult<HealthDashboardResponse>> {
+  const qs = new URLSearchParams({ country_code: opts.countryCode });
+  if (opts.familyMemberId) {
+    qs.set('family_member_id', opts.familyMemberId);
+  }
+  return apiCall<HealthDashboardResponse>(`api/v1/health/dashboard?${qs}`, {
     token: opts.token,
     onUnauthorized: opts.onUnauthorized,
   });

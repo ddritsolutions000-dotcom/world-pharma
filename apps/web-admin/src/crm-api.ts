@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+import { adminJson, AdminHttpError } from './admin-http';
 
 export class CrmApiError extends Error {
   constructor(
@@ -10,24 +10,15 @@ export class CrmApiError extends Error {
   }
 }
 
-async function parseJson(res: Response) {
-  return res.json().catch(() => ({}));
-}
-
 async function crmFetch(token: string, path: string, init?: RequestInit) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = await parseJson(res);
-  if (!res.ok) {
-    throw new CrmApiError((body.detail as string) ?? 'request_failed', res.status);
+  try {
+    return await adminJson(token, path, init);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new CrmApiError(err.message, err.status);
+    }
+    throw new CrmApiError('request_failed', 0);
   }
-  return body;
 }
 
 export type CrmCustomerSummary = {
@@ -86,6 +77,25 @@ export type CrmCustomer360 = {
     email_allowed: boolean;
   };
   refill_requests: Array<{ id: string; status: string; created_at: string }>;
+  rx_subscriptions: Array<{
+    id: string;
+    status: string;
+    auto_execute_enabled: boolean;
+    created_at: string;
+  }>;
+  loyalty: Array<{
+    program_code: string;
+    program_name: string;
+    program_status: string;
+    points_balance: number;
+  }>;
+  product_reviews: Array<{
+    id: string;
+    rating: number;
+    status: string;
+    catalog_slug: string;
+    created_at: string;
+  }>;
 };
 
 export function listCrmCustomers(
@@ -106,4 +116,39 @@ export function getCrmCustomer360(token: string, personId: string, countryCode: 
     token,
     `/api/v1/admin/crm/customers/${personId}?country_code=${encodeURIComponent(countryCode)}`,
   ) as Promise<CrmCustomer360>;
+}
+
+export function listCrmAutomationRuns(token: string, countryCode: string) {
+  return crmFetch(
+    token,
+    `/api/v1/admin/crm/automation-runs?country_code=${encodeURIComponent(countryCode)}`,
+  ) as Promise<{
+    data: Array<{
+      id: string;
+      automation_kind: string;
+      source_id: string;
+      person_id: string;
+      status: string;
+      skip_reason: string | null;
+      created_at: string;
+    }>;
+  }>;
+}
+
+export function evaluateCrmAutomation(token: string, countryCode: string) {
+  return crmFetch(token, `/api/v1/admin/crm/automation/evaluate`, {
+    method: 'POST',
+    body: JSON.stringify({ country_code: countryCode }),
+  }) as Promise<unknown>;
+}
+
+export function revealCrmIdentifiers(token: string, personId: string, countryCode: string, reason: string) {
+  return crmFetch(token, `/api/v1/admin/crm/customers/${encodeURIComponent(personId)}/reveal-identifiers`, {
+    method: 'POST',
+    body: JSON.stringify({ country_code: countryCode, reason }),
+  }) as Promise<{
+    person_id: string;
+    identifiers: Array<{ type: string; value: string; verified: boolean }>;
+    revealed_at: string;
+  }>;
 }

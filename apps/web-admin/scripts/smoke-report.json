@@ -1,0 +1,611 @@
+﻿{
+  "timestamp": "2026-09-02T15:41:04.698Z",
+  "routes": {
+    "total": 65,
+    "pass": 65,
+    "fail": 0,
+    "items": [
+      {
+        "path": "/",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/login",
+        "status": 200,
+        "ok": true,
+        "note": ""
+      },
+      {
+        "path": "/approvals",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/countries",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/security",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/security/admins",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/storefront",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/storefront/chrome",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/catalog",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/inventory",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/payments",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/orders",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/logistics",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/finance",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/marketplace",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/delivery",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/search",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/doctors",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/labs",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/imaging",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/appointments",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/prescriptions",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/video-sessions",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/refills",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/dispensing",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/care-plans",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/health-packages",
+        "status": 200,
+        "ok": true,
+        "note": ""
+      },
+      {
+        "path": "/speciality-care",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/corporate",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/substitutes",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/serviceability",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/store-locator",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/identity",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/company-authority",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/policy-packs",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/organizations",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/partners",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/regions",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/legal-entities",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/business-units",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/audit",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/governance/health/consents",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/governance/health/access-audits",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/governance/health/break-glass",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/governance/care-nav",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms/blog",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms/legal",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms/faq",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms/health",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms/pages",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/cms/media",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/seo",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/notifications",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/support",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/crm",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/crm/automation",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/marketing",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/analytics",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/analytics/commerce",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/analytics/marketing",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/promo",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/loyalty",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/affiliates",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      },
+      {
+        "path": "/reviews",
+        "status": 307,
+        "ok": true,
+        "note": "redirect"
+      }
+    ]
+  },
+  "apis": {
+    "total": 31,
+    "pass": 21,
+    "fail": 10,
+    "items": [
+      {
+        "name": "Admin OTP login",
+        "ok": true,
+        "status": 200
+      },
+      {
+        "name": "Health ready",
+        "ok": true,
+        "status": 200,
+        "path": "/health/ready"
+      },
+      {
+        "name": "Admin orders",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/orders"
+      },
+      {
+        "name": "Admin shipments",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/shipments"
+      },
+      {
+        "name": "Admin carriers",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/shipments/carriers"
+      },
+      {
+        "name": "Admin delivery jobs",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/delivery/jobs"
+      },
+      {
+        "name": "Admin catalog items",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/catalog/items?country=IN&limit=5"
+      },
+      {
+        "name": "Admin inventory",
+        "ok": false,
+        "status": 404,
+        "path": "/api/v1/admin/inventory/summary?country=IN"
+      },
+      {
+        "name": "Admin partners",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/partners/applications"
+      },
+      {
+        "name": "Admin finance dashboard",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/finance/dashboard"
+      },
+      {
+        "name": "Admin payments",
+        "ok": false,
+        "status": 500,
+        "path": "/api/v1/admin/payments/intents?limit=5"
+      },
+      {
+        "name": "Admin CMS content",
+        "ok": false,
+        "status": 400,
+        "path": "/api/v1/admin/cms/content"
+      },
+      {
+        "name": "Admin CRM customers",
+        "ok": false,
+        "status": 403,
+        "path": "/api/v1/admin/crm/customers?limit=5"
+      },
+      {
+        "name": "Admin support queues",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/support/queues"
+      },
+      {
+        "name": "Admin analytics overview",
+        "ok": false,
+        "status": 400,
+        "path": "/api/v1/admin/analytics/overview?country=IN"
+      },
+      {
+        "name": "Admin policy packs",
+        "ok": false,
+        "status": 400,
+        "path": "/api/v1/admin/policy-packs"
+      },
+      {
+        "name": "Admin security events",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/security-events?limit=5"
+      },
+      {
+        "name": "Admin doctors",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/doctors?limit=5"
+      },
+      {
+        "name": "Admin labs",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/labs?limit=5"
+      },
+      {
+        "name": "Admin prescriptions",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/prescriptions?limit=5"
+      },
+      {
+        "name": "Admin appointments",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/appointments?limit=5"
+      },
+      {
+        "name": "Admin marketing segments",
+        "ok": false,
+        "status": 403,
+        "path": "/api/v1/admin/marketing/segments"
+      },
+      {
+        "name": "Admin promo campaigns",
+        "ok": false,
+        "status": 403,
+        "path": "/api/v1/admin/promo/campaigns"
+      },
+      {
+        "name": "Admin loyalty programs",
+        "ok": false,
+        "status": 400,
+        "path": "/api/v1/admin/loyalty/programs"
+      },
+      {
+        "name": "Admin reviews",
+        "ok": false,
+        "status": 404,
+        "path": "/api/v1/admin/reviews?limit=5"
+      },
+      {
+        "name": "Admin notifications inbox",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/me/notifications/inbox"
+      },
+      {
+        "name": "Admin me profile",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/me"
+      },
+      {
+        "name": "Serviceability IN",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/shipments/serviceability?country=IN&postal_code=400001"
+      },
+      {
+        "name": "Control plane snapshot",
+        "ok": true,
+        "status": 200,
+        "path": "/api/v1/admin/control-plane/snapshot"
+      },
+      {
+        "name": "Carriers include INDIA_POST+DHL",
+        "ok": true,
+        "status": 200,
+        "note": "BLUEDART, DHL, DELHIVERY, INDIA_POST, MOCK, MOCK_B"
+      },
+      {
+        "name": "Shipments with carrier booked",
+        "ok": true,
+        "status": 200,
+        "note": "4 booked (INDIA_POST, MOCK, MOCK)"
+      }
+    ]
+  },
+  "unitTests": {
+    "note": "Run separately: npx jest --config jest.config.cts"
+  }
+}
+
+=== SUMMARY ===
+Routes: 65/65 OK
+APIs:   21/31 OK
+
+Failed APIs:
+  Admin inventory ΓåÆ 404 
+  Admin payments ΓåÆ 500 
+  Admin CMS content ΓåÆ 400 
+  Admin CRM customers ΓåÆ 403 
+  Admin analytics overview ΓåÆ 400 
+  Admin policy packs ΓåÆ 400 
+  Admin marketing segments ΓåÆ 403 
+  Admin promo campaigns ΓåÆ 403 
+  Admin loyalty programs ΓåÆ 400 
+  Admin reviews ΓåÆ 404 

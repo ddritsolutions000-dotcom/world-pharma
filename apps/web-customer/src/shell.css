@@ -1,4 +1,4 @@
-.shell-main {
+﻿.shell-main {
   width: min(100%, var(--wp-page-max));
   margin-inline: auto;
   padding: var(--wp-space-4);

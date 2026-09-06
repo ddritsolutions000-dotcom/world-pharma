@@ -2,22 +2,16 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { useCountries } from '@world-pharma/shell-web';
-import {
-  Card,
-  EmptyState,
-  LoadingState,
-  NetworkErrorState,
-  Text,
-} from '@world-pharma/ui-kit/web';
+import { useSelectedCountry } from './use-selected-country';
+import { EmptyState, LoadingState, NetworkErrorState } from '@world-pharma/ui-kit/web';
 import { fetchHelpArticle, HelpApiError } from './help-api';
 import { HelpShell } from './help-shell';
+import { MgCard } from './ui/mg-ui';
 
 type ViewState = 'idle' | 'loading' | 'network' | 'not_found' | 'error';
 
 export function HelpArticleScreen({ articleSlug }: { articleSlug: string }) {
-  const { countries } = useCountries();
-  const country = countries[0]?.iso_alpha2 ?? 'XX';
+  const { country } = useSelectedCountry();
   const locale = 'en';
   const [viewState, setViewState] = useState<ViewState>('loading');
   const [title, setTitle] = useState('');
@@ -71,19 +65,15 @@ export function HelpArticleScreen({ articleSlug }: { articleSlug: string }) {
         <EmptyState title="Article unavailable" description="Could not load this article." action={{ label: 'Retry', onClick: () => void load() }} />
       ) : null}
       {viewState === 'idle' ? (
-        <Card>
-          <div className="wp-stack">
-            {summary ? <Text tone="secondary">{summary}</Text> : null}
-            <Text>{body}</Text>
-            {categorySlug ? (
-              <Link href={`/help/c/${encodeURIComponent(categorySlug)}?country=${country}&locale=${locale}`}>
-                <Text size="caption" tone="secondary">
-                  Back to {categorySlug}
-                </Text>
-              </Link>
-            ) : null}
-          </div>
-        </Card>
+        <MgCard>
+          {summary ? <p className="mg-page-subtitle">{summary}</p> : null}
+          <div className="mg-article-body">{body}</div>
+          {categorySlug ? (
+            <Link href={`/help/c/${encodeURIComponent(categorySlug)}?country=${country}&locale=${locale}`} className="mg-back-link">
+              ← Back to {categorySlug.replace(/-/g, ' ')}
+            </Link>
+          ) : null}
+        </MgCard>
       ) : null}
     </HelpShell>
   );

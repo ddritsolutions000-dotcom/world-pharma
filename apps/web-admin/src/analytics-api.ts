@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+import { adminJson, AdminHttpError } from './admin-http';
 
 export class AnalyticsApiError extends Error {
   constructor(
@@ -8,10 +8,6 @@ export class AnalyticsApiError extends Error {
     super(message);
     this.name = 'AnalyticsApiError';
   }
-}
-
-async function parseJson(res: Response) {
-  return res.json().catch(() => ({}));
 }
 
 function buildQuery(params: Record<string, string | undefined>) {
@@ -26,23 +22,14 @@ function buildQuery(params: Record<string, string | undefined>) {
 }
 
 async function analyticsFetch(token: string, path: string) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  const body = await parseJson(res);
-  if (!res.ok) {
-    const detail =
-      typeof body.detail === 'string'
-        ? body.detail
-        : typeof body.message === 'string'
-          ? body.message
-          : 'request_failed';
-    throw new AnalyticsApiError(detail, res.status);
+  try {
+    return await adminJson(token, path);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new AnalyticsApiError(err.message, err.status);
+    }
+    throw new AnalyticsApiError('request_failed', 0);
   }
-  return body;
 }
 
 export type AnalyticsOverviewTotals = {

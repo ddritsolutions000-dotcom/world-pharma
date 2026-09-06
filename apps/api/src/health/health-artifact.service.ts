@@ -3,6 +3,7 @@ import { HealthArtifactType } from '@prisma/client';
 import { uuidv7 } from '@world-pharma/shared';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
+import { assertSamePerson } from '../identity/object-authorization';
 import { EncounterConsultNoteService } from '../clinical/encounter-consult-note.service';
 import { PrescriptionService } from '../clinical/prescription.service';
 import { SecurityEventsService } from '../identity/security-events.service';
@@ -145,9 +146,11 @@ export class HealthAccessService {
   }
 
   assertPatientOwnership(patientPersonId: string, actorPersonId: string) {
-    if (patientPersonId !== actorPersonId) {
-      throw Errors.forbidden('You cannot access another person’s health record.');
-    }
+    assertSamePerson(
+      actorPersonId,
+      patientPersonId,
+      'You cannot access another person’s health record.',
+    );
   }
 }
 

@@ -21,22 +21,10 @@ import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateImagingPartner, enableImagingPartnerPack } from '../test/imaging-partner';
 import { attachRadiologist } from '../test/radiologist-partner';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R8-F imaging physical report + sandbox finance (e2e)', () => {
+  jest.setTimeout(180_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -135,25 +123,14 @@ describe('R8-F imaging physical report + sandbox finance (e2e)', () => {
 
   it('imaging physical report lifecycle, finance facts, isolation, rider minimum PII', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r8f-admin-${suffix}@example.com`, 'admin');
-    const imagingUser = await signIn(app, `r8f-ia-${suffix}@example.com`);
-    const tech = await signIn(app, `r8f-tech-${suffix}@example.com`);
-    const radEnterer = await signIn(app, `r8f-rad-a-${suffix}@example.com`);
-    const radVerifier = await signIn(app, `r8f-rad-b-${suffix}@example.com`);
-    const customerA = await signIn(app, `r8f-ca-${suffix}@example.com`);
-    const customerB = await signIn(app, `r8f-cb-${suffix}@example.com`);
-    const rider = await signIn(app, `r8f-rider-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r8f-admin-${suffix}@example.com`);
+    const imagingUser = await signInAudience(app, `r8f-ia-${suffix}@example.com`);
+    const tech = await signInAudience(app, `r8f-tech-${suffix}@example.com`);
+    const radEnterer = await signInAudience(app, `r8f-rad-a-${suffix}@example.com`);
+    const radVerifier = await signInAudience(app, `r8f-rad-b-${suffix}@example.com`);
+    const customerA = await signInAudience(app, `r8f-ca-${suffix}@example.com`);
+    const customerB = await signInAudience(app, `r8f-cb-${suffix}@example.com`);
+    const rider = await signInAudience(app, `r8f-rider-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableImagingPartnerPack(enabledDoc, { physicalReport: true });

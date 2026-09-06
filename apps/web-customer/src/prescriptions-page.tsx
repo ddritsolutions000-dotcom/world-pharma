@@ -3,16 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
-  Heading,
   LoadingState,
   NetworkErrorState,
   PermissionDeniedState,
   Text,
 } from '@world-pharma/ui-kit/web';
-import Link from 'next/link';
+
 import {
   cancelRefillRequest,
   fetchCommerceEligibility,
@@ -27,28 +24,45 @@ import {
   type Prescription,
   type RefillEligibility,
   type RefillRequest,
-  type RxSubscriptionView,
 } from './care-api';
-import { CustomerShell } from './customer-shell';
+import { uploadHealthDocument } from './health-api';
+import { useSelectedCountry } from './use-selected-country';
+import { RxSubscriptionPanel } from './rx-subscription-panel';
+import { MgBtn, MgCard, Page, PageIntro, Section } from './ui/mg-ui';
+
+const RX_STEPS = [
+  {
+    title: 'Upload or consult',
+    body: 'Upload a paper Rx photo/PDF, or get a digital prescription from an online doctor consultation.',
+  },
+  {
+    title: 'Pharmacy review',
+    body: 'Our licensed partner verifies the prescription and prepares your medicines — usually within a few hours.',
+  },
+  {
+    title: 'Home delivery',
+    body: 'Track your order and shipment in real time. Cold-chain items are handled per pharmacy regulations.',
+  },
+] as const;
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return btoa(binary);
+}
 
 function newIdempotencyKey(prefix = 'rx'): string {
   return globalThis.crypto?.randomUUID?.() ?? `${prefix}-${Date.now()}`;
-}
-
-function subscriptionStatusLabel(subscription: RxSubscriptionView | null | undefined): string {
-  if (!subscription?.available) {
-    return 'UNAVAILABLE';
-  }
-  if (subscription.auto_execute_enabled) {
-    return 'OFF';
-  }
-  return subscription.status === 'DISABLED' ? 'OFF' : subscription.status;
 }
 
 const CANCELLABLE_REFILL_STATUSES = new Set(['REQUESTED', 'PENDING_REAUTH']);
 
 export function PrescriptionsScreen() {
   const { session, getAccessToken, expire } = useSession();
+  const { country: countryCode } = useSelectedCountry();
   const [rows, setRows] = useState<Prescription[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Prescription | null>(null);
@@ -64,6 +78,9 @@ export function PrescriptionsScreen() {
   const [refillLoading, setRefillLoading] = useState(false);
   const [refillHistory, setRefillHistory] = useState<RefillRequest[]>([]);
   const [refillBusy, setRefillBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [refillError, setRefillError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -235,6 +252,45 @@ export function PrescriptionsScreen() {
     }
   }, [detail, expire, getAccessToken, refillEligibility?.open_request_id]);
 
+  const onUploadRx = useCallback(
+    async (file: File) => {
+      const token = getAccessToken();
+      if (!token || session.status !== 'authenticated') {
+        return;
+      }
+      const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+      if (!allowed.has(file.type)) {
+        setUploadError('Only PDF, JPEG, and PNG files are supported.');
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setUploadError('File exceeds the 10 MB upload limit.');
+        return;
+      }
+      setUploading(true);
+      setUploadError(null);
+      setUploadMessage(null);
+      const bytes = await file.arrayBuffer();
+      const result = await uploadHealthDocument({
+        token,
+        onUnauthorized: expire,
+        countryCode,
+        artifactType: 'PRESCRIPTION_UPLOAD',
+        originalName: file.name,
+        contentType: file.type,
+        contentBase64: arrayBufferToBase64(bytes),
+        idempotencyKey: `rx-upload-${file.name}-${file.size}-${file.lastModified}`,
+      });
+      setUploading(false);
+      if (!result.ok) {
+        setUploadError(result.error || 'Upload failed.');
+        return;
+      }
+      setUploadMessage('Prescription uploaded — visible in Health records and used at checkout when required.');
+    },
+    [countryCode, expire, getAccessToken, session.status],
+  );
+
   useEffect(() => {
     if (session.status === 'authenticated') {
       void load();
@@ -247,15 +303,87 @@ export function PrescriptionsScreen() {
     [];
 
   return (
-    <CustomerShell apiReachable={true} countryLabel="session">
-      <Heading level={2}>Prescriptions</Heading>
-      <Text tone="secondary">
-        Read-only. Draft prescriptions are not shown. You cannot edit clinical instructions. Privacy controls live under
-        Account.
-      </Text>
+    <Page>
+      <section className="mg-service-hero" aria-label="Prescriptions">
+        <p className="mg-service-kicker">Digital + paper Rx</p>
+        <h1 className="mg-service-title">My Prescriptions</h1>
+        <p className="mg-service-sub">
+          Upload paper Rx, view digital prescriptions, and order medicines for home delivery.
+        </p>
+      </section>
+
+      <PageIntro>
+        <p>
+          Digital prescriptions from doctor consultations appear automatically. For paper prescriptions, upload a clear
+          photo or PDF — our pharmacy team will verify before dispensing.
+        </p>
+      </PageIntro>
+
+      <Section title="How it works">
+        <ul className="mg-rx-steps">
+          {RX_STEPS.map((step, index) => (
+            <li key={step.title} className="mg-rx-step">
+              <span className="mg-rx-step-num">{index + 1}</span>
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <MgCard className="mg-signin-card">
+        <h2 className="mg-section-title">Upload paper prescription</h2>
+        <Text tone="secondary">PDF, JPEG, or PNG up to 10 MB — stored securely in your health timeline.</Text>
+        {session.status === 'authenticated' && session.audience === 'customer' ? (
+          <div className="mg-upload-zone">
+            <p className="mg-text-muted">Drag a file here or tap to browse</p>
+            <input
+              type="file"
+              accept="application/pdf,image/jpeg,image/png"
+              disabled={uploading}
+              aria-label="Upload prescription file"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  void onUploadRx(file);
+                  e.target.value = '';
+                }
+              }}
+            />
+            {uploading ? <LoadingState label="Uploading prescription" /> : null}
+            {uploadMessage ? <Text>{uploadMessage}</Text> : null}
+            {uploadError ? <Text tone="secondary">{uploadError}</Text> : null}
+          </div>
+        ) : (
+          <>
+            <Text tone="secondary">Sign in to upload a prescription image or PDF.</Text>
+            <div className="mg-toolbar">
+              <MgBtn href="/login">Sign in</MgBtn>
+              <MgBtn href="/signup" variant="secondary">
+                Create account
+              </MgBtn>
+            </div>
+          </>
+        )}
+        <div className="mg-toolbar">
+          <MgBtn href="/doctors" variant="ghost" size="sm">
+            Consult a doctor
+          </MgBtn>
+          <MgBtn href="/health" variant="ghost" size="sm">
+            Health records
+          </MgBtn>
+          <MgBtn href="/account/support" variant="ghost" size="sm">
+            Need help?
+          </MgBtn>
+        </div>
+      </MgCard>
 
       {session.status !== 'authenticated' ? (
-        <EmptyState title="Sign in required" description="Sign in to view prescriptions." />
+        <MgCard flat>
+          <h2 className="mg-section-title">Your digital prescriptions</h2>
+          <Text tone="secondary">After sign-in, medicines prescribed during online consultations appear here with refill and order options.</Text>
+          <MgBtn href="/login">Sign in to view</MgBtn>
+        </MgCard>
       ) : null}
 
       {session.status === 'authenticated' && session.audience !== 'customer' ? <PermissionDeniedState /> : null}
@@ -270,184 +398,138 @@ export function PrescriptionsScreen() {
 
           {!loading && !error && rows.length === 0 ? (
             <EmptyState
-              title="No prescriptions"
-              description="Issued prescriptions from your care visits appear here."
+              title="No prescriptions yet"
+              description="After a doctor consultation, your prescribed medicines will show up here."
+              action={{ label: 'Consult a doctor', onClick: () => (window.location.href = '/doctors') }}
             />
           ) : null}
 
-          {!loading && !error
-            ? rows.map((row) => (
-                <Button
-                  key={row.id}
-                  variant={selectedId === row.id ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => void loadDetail(row.id)}
-                >
-                  {`${row.status} · v${row.current_version_number ?? '—'} · ${row.id.slice(0, 8)}`}
-                </Button>
-              ))
-            : null}
+          {!loading && !error && rows.length > 0 ? (
+            <Section title={`${rows.length} prescription${rows.length === 1 ? '' : 's'}`}>
+              <ul className="mg-order-list">
+                {rows.map((row) => (
+                  <li key={row.id}>
+                    <MgCard>
+                      <button
+                        type="button"
+                        className={`mg-rx-list-btn${selectedId === row.id ? ' is-selected' : ''}`}
+                        onClick={() => void loadDetail(row.id)}
+                        aria-pressed={selectedId === row.id}
+                      >
+                        <span className="mg-status">{row.status.replace(/_/g, ' ')}</span>
+                        <strong>Prescription · v{row.current_version_number ?? '—'}</strong>
+                        <span className="mg-list-meta">
+                          {row.created_at ? new Date(row.created_at).toLocaleDateString() : row.id.slice(0, 8)}
+                        </span>
+                      </button>
+                    </MgCard>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          ) : null}
 
-          {detailLoading ? <LoadingState label="Loading detail" /> : null}
+          {detailLoading ? <LoadingState label="Loading prescription" /> : null}
 
           {detail && !detailLoading ? (
-            <>
-              <Card>
-                <Heading level={3}>Clinical record</Heading>
-                <Text>{`Status: ${detail.status}`}</Text>
-                {detail.dispensing_status ? (
-                  <Text size="caption">{`Dispensing: ${detail.dispensing_status}`}</Text>
-                ) : null}
-                <Text size="caption">
-                  {`Current version ${detail.current_version_number ?? '—'} of ${detail.versions?.length ?? 1}`}
-                </Text>
-                <Text size="caption">{`Created: ${detail.created_at ?? '—'}`}</Text>
-                {detail.cancelled_at ? <Text size="caption">{`Cancelled: ${detail.cancelled_at}`}</Text> : null}
-                <Text>Medication instructions (current version)</Text>
-                {currentLines.length === 0 ? (
-                  <Text tone="secondary">No medication lines on the current version.</Text>
-                ) : (
-                  currentLines.map((line, index) => (
-                    <Text key={`${line.clinical_concept_code}-${index}`} size="caption">
-                      {`${line.line_number ?? index + 1}. ${line.clinical_concept_label} · ${line.dosage_instructions} · qty ${line.quantity_authorized}`}
+            <MgCard>
+              <h2 className="mg-section-title">Medicines on this prescription</h2>
+              {detail.dispensing_status ? (
+                <p className="mg-list-meta">Pharmacy status: {detail.dispensing_status.replace(/_/g, ' ')}</p>
+              ) : null}
+              {currentLines.length === 0 ? (
+                <Text tone="secondary">No medication lines on this prescription.</Text>
+              ) : (
+                <ul className="mg-rx-lines">
+                  {currentLines.map((line, index) => (
+                    <li key={`${line.clinical_concept_code}-${index}`}>
+                      <strong>{line.clinical_concept_label}</strong>
+                      <span>{line.dosage_instructions} · Qty {line.quantity_authorized}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(detail.versions?.length ?? 0) > 1 ? (
+                <MgBtn variant="ghost" size="sm" onClick={() => setShowHistory((v) => !v)}>
+                  {showHistory ? 'Hide history' : 'View history'}
+                </MgBtn>
+              ) : null}
+              {showHistory
+                ? detail.versions?.map((v) => (
+                    <Text key={v.id} size="caption">
+                      Version {v.version_number}
+                      {v.id === detail.current_version_id ? ' (current)' : ''}
                     </Text>
                   ))
-                )}
-                {(detail.versions?.length ?? 0) > 1 ? (
-                  <>
-                    <Button size="sm" variant="secondary" onClick={() => setShowHistory((v) => !v)}>
-                      {showHistory ? 'Hide prior versions' : 'Show prior versions'}
-                    </Button>
-                    {showHistory
-                      ? detail.versions?.map((v) => (
-                          <Text key={v.id} size="caption">
-                            {`Version ${v.version_number}${v.id === detail.current_version_id ? ' (current)' : ''}${v.sealed_at ? '' : ' · unsealed'}`}
-                          </Text>
-                        ))
-                      : null}
-                  </>
-                ) : null}
-              </Card>
+                : null}
+            </MgCard>
+          ) : null}
 
-              {detail.status !== 'DRAFT' && detail.status !== 'CANCELLED' ? (
-                <Card>
-                  <Heading level={3}>Refill request</Heading>
-                  <Text tone="secondary">
-                    ED-R5E-01: fail-closed refill with doctor re-authorization. Automatic subscription refill is never
-                    enabled by default.
-                  </Text>
-                  {refillLoading ? <LoadingState label="Checking refill eligibility" /> : null}
-                  {!refillLoading && refillEligibility ? (
-                    <>
-                      <Text>{refillEligibilityLabel(refillEligibility.reason)}</Text>
-                      {refillEligibility.require_doctor_reauth ? (
-                        <Text size="caption">Doctor clinical re-authorization is required.</Text>
-                      ) : null}
-                      {refillEligibility.open_request_id ? (
-                        <>
-                          <Text size="caption">{`Open request: ${refillEligibility.open_request_status ?? '—'} (${refillEligibility.open_request_id.slice(0, 8)})`}</Text>
-                          {refillEligibility.open_request_status === 'PENDING_REAUTH' ? (
-                            <Text size="caption">Awaiting your doctor&apos;s review.</Text>
-                          ) : null}
-                          {refillEligibility.open_request_status === 'QUEUED_FOR_DISPENSE' ? (
-                            <Text size="caption">Approved — pharmacy will process a new dispense case.</Text>
-                          ) : null}
-                        </>
-                      ) : null}
-                      <Text size="caption">{`Automatic refill: ${refillEligibility.auto_refill ? 'OFF' : 'OFF'}`}</Text>
-                      <Heading level={4}>Subscription</Heading>
-                      <Text size="caption">
-                        {`Status: ${subscriptionStatusLabel(refillEligibility.subscription)} · auto-execute: OFF`}
-                      </Text>
-                      {refillEligibility.subscription?.note ? (
-                        <Text size="caption">{refillEligibility.subscription.note}</Text>
-                      ) : (
-                        <Text size="caption">Automatic refill / subscription is unavailable unless explicitly configured.</Text>
-                      )}
-                      {refillBusy ? <LoadingState label="Updating refill request" /> : null}
-                      {refillError ? <Text tone="secondary">{refillError}</Text> : null}
-                      {!refillBusy &&
-                      refillEligibility.eligible &&
-                      !refillEligibility.open_request_id ? (
-                        <Button onClick={() => void submitRefillRequest()}>Request refill</Button>
-                      ) : null}
-                      {!refillBusy &&
-                      refillEligibility.open_request_id &&
-                      refillEligibility.open_request_status &&
-                      CANCELLABLE_REFILL_STATUSES.has(refillEligibility.open_request_status) ? (
-                        <Button variant="secondary" onClick={() => void cancelOpenRefill()}>
-                          Cancel refill request
-                        </Button>
-                      ) : null}
-                      {refillHistory.length ? (
-                        <>
-                          <Heading level={4}>Refill history</Heading>
-                          {refillHistory.map((row) => (
-                            <Text key={row.id} size="caption">
-                              {`${row.status} · ${row.id.slice(0, 8)} · ${row.created_at}${row.next ? ` · ${row.next}` : ''}`}
-                            </Text>
-                          ))}
-                        </>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {!refillLoading && !refillEligibility ? (
-                    <Text tone="secondary">Refill eligibility could not be loaded.</Text>
-                  ) : null}
-                </Card>
+          {detail && !detailLoading && detail.status !== 'DRAFT' && detail.status !== 'CANCELLED' ? (
+            <MgCard>
+              <h2 className="mg-section-title">Refill reminders</h2>
+              <Text tone="secondary">
+                Get notified when it is time to reorder. Automatic payment stays off.
+              </Text>
+              {session.status === 'authenticated' && getAccessToken() ? (
+                <RxSubscriptionPanel
+                  prescriptionId={detail.id}
+                  token={getAccessToken()!}
+                  onUnauthorized={expire}
+                />
               ) : null}
+              <MgBtn href="/subscriptions" variant="ghost" size="sm">
+                All subscriptions
+              </MgBtn>
+            </MgCard>
+          ) : null}
 
-              {detail.dispensing_status === 'DISPENSED' ? (
-                <Card>
-                  <Heading level={3}>Commercial order</Heading>
-                  <Text tone="secondary">
-                    Pharmacy has dispensed this prescription. Review mapped SKUs below, then start checkout.
-                  </Text>
-                  {eligibilityLoading ? <LoadingState label="Checking order eligibility" /> : null}
-                  {!eligibilityLoading && eligibility?.commerce_items?.length ? (
-                    <>
-                      <Text size="caption">Mapped medicines (commercial SKUs)</Text>
-                      {eligibility.commerce_items.map((item) => (
-                        <Text key={`${item.prescription_line_id}-${item.catalog_variant_id}`} size="caption">
-                          {`Variant ${item.catalog_variant_id.slice(0, 8)} · qty ${item.quantity_dispensed} · lot ${item.inventory_lot_id.slice(0, 8)}`}
-                        </Text>
-                      ))}
-                    </>
+          {detail && !detailLoading && detail.status !== 'DRAFT' && detail.status !== 'CANCELLED' ? (
+            <MgCard>
+              <h2 className="mg-section-title">Request refill</h2>
+              <Text tone="secondary">Ask your doctor to re-authorize when you need more medicines.</Text>
+              {refillLoading ? <LoadingState label="Checking refill eligibility" /> : null}
+              {!refillLoading && refillEligibility ? (
+                <>
+                  <p>{refillEligibilityLabel(refillEligibility.reason)}</p>
+                  {refillEligibility.open_request_id ? (
+                    <p className="mg-list-meta">
+                      Request status: {refillEligibility.open_request_status?.replace(/_/g, ' ') ?? '—'}
+                    </p>
                   ) : null}
-                  {!eligibilityLoading &&
-                  eligibility &&
-                  !eligibility.commerce_items?.length &&
-                  eligibility.reason !== 'order_already_exists' ? (
-                    <Text tone="secondary">No commercial SKU mappings available yet.</Text>
+                  {refillError ? <Text tone="secondary">{refillError}</Text> : null}
+                  {!refillBusy && refillEligibility.eligible && !refillEligibility.open_request_id ? (
+                    <MgBtn onClick={() => void submitRefillRequest()}>Request refill</MgBtn>
                   ) : null}
-                  {orderBusy ? <LoadingState label="Preparing your medicines for order" /> : null}
-                  {orderError ? <Text tone="secondary">{orderError}</Text> : null}
-                  {!eligibilityLoading &&
-                  eligibility?.reason === 'order_already_exists' &&
-                  eligibility.order_id ? (
-                    <Link href={`/orders/${eligibility.order_id}`}>
-                      <Button variant="secondary">View order</Button>
-                    </Link>
+                  {!refillBusy &&
+                  refillEligibility.open_request_id &&
+                  refillEligibility.open_request_status &&
+                  CANCELLABLE_REFILL_STATUSES.has(refillEligibility.open_request_status) ? (
+                    <MgBtn variant="secondary" onClick={() => void cancelOpenRefill()}>
+                      Cancel request
+                    </MgBtn>
                   ) : null}
-                  {!orderBusy &&
-                  !eligibilityLoading &&
-                  eligibility?.eligible &&
-                  eligibility.dispensing_case_id ? (
-                    <Button onClick={() => void orderMedicines()}>Order medicines</Button>
-                  ) : null}
-                  {!orderBusy &&
-                  !eligibilityLoading &&
-                  eligibility &&
-                  !eligibility.eligible &&
-                  eligibility.reason !== 'order_already_exists' ? (
-                    <Text tone="secondary">Not eligible to order yet.</Text>
-                  ) : null}
-                </Card>
+                </>
               ) : null}
-            </>
+            </MgCard>
+          ) : null}
+
+          {detail && !detailLoading && detail.dispensing_status === 'DISPENSED' ? (
+            <MgCard>
+              <h2 className="mg-section-title">Order these medicines</h2>
+              <Text tone="secondary">Your prescription is ready — add medicines to cart and checkout.</Text>
+              {eligibilityLoading ? <LoadingState label="Checking eligibility" /> : null}
+              {orderError ? <Text tone="secondary">{orderError}</Text> : null}
+              {!eligibilityLoading && eligibility?.reason === 'order_already_exists' && eligibility.order_id ? (
+                <MgBtn href={`/orders/${eligibility.order_id}`}>View order</MgBtn>
+              ) : null}
+              {!orderBusy && !eligibilityLoading && eligibility?.eligible && eligibility.dispensing_case_id ? (
+                <MgBtn onClick={() => void orderMedicines()}>{orderBusy ? 'Preparing…' : 'Order medicines'}</MgBtn>
+              ) : null}
+            </MgCard>
           ) : null}
         </>
       ) : null}
-    </CustomerShell>
+    </Page>
   );
 }

@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { PaymentIntentStatus, PaymentMethodFamily } from '@prisma/client';
+import { PaymentIntentStatus, PaymentMethodFamily, ReconciliationStatus } from '@prisma/client';
+import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
@@ -96,6 +97,45 @@ export class PaymentAdminController {
     @Query('country_code') countryCode?: string,
   ) {
     return this.payments.adminGetWebhook(principal, eventId, countryCode ?? '');
+  }
+
+  @Get('production-boundary')
+  @RequirePermissions('payment:read')
+  productionBoundary(@Query('country_code') countryCode?: string) {
+    return this.payments.describeProductionBoundary(countryCode);
+  }
+
+  @Get('production-availability')
+  @RequirePermissions('payment:read')
+  productionAvailability(@Query('country_code') countryCode: string) {
+    if (!countryCode?.trim()) {
+      throw Errors.validation('country_code is required');
+    }
+    return this.payments.evaluateProductionPaymentAvailable(countryCode);
+  }
+
+  @Post('production-availability/assert')
+  @RequirePermissions('payment:reconcile')
+  assertProductionAvailability(@Query('country_code') countryCode: string) {
+    if (!countryCode?.trim()) {
+      throw Errors.validation('country_code is required');
+    }
+    return this.payments.assertProductionPaymentAvailable(countryCode);
+  }
+
+  @Get('reconciliation')
+  @RequirePermissions('payment:reconcile')
+  reconciliationQueue(
+    @CurrentPrincipal() principal: Principal,
+    @Query('country_code') countryCode?: string,
+    @Query('status') status?: ReconciliationStatus,
+    @Query('limit') limit?: string,
+  ) {
+    return this.payments.adminReconciliationQueue(principal, {
+      country_code: countryCode,
+      status,
+      limit: limit ? Number(limit) : undefined,
+    });
   }
 
   @Get(':id/observability')

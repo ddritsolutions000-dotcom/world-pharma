@@ -1,0 +1,39 @@
+{
+  "name": "web-logistics",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web-logistics",
+  "projectType": "application",
+  "tags": ["type:app", "scope:logistics"],
+  "targets": {
+    "serve": {
+      "continuous": true,
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "pnpm --filter @world-pharma/web-logistics dev"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "next build",
+        "cwd": "apps/web-logistics",
+        "env": {
+          "NODE_ENV": "production"
+        }
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web-logistics/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "options": {
+        "jestConfig": "apps/web-logistics/jest.config.cts",
+        "passWithNoTests": false
+      }
+    }
+  }
+}

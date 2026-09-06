@@ -192,6 +192,52 @@ export class SessionService {
     });
   }
 
+  async listForPerson(personId: string, currentSessionId?: string) {
+    const rows = await this.prisma.session.findMany({
+      where: { personId },
+      orderBy: { lastSeenAt: 'desc' },
+      take: 50,
+    });
+    return {
+      data: rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        audience: row.audience,
+        created_at: row.createdAt.toISOString(),
+        last_seen_at: row.lastSeenAt.toISOString(),
+        expires_at: row.expiresAt.toISOString(),
+        revoked_at: row.revokedAt?.toISOString() ?? null,
+        is_current: row.id === currentSessionId,
+        ip_hint: row.ipHash ? row.ipHash.slice(0, 8) : null,
+        device_hint: row.userAgentHash ? row.userAgentHash.slice(0, 8) : null,
+      })),
+    };
+  }
+
+  async revokeSessionByAdmin(input: {
+    actorId: string;
+    targetPersonId: string;
+    sessionId: string;
+    requestId?: string;
+  }): Promise<void> {
+    const session = await this.prisma.session.findUnique({ where: { id: input.sessionId } });
+    if (!session || session.personId !== input.targetPersonId) {
+      throw Errors.notFound('Session not found.');
+    }
+    if (session.status !== SessionStatus.ACTIVE) {
+      return;
+    }
+    await this.revokeSession(input.sessionId, input.targetPersonId, input.requestId);
+    await this.events.emit({
+      type: 'SESSION_REVOKED',
+      outcome: 'success',
+      personId: input.actorId,
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      metadata: { target_person_id: input.targetPersonId, revoked_by_admin: true },
+    });
+  }
+
   private async revokeFamily(familyId: string, personId: string, requestId?: string): Promise<void> {
     const tokens = await this.prisma.refreshToken.findMany({ where: { familyId } });
     const sessionIds = [...new Set(tokens.map((t) => t.sessionId))];

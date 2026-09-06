@@ -1,11 +1,10 @@
 import { AdminShell } from '../../src/admin-shell';
 import { VideoAdminPanel } from '../../src/video-admin';
 
-export default function AdminVideoSessionsPage() {
+export default function VideoSessionsPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="video-sessions">
       <VideoAdminPanel />
-    </>
+    </AdminShell>
   );
 }

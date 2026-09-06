@@ -15,6 +15,7 @@ import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
 import { PolicyResolver } from '../policy/resolver';
 import { DispensingService } from './dispensing.service';
+import { RxFulfillmentSafetyGate } from './rx-fulfillment-safety-gate';
 
 const OPEN_REFILL: RefillRequestStatus[] = [
   RefillRequestStatus.REQUESTED,
@@ -35,6 +36,7 @@ export class RefillService {
     private readonly policy: PolicyResolver,
     private readonly outbox: OutboxService,
     private readonly dispensing: DispensingService,
+    private readonly rxFulfillmentSafety: RxFulfillmentSafetyGate,
   ) {}
 
   async eligibility(principal: Principal, prescriptionId: string) {
@@ -335,6 +337,32 @@ export class RefillService {
     return this.presentRequest(row.id);
   }
 
+  async adminCancel(principal: Principal, requestId: string) {
+    if (principal.audience !== 'admin') {
+      throw Errors.forbidden('Admin session required');
+    }
+    const row = await this.prisma.refillRequest.findUnique({ where: { id: requestId } });
+    if (!row) {
+      throw Errors.notFound('Refill request not found');
+    }
+    if (row.status === RefillRequestStatus.CANCELLED) {
+      return this.presentRequest(row.id);
+    }
+    if (
+      row.status === RefillRequestStatus.QUEUED_FOR_DISPENSE ||
+      row.status === RefillRequestStatus.APPROVED
+    ) {
+      throw Errors.problem(
+        409,
+        'REFILL_ILLEGAL_TRANSITION',
+        'Illegal transition',
+        'Cannot cancel after clinical approval/queue. Doctor reject is on the doctor portal.',
+      );
+    }
+    await this.transition(row.id, RefillRequestStatus.CANCELLED, principal.personId, 'ops_cancelled');
+    return this.presentRequest(row.id);
+  }
+
   async adminList(limit = 50) {
     const rows = await this.prisma.refillRequest.findMany({
       orderBy: { createdAt: 'desc' },
@@ -382,18 +410,145 @@ export class RefillService {
         },
       });
     }
+    return this.wrapSubscriptionView(row, resolved?.document ?? null, packAllows);
+  }
+
+  private wrapSubscriptionView(
+    row: {
+      id: string;
+      status: RxSubscriptionStatus;
+      autoExecuteEnabled: boolean;
+      nextAttemptAt: Date | null;
+      pauseReasonCode: string | null;
+    },
+    document: Parameters<PolicyResolver['isRxSubscriptionEnabled']>[0],
+    packAllows?: boolean,
+  ) {
+    const subscriptionEnabled = packAllows ?? this.policy.isRxSubscriptionEnabled(document);
     return {
       ...this.presentSubscription(row),
-      pack_subscription_enabled: packAllows,
-      pack_auto_execute_enabled: this.policy.isRxSubscriptionAutoExecuteEnabled(resolved?.document ?? null),
-      message: packAllows
-        ? 'Subscription object available; automatic refill remains off unless pack auto-execute is explicitly enabled.'
+      pack_subscription_enabled: subscriptionEnabled,
+      pack_auto_execute_enabled: this.policy.isRxSubscriptionAutoExecuteEnabled(document),
+      message: subscriptionEnabled
+        ? row.status === RxSubscriptionStatus.ACTIVE
+          ? 'Refill reminders are on. We will notify you — automatic payment and dispense stay off in sandbox.'
+          : 'Turn on refill reminders to get notified when it is time to reorder. Automatic refill stays off.'
         : 'Automatic refill / subscription is unavailable for this country pack.',
+    };
+  }
+
+  /** Reminder-mode subscription — never turns on auto_execute (ED-R5E-01). */
+  async enableSubscription(principal: Principal, prescriptionId: string) {
+    const rx = await this.prisma.prescription.findFirst({
+      where: { id: prescriptionId, patientPersonId: principal.personId },
+      include: {
+        currentVersion: { include: { lines: { orderBy: { lineNumber: 'asc' }, take: 1 } } },
+      },
+    });
+    if (!rx) {
+      throw Errors.notFound('Prescription not found');
+    }
+    if (
+      rx.status === PrescriptionStatus.DRAFT ||
+      rx.status === PrescriptionStatus.CANCELLED ||
+      rx.status === PrescriptionStatus.EXPIRED
+    ) {
+      throw Errors.validation('Subscription is not available for this prescription status.');
+    }
+    const country = await this.prisma.country.findUniqueOrThrow({ where: { id: rx.countryId } });
+    const resolved = await this.policy.resolvePublished(country.isoAlpha2);
+    const packAllows = this.policy.isRxSubscriptionEnabled(resolved?.document ?? null);
+    if (!packAllows) {
+      throw Errors.problem(
+        403,
+        'SUBSCRIPTION_UNAVAILABLE',
+        'Subscription unavailable',
+        'Medicine subscription / refill reminders are not enabled for your region.',
+      );
+    }
+    let row = await this.prisma.rxSubscription.findUnique({
+      where: {
+        prescriptionId_customerPersonId: { prescriptionId, customerPersonId: principal.personId },
+      },
+    });
+    if (!row) {
+      row = await this.prisma.rxSubscription.create({
+        data: {
+          id: uuidv7(),
+          prescriptionId,
+          customerPersonId: principal.personId,
+          countryId: rx.countryId,
+          status: RxSubscriptionStatus.DISABLED,
+          autoExecuteEnabled: false,
+        },
+      });
+    }
+    if (row.status === RxSubscriptionStatus.ACTIVE) {
+      return this.wrapSubscriptionView(row, resolved?.document ?? null);
+    }
+    const reminderAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const updated = await this.prisma.rxSubscription.update({
+      where: { id: row.id },
+      data: {
+        status: RxSubscriptionStatus.ACTIVE,
+        autoExecuteEnabled: false,
+        pauseReasonCode: null,
+        nextAttemptAt: reminderAt,
+      },
+    });
+    return this.wrapSubscriptionView(updated, resolved?.document ?? null);
+  }
+
+  async listCustomerSubscriptions(principal: Principal) {
+    const rows = await this.prisma.rxSubscription.findMany({
+      where: { customerPersonId: principal.personId },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const prescriptionIds = [...new Set(rows.map((r) => r.prescriptionId))];
+    const prescriptions = prescriptionIds.length
+      ? await this.prisma.prescription.findMany({
+          where: { id: { in: prescriptionIds }, patientPersonId: principal.personId },
+          include: {
+            currentVersion: { include: { lines: { orderBy: { lineNumber: 'asc' }, take: 1 } } },
+          },
+        })
+      : [];
+    const rxById = new Map(prescriptions.map((rx) => [rx.id, rx]));
+    const countryIds = [...new Set(rows.map((r) => r.countryId))];
+    const countries = countryIds.length
+      ? await this.prisma.country.findMany({ where: { id: { in: countryIds } } })
+      : [];
+    const packByCountry = new Map<string, Parameters<PolicyResolver['isRxSubscriptionEnabled']>[0]>();
+    for (const country of countries) {
+      const resolved = await this.policy.resolvePublished(country.isoAlpha2);
+      packByCountry.set(country.id, resolved?.document ?? null);
+    }
+    return {
+      subscriptions: rows
+        .map((row) => {
+          const rx = rxById.get(row.prescriptionId);
+          if (!rx || rx.status === PrescriptionStatus.CANCELLED) {
+            return null;
+          }
+          const document = packByCountry.get(row.countryId) ?? null;
+          const line = rx.currentVersion?.lines?.[0];
+          return {
+            prescription_id: row.prescriptionId,
+            prescription_status: rx.status,
+            prescription_version_number: rx.currentVersion?.versionNumber ?? null,
+            medicine_label: line?.clinicalConceptLabel ?? null,
+            ...this.wrapSubscriptionView(row, document),
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null),
     };
   }
 
   async pauseSubscription(principal: Principal, prescriptionId: string) {
     const row = await this.requireOwnedSubscription(principal, prescriptionId);
+    if (row.status !== RxSubscriptionStatus.ACTIVE) {
+      throw Errors.problem(409, 'SUBSCRIPTION_ILLEGAL_TRANSITION', 'Illegal transition', 'Only active subscriptions may be paused.');
+    }
     const updated = await this.prisma.rxSubscription.update({
       where: { id: row.id },
       data: {
@@ -402,11 +557,16 @@ export class RefillService {
         pauseReasonCode: 'customer_pause',
       },
     });
-    return this.presentSubscription(updated);
+    const document = await this.subscriptionPolicyDocument(row.countryId);
+    return this.wrapSubscriptionView(updated, document);
   }
 
   async cancelSubscription(principal: Principal, prescriptionId: string) {
     const row = await this.requireOwnedSubscription(principal, prescriptionId);
+    const document = await this.subscriptionPolicyDocument(row.countryId);
+    if (row.status === RxSubscriptionStatus.CANCELLED || row.status === RxSubscriptionStatus.DISABLED) {
+      return this.wrapSubscriptionView(row, document);
+    }
     const updated = await this.prisma.rxSubscription.update({
       where: { id: row.id },
       data: {
@@ -416,15 +576,64 @@ export class RefillService {
         nextAttemptAt: null,
       },
     });
-    return this.presentSubscription(updated);
+    return this.wrapSubscriptionView(updated, document);
   }
 
   /**
    * Hard gate: recurring execution never runs unless pack enables BOTH subscription + auto_execute
    * AND row.autoExecuteEnabled. Default path always returns disabled.
+   * S156: evaluates due rows for machine-readable decisions without executing fulfillment.
    */
-  async tryExecuteDueSubscriptions(): Promise<{ executed: number; skipped: string }> {
-    return { executed: 0, skipped: 'auto_execute_disabled_ed_r5e_01' };
+  async tryExecuteDueSubscriptions(): Promise<{
+    executed: number;
+    skipped: string;
+    decisions: Array<{
+      subscription_id: string;
+      decision: string;
+      reason_code: string;
+      execution_authorized: boolean;
+    }>;
+  }> {
+    const due = await this.prisma.rxSubscription.findMany({
+      where: {
+        status: RxSubscriptionStatus.ACTIVE,
+        autoExecuteEnabled: true,
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }],
+      },
+      take: 50,
+      select: { id: true },
+    });
+    const decisions = [];
+    for (const row of due) {
+      const result = await this.rxFulfillmentSafety.evaluateSubscriptionAutoExecute({
+        subscriptionId: row.id,
+      });
+      await this.rxFulfillmentSafety.auditGateDecision({
+        decision: result,
+        context: 'auto_execute',
+      });
+      decisions.push({
+        subscription_id: row.id,
+        decision: result.decision,
+        reason_code: result.reason_code,
+        execution_authorized: result.execution_authorized,
+      });
+    }
+    // Never auto-execute in this software path — OD-RX-REFILL / ED-R5E-01.
+    return {
+      executed: 0,
+      skipped:
+        due.length === 0
+          ? 'auto_execute_disabled_ed_r5e_01'
+          : 'auto_execute_worker_not_authorized',
+      decisions,
+    };
+  }
+
+  private async subscriptionPolicyDocument(countryId: string) {
+    const country = await this.prisma.country.findUniqueOrThrow({ where: { id: countryId } });
+    const resolved = await this.policy.resolvePublished(country.isoAlpha2);
+    return resolved?.document ?? null;
   }
 
   private async requireOwnedSubscription(principal: Principal, prescriptionId: string) {

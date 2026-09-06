@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, View } from 'react-native';
-import { createSessionStore, requestOtp, verifyOtp } from '@world-pharma/shell-core';
+import { SafeAreaView } from 'react-native';
+import { createSessionStore } from '@world-pharma/shell-core';
 import {
   NativeButton,
   NativeCard,
@@ -8,9 +8,16 @@ import {
   NativeInput,
   NativeLoadingState,
   NativeNetworkErrorState,
-  NativePermissionDeniedState,
+  NativeOtpSignIn,
   NativeSessionExpiredState,
   NativeText,
+  OpsShell,
+  OpsKpiRow,
+  OpsWorkCard,
+  OpsStopRow,
+  OpsGiantButton,
+  OpsAccessGate,
+  openTurnByTurn,
 } from '@world-pharma/ui-kit/native';
 import {
   PhlebotomistApiError,
@@ -18,31 +25,39 @@ import {
   arriveJob,
   collectJob,
   failJob,
+  createPhlebotomistSupportTicket,
+  fetchPhlebotomistInbox,
+  fetchPhlebotomistSupportTickets,
   getJob,
   handoverJob,
   listJobs,
+  markPhlebotomistInboxRead,
   sealJob,
   verifyJob,
   type CollectionJob,
+  type PhlebotomistInboxItem,
+  type PhlebotomistSupportTicket,
 } from './phlebotomist-api';
 import { PHLEBOTOMIST_TABS, phlebotomistMobileScreen, type PhlebotomistTab } from './navigation';
+import { phleboPrimaryLabel, phleboPrimaryStep, phlebotomistStatusLabel } from './phlebotomist-status-labels';
 
 type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'expired';
 
 export function App() {
   const store = useMemo(() => createSessionStore(), []);
   const [session, setSession] = useState(store.snapshot());
-  const [email, setEmail] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [signInBusy, setSignInBusy] = useState(false);
-
   const [tab, setTab] = useState<PhlebotomistTab>('jobs');
   const [jobs, setJobs] = useState<CollectionJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CollectionJob | null>(null);
   const [barcode, setBarcode] = useState('');
   const [viewState, setViewState] = useState<ViewState>('idle');
+  const [supportTickets, setSupportTickets] = useState<PhlebotomistSupportTicket[]>([]);
+  const [inbox, setInbox] = useState<PhlebotomistInboxItem[]>([]);
+  const [supportSubject, setSupportSubject] = useState('');
+  const [supportBody, setSupportBody] = useState('');
+  const [supportMessage, setSupportMessage] = useState<string | null>(null);
+  const [denyDetail, setDenyDetail] = useState<string | null>(null);
 
   const token = store.getAccessToken();
   const screen = phlebotomistMobileScreen(session, tab);
@@ -51,6 +66,7 @@ export function App() {
     (err: unknown) => {
       if (err instanceof PhlebotomistApiError) {
         if (err.status === 403) {
+          setDenyDetail(err.message);
           setViewState('forbidden');
           return;
         }
@@ -104,6 +120,46 @@ export function App() {
     }
   }, [session.status, tab, selectedId, loadJobs]);
 
+  const loadSupport = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    setViewState('loading');
+    try {
+      const res = await fetchPhlebotomistSupportTickets(token);
+      setSupportTickets(res.data);
+      setViewState('idle');
+    } catch (err) {
+      handleError(err);
+    }
+  }, [token, handleError]);
+
+  useEffect(() => {
+    if (session.status === 'authenticated' && tab === 'support') {
+      void loadSupport();
+    }
+  }, [session.status, tab, loadSupport]);
+
+  const loadInbox = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    setViewState('loading');
+    try {
+      const res = await fetchPhlebotomistInbox(token);
+      setInbox(res.data ?? []);
+      setViewState('idle');
+    } catch (err) {
+      handleError(err);
+    }
+  }, [token, handleError]);
+
+  useEffect(() => {
+    if (session.status === 'authenticated' && tab === 'inbox') {
+      void loadInbox();
+    }
+  }, [session.status, tab, loadInbox]);
+
   const runAction = async (fn: () => Promise<unknown>) => {
     setViewState('loading');
     try {
@@ -119,59 +175,19 @@ export function App() {
     }
   };
 
-  const sendOtp = async () => {
-    setSignInBusy(true);
-    try {
-      const result = await requestOtp(email, 'LOGIN');
-      setChallengeId(result.challengeId);
-      if (result.devCode) {
-        setOtpCode(result.devCode);
-      }
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
-    }
-  };
-
-  const verifySignIn = async () => {
-    if (!challengeId) {
-      await sendOtp();
-      return;
-    }
-    setSignInBusy(true);
-    try {
-      const result = await verifyOtp(challengeId, otpCode, 'customer');
-      store.authenticate({
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        audience: 'customer',
-      });
-      setSession(store.snapshot());
-      setViewState('idle');
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
-    }
-  };
-
   if (screen === 'sign-in') {
     return (
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={{ flex: 1, padding: 16, gap: 12 }}>
-          <NativeText variant="h1">Phlebotomist</NativeText>
-          <NativeCard>
-            <NativeInput label="Email" value={email} onChangeText={setEmail} />
-            {challengeId ? <NativeInput label="One-time code" value={otpCode} onChangeText={setOtpCode} /> : null}
-            <NativeButton
-              label={signInBusy ? 'Please wait…' : challengeId ? 'Verify & sign in' : 'Send OTP'}
-              onPress={() => void (challengeId ? verifySignIn() : sendOtp())}
-            />
-          </NativeCard>
-          {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => setViewState('idle')} /> : null}
-        </View>
-      </SafeAreaView>
+      <NativeOtpSignIn
+        portalTitle="World Pharma Phlebotomy"
+        portalDescription="Field collection console — route, verify, barcode seal, chain of custody."
+        audience="customer"
+        staffEmail="sandbox-phlebotomist@dev.local"
+        onAuthenticated={({ accessToken, refreshToken }) => {
+          store.authenticate({ accessToken, refreshToken, audience: 'customer' });
+          setSession(store.snapshot());
+          setViewState('idle');
+        }}
+      />
     );
   }
 
@@ -192,51 +208,134 @@ export function App() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
-      <View style={{ flex: 1, padding: 16, gap: 12 }}>
-        <NativeText variant="h1">Sample collection</NativeText>
-
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          {PHLEBOTOMIST_TABS.map((item) => (
-            <NativeButton
-              key={item.id}
-              label={item.label}
-              variant={tab === item.id ? 'primary' : 'secondary'}
-              onPress={() => {
-                setTab(item.id);
-                setSelectedId(null);
-                setDetail(null);
-              }}
-            />
-          ))}
-        </View>
-
-        {viewState === 'loading' ? <NativeLoadingState /> : null}
-        {viewState === 'forbidden' ? <NativePermissionDeniedState /> : null}
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#07111A' }}>
+      <OpsShell
+        product="Phlebotomy"
+        accent="#B794F4"
+        status="Field collection"
+        tabs={PHLEBOTOMIST_TABS}
+        active={tab}
+        onSelect={(id) => {
+          setTab(id as PhlebotomistTab);
+          setSelectedId(null);
+          setDetail(null);
+        }}
+      >
+        {viewState === 'loading' ? <NativeLoadingState mode="dark" /> : null}
+        {viewState === 'forbidden' ? (
+          <OpsAccessGate
+            detail={denyDetail}
+            staffEmail="sandbox-phlebotomist@dev.local"
+            onRetry={() => void loadJobs()}
+            onSignOut={() => {
+              store.signOut();
+              setSession(store.snapshot());
+              setJobs([]);
+              setDetail(null);
+              setSelectedId(null);
+              setDenyDetail(null);
+              setViewState('idle');
+            }}
+          />
+        ) : null}
         {viewState === 'network' ? (
-          <NativeNetworkErrorState onRetry={() => (selectedId ? void loadDetail(selectedId) : void loadJobs())} />
+          <NativeNetworkErrorState mode="dark" onRetry={() => (selectedId ? void loadDetail(selectedId) : tab === 'support' ? void loadSupport() : tab === 'inbox' ? void loadInbox() : void loadJobs())} />
         ) : null}
 
-        {viewState === 'idle' && tab === 'jobs' && !selectedId ? (
-          jobs.length ? (
-            jobs.map((job: CollectionJob) => (
-              <NativeCard key={job.id}>
-                <NativeText>{`${job.test_title} — ${job.coc_status ?? job.status}`}</NativeText>
-                <NativeText variant="caption">
-                  {`${job.collection_mode ?? '—'} · ${job.customer_display} · ${job.city ?? '—'}`}
-                </NativeText>
-                <NativeButton label="Open" variant="secondary" onPress={() => void loadDetail(job.id)} />
-              </NativeCard>
+        {viewState === 'idle' && tab === 'inbox' ? (
+          inbox.length ? (
+            inbox.map((row) => (
+              <OpsWorkCard
+                key={row.id}
+                title={row.title}
+                meta={row.body}
+                status={row.read ? 'Read' : 'New'}
+                actionLabel={row.read ? undefined : 'Mark read'}
+                onAction={
+                  row.read
+                    ? undefined
+                    : () =>
+                        void markPhlebotomistInboxRead(token!, row.id)
+                          .then(() => loadInbox())
+                          .catch(handleError)
+                }
+              />
             ))
           ) : (
-            <NativeEmptyState title="No collection jobs" description="Assigned jobs appear after booking confirmation." />
+            <NativeEmptyState title="Inbox empty" description="Collection dispatch notices appear here." />
           )
         ) : null}
 
-        {viewState === 'idle' && tab === 'jobs' && detail ? (
+        {viewState === 'idle' && tab === 'support' ? (
           <NativeCard>
+            <NativeText variant="h2">Control tower</NativeText>
+            <NativeInput label="Subject" value={supportSubject} onChangeText={setSupportSubject} />
+            <NativeInput label="Details" value={supportBody} onChangeText={setSupportBody} />
+            {supportMessage ? <NativeText variant="caption">{supportMessage}</NativeText> : null}
             <NativeButton
-              label="Back to list"
+              label="Submit ticket"
+              onPress={() =>
+                void (async () => {
+                  if (!token || !supportSubject.trim() || !supportBody.trim()) {
+                    setSupportMessage('Subject and body are required.');
+                    return;
+                  }
+                  setViewState('loading');
+                  try {
+                    await createPhlebotomistSupportTicket(token, {
+                      subject: supportSubject.trim(),
+                      body: supportBody.trim(),
+                    });
+                    setSupportSubject('');
+                    setSupportBody('');
+                    setSupportMessage('Ticket recorded.');
+                    await loadSupport();
+                    setViewState('idle');
+                  } catch (err) {
+                    handleError(err);
+                  }
+                })()
+              }
+            />
+          </NativeCard>
+        ) : null}
+
+        {viewState === 'idle' && tab === 'jobs' && !selectedId ? (
+          <>
+            <OpsKpiRow
+              items={[
+                { label: 'Open', value: jobs.filter((j) => phleboPrimaryStep(j) !== 'done' && phleboPrimaryStep(j) !== 'failed').length },
+                { label: 'Done', value: jobs.filter((j) => phleboPrimaryStep(j) === 'done').length },
+                { label: 'Stops', value: jobs.length },
+              ]}
+            />
+            {jobs.length ? (
+              jobs.map((job: CollectionJob) => {
+                const step = phleboPrimaryStep(job);
+                const dest = [job.line1_masked, job.city].filter(Boolean).join(', ') || 'Home collection';
+                return (
+                  <OpsWorkCard
+                    key={job.id}
+                    kicker={job.collection_mode ?? 'HOME'}
+                    title={job.test_title}
+                    meta={`${dest} · ${job.customer_display}`}
+                    status={phlebotomistStatusLabel(job.coc_status ?? job.status)}
+                    onOpen={() => void loadDetail(job.id)}
+                    actionLabel={step === 'done' || step === 'failed' || step === 'other' ? undefined : phleboPrimaryLabel(step)}
+                    onAction={step === 'done' || step === 'failed' || step === 'other' ? undefined : () => void loadDetail(job.id)}
+                  />
+                );
+              })
+            ) : (
+              <NativeEmptyState title="No collection stops" description="Assigned home collections appear after booking confirmation." />
+            )}
+          </>
+        ) : null}
+
+        {viewState === 'idle' && tab === 'jobs' && detail ? (
+          <>
+            <NativeButton
+              label="Back to route"
               variant="secondary"
               onPress={() => {
                 setSelectedId(null);
@@ -244,36 +343,58 @@ export function App() {
                 setBarcode('');
               }}
             />
-            <NativeText variant="h2">{detail.coc_status ?? detail.status}</NativeText>
-            <NativeText>{detail.test_title}</NativeText>
-            <NativeText>{`Customer: ${detail.customer_display}`}</NativeText>
-            <NativeText>{`Mode: ${detail.collection_mode ?? '—'}`}</NativeText>
-            {detail.line1_masked ? <NativeText>{`Address: ${detail.line1_masked}`}</NativeText> : null}
-            <NativeText variant="caption">{detail.note ?? ''}</NativeText>
-
-            {!detail.is_mine && !detail.assignee_id ? (
-              <NativeButton label="Accept job" onPress={() => void runAction(() => acceptJob(token!, detail.id))} />
+            <OpsStopRow
+              kind="pickup"
+              title={detail.customer_display}
+              address={[detail.line1_masked, detail.city].filter(Boolean).join(', ') || 'Patient collection address'}
+              onNavigate={() =>
+                void openTurnByTurn([detail.line1_masked, detail.city].filter(Boolean).join(', ') || detail.city || 'home collection')
+              }
+            />
+            <OpsStopRow
+              kind="drop"
+              title="Lab receiving dock"
+              address="World Pharma Lab receiving"
+              onNavigate={() => void openTurnByTurn('World Pharma Lab receiving dock')}
+            />
+            {(() => {
+              const step = phleboPrimaryStep(detail);
+              if (step === 'accept') {
+                return <OpsGiantButton label={phleboPrimaryLabel(step)} onPress={() => void runAction(() => acceptJob(token!, detail.id))} />;
+              }
+              if (step === 'arrive') {
+                return <OpsGiantButton label={phleboPrimaryLabel(step)} onPress={() => void runAction(() => arriveJob(token!, detail.id))} />;
+              }
+              if (step === 'verify') {
+                return <OpsGiantButton label={phleboPrimaryLabel(step)} onPress={() => void runAction(() => verifyJob(token!, detail.id))} />;
+              }
+              if (step === 'collect') {
+                return <OpsGiantButton label={phleboPrimaryLabel(step)} onPress={() => void runAction(() => collectJob(token!, detail.id))} />;
+              }
+              if (step === 'seal') {
+                return (
+                  <NativeCard>
+                    <NativeInput label="Container barcode" value={barcode} onChangeText={setBarcode} />
+                    <OpsGiantButton
+                      label={phleboPrimaryLabel(step)}
+                      onPress={() => void runAction(() => sealJob(token!, detail.id, barcode || 'TUBE-0001'))}
+                    />
+                  </NativeCard>
+                );
+              }
+              if (step === 'handover') {
+                return <OpsGiantButton label={phleboPrimaryLabel(step)} onPress={() => void runAction(() => handoverJob(token!, detail.id))} />;
+              }
+              return <NativeText mode="dark">{phleboPrimaryLabel(step)}</NativeText>;
+            })()}
+            {detail.is_mine && phleboPrimaryStep(detail) !== 'done' && phleboPrimaryStep(detail) !== 'failed' ? (
+              <OpsGiantButton
+                label="Mark failed"
+                tone="warn"
+                onPress={() => void runAction(() => failJob(token!, detail.id, 'REJECTED'))}
+              />
             ) : null}
-            {detail.is_mine ? (
-              <>
-                <NativeButton label="Arrive" variant="secondary" onPress={() => void runAction(() => arriveJob(token!, detail.id))} />
-                <NativeButton label="Verify customer" variant="secondary" onPress={() => void runAction(() => verifyJob(token!, detail.id))} />
-                <NativeButton label="Collect specimen" variant="secondary" onPress={() => void runAction(() => collectJob(token!, detail.id))} />
-                <NativeInput label="Container barcode" value={barcode} onChangeText={setBarcode} />
-                <NativeButton
-                  label="Seal"
-                  variant="secondary"
-                  onPress={() => void runAction(() => sealJob(token!, detail.id, barcode || 'TUBE-0001'))}
-                />
-                <NativeButton label="Hand over custody" onPress={() => void runAction(() => handoverJob(token!, detail.id))} />
-                <NativeButton
-                  label="Mark failed"
-                  variant="danger"
-                  onPress={() => void runAction(() => failJob(token!, detail.id, 'REJECTED'))}
-                />
-              </>
-            ) : null}
-          </NativeCard>
+          </>
         ) : null}
 
         <NativeButton
@@ -287,7 +408,7 @@ export function App() {
             setSelectedId(null);
           }}
         />
-      </View>
+      </OpsShell>
     </SafeAreaView>
   );
 }

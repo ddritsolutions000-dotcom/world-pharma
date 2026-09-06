@@ -3,7 +3,13 @@ import type { Audience } from './session';
 
 export type ApiCallResult<T> =
   | { ok: true; status: number; data: T }
-  | { ok: false; status: number; error: string; kind: 'network' | 'forbidden' | 'unauthorized' | 'error' };
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      kind: 'network' | 'forbidden' | 'unauthorized' | 'error';
+      code?: string;
+    };
 
 export async function apiCall<T>(
   path: string,
@@ -13,13 +19,14 @@ export async function apiCall<T>(
     body?: unknown;
     headers?: Record<string, string>;
     env?: Record<string, string | undefined>;
+    baseUrl?: string;
     onUnauthorized?: () => void;
   } = {},
 ): Promise<ApiCallResult<T>> {
   try {
     const res = await apiFetch(path, {
       method: options.method ?? 'GET',
-      baseUrl: apiBaseUrl(options.env),
+      baseUrl: options.baseUrl ?? apiBaseUrl(options.env),
       headers: {
         ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
         'x-request-id': createCorrelationId(),
@@ -33,15 +40,40 @@ export async function apiCall<T>(
       return { ok: false, status: 401, error: 'Session expired.', kind: 'unauthorized' };
     }
     if (res.status === 403) {
-      return { ok: false, status: 403, error: 'Permission denied.', kind: 'forbidden' };
+      try {
+        const body = (await res.json()) as { detail?: string; title?: string; code?: string };
+        return {
+          ok: false,
+          status: 403,
+          error: body.detail ?? body.title ?? 'Permission denied.',
+          kind: 'forbidden',
+          code: body.code,
+        };
+      } catch {
+        return { ok: false, status: 403, error: 'Permission denied.', kind: 'forbidden' };
+      }
     }
-    const body = (await res.json()) as T & { detail?: string };
+    const raw = await res.text();
+    let body = {} as T & { detail?: string; code?: string };
+    if (raw) {
+      try {
+        body = JSON.parse(raw) as T & { detail?: string; code?: string };
+      } catch {
+        return {
+          ok: false,
+          status: res.status,
+          error: res.ok ? 'Invalid response.' : 'Request failed.',
+          kind: 'error',
+        };
+      }
+    }
     if (!res.ok) {
       return {
         ok: false,
         status: res.status,
         error: body.detail ?? 'Request failed.',
         kind: 'error',
+        code: body.code,
       };
     }
     return { ok: true, status: res.status, data: body };
@@ -92,7 +124,10 @@ export type StoredSession = {
   accessToken: string;
   refreshToken: string;
   audience: Audience;
+  cookieMode?: boolean;
 };
+
+export const COOKIE_SESSION_TOKEN = '__cookie__';
 
 const STORAGE_KEY = 'wp_session_v1';
 
@@ -106,6 +141,14 @@ export function loadStoredSession(): StoredSession | null {
       return null;
     }
     const parsed = JSON.parse(raw) as StoredSession;
+    if (parsed.cookieMode && parsed.audience) {
+      return {
+        accessToken: COOKIE_SESSION_TOKEN,
+        refreshToken: COOKIE_SESSION_TOKEN,
+        audience: parsed.audience,
+        cookieMode: true,
+      };
+    }
     if (!parsed.accessToken || !parsed.refreshToken || !parsed.audience) {
       return null;
     }
@@ -122,6 +165,13 @@ export function saveStoredSession(session: StoredSession | null): void {
   const storage = (globalThis as { localStorage: Storage }).localStorage;
   if (!session) {
     storage.removeItem(STORAGE_KEY);
+    return;
+  }
+  if (session.cookieMode) {
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ audience: session.audience, cookieMode: true, accessToken: '', refreshToken: '' }),
+    );
     return;
   }
   storage.setItem(STORAGE_KEY, JSON.stringify(session));

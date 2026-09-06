@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from './current-principal';
 import { JwtAuthGuard } from './jwt.guard';
@@ -13,6 +13,12 @@ import { CompanyAuthorityService } from './company-authority.service';
 @RequireAudiences('admin')
 export class CompanyAuthorityController {
   constructor(private readonly authority: CompanyAuthorityService) {}
+
+  @Get('grants')
+  @RequirePermissions('rbac:grant_company')
+  grants() {
+    return this.authority.listGrantRequests();
+  }
 
   @Post('memberships')
   @HttpCode(200)
@@ -66,5 +72,24 @@ export class CompanyAuthorityController {
       permissions: body.permissions ?? [],
       ttlMinutes: body.ttl_minutes,
     });
+  }
+
+  @Get('break-glass/eligible-permissions')
+  @RequirePermissions('security:break_glass')
+  breakGlassEligible() {
+    return this.authority.listBreakGlassEligiblePermissions();
+  }
+
+  @Get('break-glass')
+  @RequirePermissions('security:break_glass')
+  listBreakGlass(@Query('active_only') activeOnly?: string) {
+    return this.authority.listPlatformBreakGlass(activeOnly !== 'false');
+  }
+
+  @Post('break-glass/:grantId/revoke')
+  @HttpCode(200)
+  @RequirePermissions('security:break_glass')
+  revokeBreakGlass(@Param('grantId') grantId: string, @CurrentPrincipal() principal: Principal) {
+    return this.authority.revokeBreakGlass({ actorId: principal.personId, grantId });
   }
 }

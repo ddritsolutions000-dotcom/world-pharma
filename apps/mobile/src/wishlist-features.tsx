@@ -9,10 +9,11 @@ import {
   NativeText,
 } from '@world-pharma/ui-kit/native';
 import type { FeatureCtx } from './customer-features';
-import { fetchWishlist, removeWishlistItem, type WishlistItem } from './commerce-api';
+import { fetchWishlist, removeWishlistItem, addCartItem, newIdempotencyKey, type WishlistItem } from './commerce-api';
 
 export function WishlistScreen({ ctx, country }: { ctx: FeatureCtx; country: string }) {
   const [items, setItems] = useState<WishlistItem[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     ctx.setViewState('loading');
@@ -33,6 +34,7 @@ export function WishlistScreen({ ctx, country }: { ctx: FeatureCtx; country: str
     <View style={{ gap: 12 }}>
       <NativeButton label="Back" variant="secondary" onPress={ctx.onBack} />
       <NativeText variant="h2">Wishlist</NativeText>
+      {message ? <NativeText variant="caption">{message}</NativeText> : null}
       {ctx.viewState === 'loading' ? <NativeLoadingState title="Loading wishlist…" /> : null}
       {ctx.viewState === 'network' ? (
         <NativeNetworkErrorState onRetry={() => void load()} />
@@ -48,6 +50,21 @@ export function WishlistScreen({ ctx, country }: { ctx: FeatureCtx; country: str
                 <NativeText variant="caption">
                   {item.available ? `${item.currency} ${item.sell_minor ?? '—'}` : 'Unavailable'}
                 </NativeText>
+                <NativeButton
+                  label={item.available ? 'Add to cart' : 'Unavailable'}
+                  disabled={!item.available}
+                  onPress={() => {
+                    void addCartItem(
+                      ctx.token,
+                      country,
+                      item.catalog_offer_id,
+                      1,
+                      newIdempotencyKey('wishlist-cart'),
+                    )
+                      .then(() => setMessage('Added to cart.'))
+                      .catch((err: Error) => setMessage(err.message ?? 'Could not add to cart.'));
+                  }}
+                />
                 <NativeButton
                   label="Remove"
                   variant="secondary"

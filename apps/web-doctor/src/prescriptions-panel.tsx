@@ -10,7 +10,6 @@ import {
   Heading,
   Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Text,
 } from '@world-pharma/ui-kit/web';
@@ -28,6 +27,7 @@ import {
   type PrescriptionContext,
   type PrescriptionLineInput,
 } from './doctor-api';
+import { DoctorLoadFailure, mapDoctorApiFailure } from './doctor-load-state';
 
 const emptyLine = (): PrescriptionLineInput => ({
   clinical_concept_code: '',
@@ -59,6 +59,7 @@ export function DoctorPrescriptionsPanel() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<'network' | 'forbidden' | 'error' | 'policy' | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [encounters, setEncounters] = useState<Array<{ encounterId: string; label: string }>>([]);
@@ -82,9 +83,11 @@ export function DoctorPrescriptionsPanel() {
     }
     setLoading(true);
     setError(null);
+    setErrorDetail(null);
     const result = await fetchDoctorPrescriptions({ token, onUnauthorized });
     if (!result.ok) {
-      setError(result.kind === 'forbidden' ? 'forbidden' : result.kind === 'network' ? 'network' : 'error');
+      setError(mapDoctorApiFailure(result.kind));
+      setErrorDetail(result.error);
       setRows([]);
     } else {
       setRows(result.data.prescriptions ?? []);
@@ -397,18 +400,17 @@ export function DoctorPrescriptionsPanel() {
   if (loading && step === 'list') {
     return <LoadingState label="Loading prescriptions" />;
   }
-  if (error === 'forbidden' && step === 'list') {
-    return <PermissionDeniedState />;
-  }
-  if ((error === 'network' || error === 'error') && step === 'list') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (error && (error === 'forbidden' || error === 'network' || error === 'error') && step === 'list') {
+    return <DoctorLoadFailure error={error} detail={errorDetail} onRetry={() => void load()} />;
   }
 
   return (
     <>
       <Text tone="secondary">
-        R5-B prescribing: encounter → compose → review → issue. Customer cannot edit. OD-R5B-02 draft-line PATCH is
-        deferred — recreate draft to change lines after create.
+        R5-B sandbox prescribing: encounter → compose → review → issue. Customers cannot edit drafts. Live eRx providers
+        remain EXTERNAL_GATED — this console is for sandbox workflow practice only.
+        deferred — recreate draft to change lines after create. eRx uses sandbox adapter when enabled — not a live
+        network.
       </Text>
       {message ? <Text>{message}</Text> : null}
       {busy ? <LoadingState label="Saving prescription" /> : null}
@@ -616,7 +618,7 @@ export function DoctorPrescriptionsPanel() {
               {detail.status === 'DRAFT' ? (
                 <>
                   <Text size="caption" tone="secondary">
-                    To change lines, cancel this draft and create a new one (OD-R5B-02 PATCH deferred).
+                    To change lines, cancel this draft and create a new one (sandbox drafts are immutable after compose).
                   </Text>
                   <label>
                     <input

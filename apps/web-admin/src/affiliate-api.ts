@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+import { adminJson, AdminHttpError } from './admin-http';
 
 export class AffiliateApiError extends Error {
   constructor(
@@ -10,24 +10,15 @@ export class AffiliateApiError extends Error {
   }
 }
 
-async function parseJson(res: Response) {
-  return res.json().catch(() => ({}));
-}
-
 async function affiliateFetch(token: string, path: string, init?: RequestInit) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = await parseJson(res);
-  if (!res.ok) {
-    throw new AffiliateApiError((body.detail as string) ?? 'request_failed', res.status);
+  try {
+    return await adminJson(token, path, init);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new AffiliateApiError(err.message, err.status);
+    }
+    throw new AffiliateApiError('request_failed', 0);
   }
-  return body;
 }
 
 export type AffiliatePartner = {
@@ -62,4 +53,16 @@ export function adminCreateReferralCode(
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `admin-aff-${input.code}` },
     body: JSON.stringify(input),
   }) as Promise<AdminReferralCode>;
+}
+
+export function approveAffiliateLiability(token: string, orderId: string) {
+  return affiliateFetch(token, `/api/v1/admin/finance/affiliate/${orderId}/approve`, {
+    method: 'POST',
+  });
+}
+
+export function reverseAffiliateLiability(token: string, orderId: string) {
+  return affiliateFetch(token, `/api/v1/admin/finance/affiliate/${orderId}/reverse`, {
+    method: 'POST',
+  });
 }

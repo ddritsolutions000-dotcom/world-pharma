@@ -53,22 +53,33 @@ export function LoadingState({ label = 'Loading' }: { label?: string }) {
   );
 }
 
-export function NetworkErrorState(props: { action?: { label: string; onClick: () => void } }) {
+export function NetworkErrorState(props: {
+  action?: { label: string; onClick: () => void };
+  description?: string;
+}) {
   return (
     <ErrorState
       title="Connection problem"
-      description="Check your network and retry. Nothing was charged."
+      description={props.description ?? 'Check your network and retry.'}
       action={props.action}
     />
   );
 }
 
-export function PermissionDeniedState() {
+export function PermissionDeniedState(props?: {
+  title?: string;
+  description?: string;
+  action?: { label: string; onClick: () => void };
+}) {
   return (
     <StateFrame
       icon="lock"
-      title="You do not have access"
-      description="This area is limited to authorized roles."
+      title={props?.title ?? 'You do not have access'}
+      description={
+        props?.description ??
+        'This area is limited to authorized roles. Sign in with the correct account, or ask an administrator for access.'
+      }
+      action={props?.action}
     />
   );
 }

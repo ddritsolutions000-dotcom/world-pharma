@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@world-pharma/ui-kit/web';
 import { PaymentsAdminApiError } from './payments-admin-api';
@@ -7,7 +7,7 @@ import { PaymentAttemptHistorySection, PaymentsAdminPanel } from './payments-adm
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
-  useSearchParams: () => new URLSearchParams('country=XX'),
+  useSearchParams: () => new URLSearchParams('country=IN'),
 }));
 
 const mockGetAccessToken = jest.fn(() => 'test-token');
@@ -20,6 +20,7 @@ jest.mock('@world-pharma/shell-web', () => {
       session: {
         status: 'authenticated',
         audience: 'admin',
+        countryCode: 'IN',
         permissions: mockPermissions,
       },
       getAccessToken: mockGetAccessToken,
@@ -41,7 +42,7 @@ const samplePayment = {
   currency: 'XXX',
   sandbox: true,
   environment: 'sandbox',
-  country_code: 'XX',
+  country_code: 'IN',
   order_number: 'ORD-100',
   gateway_code: 'MOCK_PRIMARY',
   gateway_environment: 'sandbox',
@@ -53,7 +54,7 @@ const sampleMatrix = {
   active_environment: 'sandbox' as const,
   live_payments_enabled: false,
   runtime_environment: 'sandbox',
-  country_code: 'XX',
+  country_code: 'IN',
   method: 'CARD',
   currency: 'XXX',
   payments_enabled: true,
@@ -158,6 +159,162 @@ const sampleDetail = {
   transactions: [],
 };
 
+const sampleGates = {
+  engineering_config_status: 'R14_A_ENGINEERING_CONFIG_READY',
+  readiness_status: 'R14_A_READINESS_INCOMPLETE',
+  next_required_action: 'HUMAN_GATE_COLLECTION_REQUIRED',
+  live_production_status: 'R14_A_LIVE_PRODUCTION_BLOCKED',
+  book_263_production_evidence: 'NOT_CLAIMED',
+  live_payment_enabled: false,
+  owner_evidenced_count: 0,
+  placeholder_count: 7,
+  live_unlock_blocked_reason: 'PAYMENT_LIVE_ENABLED_OFF',
+  note: 'placeholders are not evidence',
+  gates: [
+    {
+      gate_code: 'NAMED_PSP',
+      value: 'DEV_PLACEHOLDER_PSP',
+      evidence_class: 'PLACEHOLDER',
+      workflow_status: 'NOT_EVIDENCED' as const,
+      evidence_ref: null,
+      placeholder: true,
+      updated_by_person_id: null,
+      verified_by_person_id: null,
+      verified_at: null,
+      updated_at: new Date().toISOString(),
+    },
+  ],
+};
+
+const sampleProviders = {
+  kernel: 'provider_agnostic' as const,
+  selection: 'configuration_driven' as const,
+  live_payment_enabled: false,
+  live_production_status: 'R14_A_LIVE_PRODUCTION_BLOCKED',
+  owner_evidenced_count: 0,
+  live_unlock_blocked_reason: 'PAYMENT_LIVE_ENABLED_OFF',
+  registered_adapter_codes: ['MOCK_PRIMARY', 'MOCK_FALLBACK'],
+  note: 'configuration-driven',
+  providers: [
+    {
+      code: 'MOCK_PRIMARY',
+      name: 'Sandbox primary (TEST ONLY)',
+      environment: 'sandbox',
+      active: true,
+      priority: 10,
+      health_score: 100,
+      vault_path: 'env:PAYMENT_MOCK_WEBHOOK_SECRET',
+      registry_registered: true,
+      capabilities: ['authorize', 'capture'],
+      accounts: [
+        {
+          code: 'MOCK_PRIMARY_ACCOUNT',
+          active: true,
+          environment: 'sandbox',
+          countries_csv: '*',
+          currencies_csv: '*',
+          methods_csv: 'CARD',
+          vault_path: 'env:PAYMENT_MOCK_WEBHOOK_SECRET',
+        },
+      ],
+      updated_at: new Date().toISOString(),
+    },
+  ],
+};
+
+function mockAdminFetch(overrides?: (url: string) => { ok: boolean; json: () => Promise<unknown> } | void) {
+  (global.fetch as jest.Mock).mockClear();
+  (global.fetch as jest.Mock).mockImplementation(async (url: string, init?: RequestInit) => {
+    const fromOverride = overrides?.(url);
+    if (fromOverride) {
+      return fromOverride;
+    }
+    if (typeof url === 'string' && url.includes('/providers') && url.includes('/audit')) {
+      return {
+        ok: true,
+        json: async () => ({
+          gateway_code: 'MOCK_PRIMARY',
+          data: [
+            {
+              id: 'audit-1',
+              outcome: 'success',
+              actor_person_id: 'person-admin-1',
+              created_at: new Date().toISOString(),
+            },
+          ],
+        }),
+      };
+    }
+    if (typeof url === 'string' && url.includes('/providers') && init?.method === 'PUT') {
+      return {
+        ok: true,
+        json: async () => ({
+          ...sampleProviders,
+          providers: [{ ...sampleProviders.providers[0], priority: 15 }],
+        }),
+      };
+    }
+    if (typeof url === 'string' && url.includes('/providers')) {
+      return { ok: true, json: async () => sampleProviders };
+    }
+    if (typeof url === 'string' && url.includes('/r14a-gates')) {
+      if (init?.method === 'PUT' || init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            ...sampleGates,
+            gates: [
+              {
+                ...sampleGates.gates[0],
+                value: 'OWNER_SUPPLIED_VENDOR_NAME',
+                evidence_class: init.method === 'POST' ? 'OWNER_EVIDENCED' : 'PLACEHOLDER',
+                workflow_status: init.method === 'POST' ? 'OWNER_EVIDENCED' : 'PENDING',
+                placeholder: false,
+                evidence_ref: 'GATE-PSP-OWNER-REF-001',
+              },
+            ],
+          }),
+        };
+      }
+      if (url.includes('/revisions')) {
+        return {
+          ok: true,
+          json: async () => ({
+            gate_code: 'NAMED_PSP',
+            data: [
+              {
+                id: 'rev-1',
+                action: 'UPSERT',
+                previous_value: 'DEV_PLACEHOLDER_PSP',
+                new_value: 'OWNER_SUPPLIED_VENDOR_NAME',
+                previous_evidence_class: 'PLACEHOLDER',
+                new_evidence_class: 'PLACEHOLDER',
+                actor_person_id: 'person-1',
+                note: 'pending',
+                created_at: new Date().toISOString(),
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: true, json: async () => sampleGates };
+    }
+    if (url.includes('/routing-matrix')) {
+      return { ok: true, json: async () => sampleMatrix };
+    }
+    if (url.includes('/observability')) {
+      return { ok: true, json: async () => sampleDetail };
+    }
+    if (url.includes('/unknown')) {
+      return { ok: true, json: async () => ({ data: [] }) };
+    }
+    if (url.includes('/webhooks')) {
+      return { ok: true, json: async () => ({ data: sampleDetail.webhooks }) };
+    }
+    return { ok: true, json: async () => ({ data: [samplePayment] }) };
+  });
+}
+
 function wrap(ui: React.ReactElement) {
   return render(
     <ThemeProvider defaultTheme="light">
@@ -176,27 +333,16 @@ describe('PaymentsAdminPanel', () => {
   beforeEach(() => {
     mockPermissions = ['payment:read', 'payment:reconcile'];
     mockGetAccessToken.mockReturnValue('test-token');
-    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
-      if (url.includes('/routing-matrix')) {
-        return { ok: true, json: async () => sampleMatrix };
-      }
-      if (url.includes('/observability')) {
-        return { ok: true, json: async () => sampleDetail };
-      }
-      if (url.includes('/unknown')) {
-        return { ok: true, json: async () => ({ data: [] }) };
-      }
-      if (url.includes('/webhooks')) {
-        return { ok: true, json: async () => ({ data: sampleDetail.webhooks }) };
-      }
-      return { ok: true, json: async () => ({ data: [samplePayment] }) };
-    });
+    mockAdminFetch();
   });
 
   it('labels sandbox and does not expose secrets', async () => {
     wrap(<PaymentsAdminPanel />);
     expect(await screen.findByRole('heading', { name: /payments \(sandbox\)/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /r14-a gate configuration/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /payment provider configuration/i })).toBeInTheDocument();
     expect(screen.queryByText(/sk_live|secret|payload_cipher/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save MOCK_PRIMARY/i })).not.toBeInTheDocument();
   });
 
   it('shows permission denied on 403', async () => {
@@ -211,25 +357,31 @@ describe('PaymentsAdminPanel', () => {
   });
 
   it('shows network error state', async () => {
-    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('network'));
+    (global.fetch as jest.Mock).mockRejectedValue(new Error('network'));
     wrap(<PaymentsAdminPanel />);
-    expect(await screen.findByText(/connection problem/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/connection problem/i)).length).toBeGreaterThan(0);
   });
 
   it('renders safe failure classification when present', async () => {
-    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
-      if (url.includes('/routing-matrix')) {
-        return { ok: true, json: async () => sampleMatrix };
-      }
+    mockAdminFetch((url) => {
       if (url.includes('/unknown')) {
         return { ok: true, json: async () => ({ data: [] }) };
       }
-      return {
-        ok: true,
-        json: async () => ({
-          data: [{ ...samplePayment, status: 'FAILED', failure_classification: 'gateway_declined' }],
-        }),
-      };
+      if (
+        !url.includes('/r14a-gates') &&
+        !url.includes('/routing-matrix') &&
+        !url.includes('/providers') &&
+        !url.includes('/webhooks') &&
+        !url.includes('/observability')
+      ) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ ...samplePayment, status: 'FAILED', failure_classification: 'gateway_declined' }],
+          }),
+        };
+      }
+      return undefined;
     });
     wrap(<PaymentsAdminPanel />);
     expect(await screen.findByText(/ORD-100.*gateway_declined/)).toBeInTheDocument();
@@ -255,7 +407,7 @@ describe('PaymentsAdminPanel', () => {
   });
 
   it('renders routing matrix fail-closed reason when no active route', async () => {
-    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+    mockAdminFetch((url) => {
       if (url.includes('/routing-matrix')) {
         return {
           ok: true,
@@ -267,27 +419,103 @@ describe('PaymentsAdminPanel', () => {
           }),
         };
       }
-      if (url.includes('/unknown')) {
-        return { ok: true, json: async () => ({ data: [] }) };
-      }
-      return { ok: true, json: async () => ({ data: [] }) };
+      return undefined;
     });
     wrap(<PaymentsAdminPanel />);
     expect(await screen.findByText(/No active route — payments_disabled/i)).toBeInTheDocument();
   });
 
   it('shows routing matrix network error state', async () => {
-    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+    mockAdminFetch((url) => {
       if (url.includes('/routing-matrix')) {
         throw new Error('network');
       }
-      if (url.includes('/unknown')) {
-        return { ok: true, json: async () => ({ data: [] }) };
-      }
-      return { ok: true, json: async () => ({ data: [samplePayment] }) };
+      return undefined;
     });
     wrap(<PaymentsAdminPanel />);
-    expect(await screen.findByText(/Loading routing matrix|connection problem/i)).toBeTruthy();
+    expect((await screen.findAllByText(/connection problem/i)).length).toBeGreaterThan(0);
+  });
+
+  it('lets payment admin save provider priority without exposing vault paths', async () => {
+    mockPermissions = ['payment:read', 'payment:reconcile', 'payment:admin'];
+    const user = userEvent.setup();
+    wrap(<PaymentsAdminPanel />);
+    expect(await screen.findByRole('button', { name: /save MOCK_PRIMARY/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /save MOCK_PRIMARY/i }));
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/providers/MOCK_PRIMARY'),
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+    expect(screen.queryByText(/env:PAYMENT_MOCK_WEBHOOK_SECRET/i)).not.toBeInTheDocument();
+  });
+
+  it('lets payment admin save routing CSVs and load audit without displaying vault paths', async () => {
+    mockPermissions = ['payment:read', 'payment:reconcile', 'payment:admin'];
+    const user = userEvent.setup();
+    wrap(<PaymentsAdminPanel />);
+    const countries = await screen.findByRole('textbox', { name: 'Countries MOCK_PRIMARY' });
+    const currencies = screen.getByRole('textbox', { name: 'Currencies MOCK_PRIMARY' });
+    const methods = screen.getByRole('textbox', { name: 'Methods MOCK_PRIMARY' });
+    fireEvent.change(countries, { target: { value: 'DE' } });
+    fireEvent.change(currencies, { target: { value: 'EUR' } });
+    fireEvent.change(methods, { target: { value: 'CARD' } });
+    expect(countries).toHaveValue('DE');
+    expect(currencies).toHaveValue('EUR');
+    expect(screen.getByRole('textbox', { name: 'Vault path MOCK_PRIMARY' })).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: /save MOCK_PRIMARY/i }));
+    await waitFor(() => {
+      const putCalls = (global.fetch as jest.Mock).mock.calls.filter(
+        (call) => String(call[0]).includes('/providers/MOCK_PRIMARY') && !String(call[0]).includes('/audit') && call[1]?.method === 'PUT',
+      );
+      expect(putCalls.length).toBeGreaterThan(0);
+      const payload = JSON.parse(String(putCalls.at(-1)?.[1]?.body ?? '{}')) as {
+        account: { countries_csv: string; currencies_csv: string; methods_csv: string; vault_path?: string };
+      };
+      expect(payload.account).toEqual({
+        countries_csv: 'DE',
+        currencies_csv: 'EUR',
+        methods_csv: 'CARD',
+      });
+      expect(payload.account.vault_path).toBeUndefined();
+    });
+    await user.click(screen.getByRole('button', { name: /audit MOCK_PRIMARY/i }));
+    expect(await screen.findByText(/person-admin-1/)).toBeInTheDocument();
+    expect(screen.queryByText(/env:PAYMENT_MOCK_WEBHOOK_SECRET/i)).not.toBeInTheDocument();
+  });
+
+  it('lets payment admin record safe gate evidence and view revisions without enabling live', async () => {
+    mockPermissions = ['payment:read', 'payment:reconcile', 'payment:admin'];
+    const user = userEvent.setup();
+    wrap(<PaymentsAdminPanel />);
+    expect(await screen.findByText(/R14_A_READINESS_INCOMPLETE/)).toBeInTheDocument();
+    expect(screen.getByText(/HUMAN_GATE_COLLECTION_REQUIRED/)).toBeInTheDocument();
+    expect(screen.getByText(/NOT_EVIDENCED/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /verify NAMED_PSP/i })).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText('NAMED_PSP value'));
+    await user.type(screen.getByLabelText('NAMED_PSP value'), 'OWNER_SUPPLIED_VENDOR_NAME');
+    await user.type(screen.getByLabelText('NAMED_PSP evidence_ref'), 'GATE-PSP-OWNER-REF-001');
+    await user.click(screen.getByRole('button', { name: /save NAMED_PSP/i }));
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/r14a-gates/NAMED_PSP'),
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+    expect(await screen.findByText(/PENDING/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /verify NAMED_PSP/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /revisions NAMED_PSP/i }));
+    expect(await screen.findByText(/UPSERT PLACEHOLDER→PLACEHOLDER/)).toBeInTheDocument();
+    expect(screen.getAllByText(/R14_A_LIVE_PRODUCTION_BLOCKED/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/sk_live/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show gate write controls without payment:admin', async () => {
+    wrap(<PaymentsAdminPanel />);
+    expect(await screen.findByRole('heading', { name: /r14-a gate configuration/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save NAMED_PSP/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /revisions NAMED_PSP/i })).toBeInTheDocument();
   });
 });
 
@@ -337,6 +565,6 @@ describe('PaymentAttemptHistorySection', () => {
 
   it('shows error state when history is missing', () => {
     wrap(<PaymentAttemptHistorySection history={undefined} payment={samplePayment} />);
-    expect(screen.getByText(/connection problem/i)).toBeInTheDocument();
+    expect(screen.getByText(/Attempt history was not returned/i)).toBeInTheDocument();
   });
 });

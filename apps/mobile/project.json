@@ -11,6 +11,12 @@
         "command": "tsc --noEmit -p apps/mobile/tsconfig.json"
       }
     },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/mobile/tsconfig.json"
+      }
+    },
     "test": {
       "options": {
         "passWithNoTests": true

@@ -10,6 +10,9 @@ import { RequireAudiences } from '../identity/require-audiences';
 import { assertVendorSellerAccess } from './access';
 import { CatalogService } from './catalog.service';
 import { MarketplaceEligibilityService } from './marketplace-eligibility.service';
+import { OfferReadinessService } from './offer-readiness.service';
+import { PharmacyCatalogImportService } from './pharmacy-catalog-import.service';
+import { isSafeExternalHttpUrl } from '../common/url-safety';
 
 const itemSchema = z
   .object({
@@ -25,9 +28,32 @@ const itemSchema = z
         country_code: z.string().length(2),
         available: z.boolean().optional(),
         rx_required: z.boolean().optional(),
+        regulated_class: z.enum(['UNCLASSIFIED', 'OTC', 'RX', 'CONTROLLED', 'DEVICE']).optional(),
+        attributes: z
+          .object({
+            manufacturer_name: z.string().optional(),
+            composition: z.string().optional(),
+            composition_not_applicable: z.boolean().optional(),
+            dosage_form: z.string().optional(),
+            warnings: z.string().optional(),
+            storage: z.string().optional(),
+            usage_directions: z.string().optional(),
+            country_of_manufacture: z.string().optional(),
+          })
+          .optional(),
       }),
     ),
-    assets: z.array(z.object({ public_url: z.string().url(), alt: z.string().optional() })).optional(),
+    assets: z
+      .array(
+        z.object({
+          public_url: z
+            .string()
+            .url()
+            .refine((u) => isSafeExternalHttpUrl(u), 'unsafe_asset_url'),
+          alt: z.string().optional(),
+        }),
+      )
+      .optional(),
   })
   .strict();
 
@@ -70,6 +96,8 @@ export class CatalogVendorController {
     private readonly catalog: CatalogService,
     private readonly prisma: PrismaService,
     private readonly marketplace: MarketplaceEligibilityService,
+    private readonly readiness: OfferReadinessService,
+    private readonly imports: PharmacyCatalogImportService,
   ) {}
 
   @Get('offers')
@@ -108,6 +136,8 @@ export class CatalogVendorController {
         countryCode: row.country_code,
         available: row.available,
         rxRequired: row.rx_required,
+        regulatedClass: row.regulated_class,
+        attributes: row.attributes,
       })),
       assets: parsed.data.assets?.map((asset) => ({ publicUrl: asset.public_url, alt: asset.alt })),
     });
@@ -197,6 +227,51 @@ export class CatalogVendorController {
       costMinor: parsed.data.cost_minor,
       listMinor: parsed.data.list_minor,
       sellMinor: parsed.data.sell_minor,
+    });
+  }
+
+  @Get('offers/:id/readiness')
+  async offerReadiness(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    const offer = await this.prisma.catalogOffer.findUnique({ where: { id }, select: { sellerOrgId: true } });
+    if (!offer) {
+      throw Errors.forbidden('You cannot access this offer.');
+    }
+    await assertVendorSellerAccess(this.prisma, principal, offer.sellerOrgId);
+    return this.readiness.evaluateOffer(id);
+  }
+
+  @Post('imports')
+  async importFeed(
+    @CurrentPrincipal() principal: Principal,
+    @Body()
+    body: {
+      seller_org_id?: string;
+      country_code?: string;
+      source_id?: string;
+      source_version?: string;
+      rows?: Array<{
+        source_row_key: string;
+        product_id?: string;
+        sku?: string;
+        price_minor?: number;
+        currency?: string;
+        stock_qty?: number;
+        country_code?: string;
+        variant_id?: string;
+      }>;
+    },
+  ) {
+    if (!body.seller_org_id || !body.country_code || !body.source_id || !body.source_version) {
+      throw Errors.validation('seller_org_id, country_code, source_id and source_version are required');
+    }
+    await assertVendorSellerAccess(this.prisma, principal, body.seller_org_id);
+    await this.marketplace.assertCatalogWrite(principal, body.seller_org_id);
+    return this.imports.importBatch(principal, {
+      sellerOrgId: body.seller_org_id,
+      countryCode: body.country_code,
+      sourceId: body.source_id,
+      sourceVersion: body.source_version,
+      rows: body.rows ?? [],
     });
   }
 }

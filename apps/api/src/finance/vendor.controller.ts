@@ -6,10 +6,33 @@ import { AudienceGuard } from '../identity/audience.guard';
 import { RequireAudiences } from '../identity/require-audiences';
 import { FinanceService } from './finance.service';
 
-@Controller('vendor/settlements')
+@Controller('vendor')
 @UseGuards(JwtAuthGuard, AudienceGuard)
 @RequireAudiences('customer', 'partner_applicant')
 export class FinanceVendorController {
+  constructor(private readonly finance: FinanceService) {}
+
+  @Get('payables')
+  listPayables(@CurrentPrincipal() principal: Principal, @Query('seller_org_id') sellerOrgId: string) {
+    if (!sellerOrgId) {
+      throw Errors.validation('seller_org_id is required.');
+    }
+    return this.finance.listVendorPayables(principal, sellerOrgId);
+  }
+
+  @Get('finance/summary')
+  summary(@CurrentPrincipal() principal: Principal, @Query('seller_org_id') sellerOrgId: string) {
+    if (!sellerOrgId) {
+      throw Errors.validation('seller_org_id is required.');
+    }
+    return this.finance.getVendorFinanceSummary(principal, sellerOrgId);
+  }
+}
+
+@Controller('vendor/settlements')
+@UseGuards(JwtAuthGuard, AudienceGuard)
+@RequireAudiences('customer', 'partner_applicant')
+export class FinanceVendorSettlementsController {
   constructor(private readonly finance: FinanceService) {}
 
   @Get()

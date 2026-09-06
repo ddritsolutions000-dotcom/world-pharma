@@ -12,20 +12,7 @@ import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateImagingPartner, enableImagingPartnerPack } from '../test/imaging-partner';
 import { RADIOLOGY_PARTNER_ATTESTATION_CODE } from './radiology-capability.service';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R8-A radiology foundation (e2e)', () => {
   let app: INestApplication;
@@ -113,22 +100,11 @@ describe('R8-A radiology foundation (e2e)', () => {
 
   it('gates IMAGING_CENTER orgs, isolates Imaging A↛B and Lab↛Imaging, pack fail-closed; no booking/payment', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r8a-admin-${suffix}@example.com`, 'admin');
-    const imagingUser = await signIn(app, `r8a-ia-${suffix}@example.com`);
-    const otherImaging = await signIn(app, `r8a-ib-${suffix}@example.com`);
-    const labUser = await signIn(app, `r8a-lab-${suffix}@example.com`);
-    const vendorUser = await signIn(app, `r8a-vend-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r8a-admin-${suffix}@example.com`);
+    const imagingUser = await signInAudience(app, `r8a-ia-${suffix}@example.com`);
+    const otherImaging = await signInAudience(app, `r8a-ib-${suffix}@example.com`);
+    const labUser = await signInAudience(app, `r8a-lab-${suffix}@example.com`);
+    const vendorUser = await signInAudience(app, `r8a-vend-${suffix}@example.com`);
 
     const emptyDoc = emptyPolicyDocument();
     await publishPack(emptyDoc, `empty-${suffix}`);

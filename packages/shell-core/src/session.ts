@@ -51,7 +51,8 @@ export function createSessionStore(): SessionStore {
       publicState = {
         status: 'authenticated',
         audience: input.audience,
-        permissions: input.permissions ?? [],
+        // Omit permissions on re-hydrate so a cookie bootstrap is not wiped to [].
+        permissions: input.permissions !== undefined ? input.permissions : publicState.permissions,
         countryCode: publicState.countryCode,
       };
     },

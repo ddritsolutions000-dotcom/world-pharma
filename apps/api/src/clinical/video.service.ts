@@ -13,9 +13,11 @@ import { Errors, ProblemException } from '../common/problem';
 import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
 import { SecurityEventsService } from '../identity/security-events.service';
+import { RateLimitService } from '../identity/rate-limit.service';
 import { ClinicalAccessService } from './clinical-access.service';
 import { ACTIVE_VIDEO_STATUSES, assertVideoTransition } from './video-status';
 import { VideoProviderPort } from './video-provider.port';
+import { assertProductionVideoSessionAllowed } from './video-production-activation-path';
 
 export const VIDEO_PROVIDER = 'VIDEO_PROVIDER';
 const TOKEN_TTL_SECONDS = 90;
@@ -41,6 +43,7 @@ export class VideoService {
     private readonly access: ClinicalAccessService,
     private readonly outbox: OutboxService,
     private readonly events: SecurityEventsService,
+    private readonly rateLimit: RateLimitService,
     @Inject(VIDEO_PROVIDER) private readonly provider: VideoProviderPort,
   ) {}
 
@@ -49,6 +52,8 @@ export class VideoService {
     const appointment = await this.loadAppointment(appointmentId);
     const role = this.roleOf(principal, appointment);
     await this.assertAuthorized(appointment, principal, requestId);
+    // S138 — production live session create/join fail-closed until genuine provider ENABLED.
+    assertProductionVideoSessionAllowed('video.join');
     if (!this.provider.isConfigured()) {
       throw Errors.problem(503, 'VIDEO_PROVIDER_UNAVAILABLE', 'Video provider unavailable', 'Video is not configured.');
     }
@@ -174,6 +179,14 @@ export class VideoService {
   }
 
   async handleWebhook(headers: Record<string, string | undefined>, rawBody: string) {
+    const webhookHit = await this.rateLimit.hit(
+      `webhook:video:${this.provider.name ?? 'unknown'}`,
+      300,
+      60,
+    );
+    if (!webhookHit.allowed) {
+      throw Errors.rateLimited(webhookHit.retryAfter);
+    }
     const parsed = this.provider.verifyWebhook?.(headers, rawBody);
     if (!parsed?.eventId) {
       throw Errors.unauthorized('Invalid video webhook');

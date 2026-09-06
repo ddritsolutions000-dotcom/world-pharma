@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query, Body, UseGuards } from '@nestjs/common';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
@@ -23,6 +23,28 @@ export class OrderVendorController {
   @Get(':id')
   get(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
     return this.orders.getVendor(principal, id);
+  }
+
+  @Post(':id/accept')
+  accept(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.orders.acceptForVendor(principal, id);
+  }
+
+  @Post(':id/reject')
+  reject(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const reason = typeof body['reason'] === 'string' ? body['reason'].trim() : '';
+    if (!reason) {
+      throw Errors.validation('reason is required.');
+    }
+    const idempotencyKey =
+      typeof body['idempotency_key'] === 'string' && body['idempotency_key'].trim()
+        ? body['idempotency_key'].trim()
+        : `vendor-reject:${id}:${reason.slice(0, 32)}`;
+    return this.orders.rejectForVendor(principal, id, reason, idempotencyKey);
   }
 
   @Post(':id/pick/start')

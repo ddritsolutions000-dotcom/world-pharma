@@ -27,7 +27,11 @@ import { PaymentGatewayRegistry } from './gateway.registry';
 import { gatewayCodeFromRouting, gatewayEnvironmentFromRouting } from './gateway-code';
 import type { SandboxScenario } from './gateway.port';
 import { encryptWebhookPayload } from './hmac';
-import { assertPaymentSubmitAllowed, assertSandboxOnlyRuntime } from './payment.config';
+import { assertPaymentSubmitAllowed, assertSandboxOnlyRuntime, readPaymentEnvironment } from './payment.config';
+import { assertProductionPspInitiationAllowed } from './psp-payment-production-activation-path';
+import { runPaymentIdempotent } from './payment-idempotency';
+import { assertRefundAmount } from './payment-refund-validation';
+import { describeProductionPspBoundary } from './production-psp-requirements';
 import { PaymentRouter, routingJson } from './router';
 import { resolvePaymentSubmitRoute } from './payment-routing-matrix';
 import { parseRefundRequestedEnvelope } from './refund-orchestration';
@@ -38,6 +42,12 @@ import { FinanceService } from '../finance/finance.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
 import { seedSandboxGateways } from './seed';
+import {
+  allowedPaymentFamilies,
+  paymentMethodLabel,
+  resolvePaymentMethodFromInput,
+  sortPaymentMethodsForCountry,
+} from './payment-method-policy';
 import { assertIntentTransition } from './state-machine';
 import {
   captureTransactionKind,
@@ -69,6 +79,14 @@ import {
   type PreSubmitAttemptAudit,
   type PreSubmitFailureIntentAudit,
 } from './payment-failed-attempt-audit';
+import { RateLimitService } from '../identity/rate-limit.service';
+import { SecurityEventsService } from '../identity/security-events.service';
+import {
+  normalizeReconBreakType,
+  PAYMENT_RECON_DISCREPANCY,
+  type PaymentReconReviewRow,
+} from './payment-reconciliation';
+import { evaluateProductionPaymentAvailable } from './production-payment-gate';
 
 const FAMILIES = new Set<string>(Object.values(PaymentMethodFamily));
 
@@ -87,11 +105,21 @@ export class PaymentService implements OnModuleInit {
     private readonly orders: OrderService,
     private readonly finance: FinanceService,
     private readonly inventory: InventoryService,
+    private readonly rateLimit: RateLimitService,
+    private readonly security: SecurityEventsService,
     @Inject(forwardRef(() => SampleCollectionService))
     private readonly sampleCollections: SampleCollectionService,
     @Inject(forwardRef(() => ImagingStudyService))
     private readonly imagingStudies: ImagingStudyService,
   ) {}
+
+  private async assertPaymentRateLimit(personId: string, kind: 'pay' | 'refund'): Promise<void> {
+    const limit = kind === 'pay' ? 30 : 20;
+    const hit = await this.rateLimit.hit(`payment:${kind}:${personId}`, limit, 900);
+    if (!hit.allowed) {
+      throw Errors.rateLimited(hit.retryAfter);
+    }
+  }
 
   async onModuleInit(): Promise<void> {
     await seedSandboxGateways(this.prisma);
@@ -102,14 +130,24 @@ export class PaymentService implements OnModuleInit {
     if (!resolved?.document.payments.enabled) {
       return { sandbox: true, methods: [], message: 'Payments are disabled by country policy.' };
     }
-    const allowed = resolved.document.payments.methods.filter((m) => FAMILIES.has(m));
+    const allowed = allowedPaymentFamilies(resolved.document.payments.methods);
     const rows = await this.prisma.paymentMethod.findMany({
-      where: { active: true, family: { in: allowed as PaymentMethodFamily[] } },
+      where: { active: true, family: { in: allowed } },
     });
+    const methods = sortPaymentMethodsForCountry(
+      countryCode,
+      rows.map((m) => ({
+        family: m.family,
+        label: paymentMethodLabel(countryCode, m.family, m.label),
+      })),
+    );
     return {
       sandbox: true,
-      methods: rows.map((m) => ({ family: m.family, label: m.label })),
-      message: 'SANDBOX — test tokens only. No real money.',
+      methods,
+      message:
+        countryCode.toUpperCase() === 'IN'
+          ? 'SANDBOX — demo UPI, card, and COD. No real money.'
+          : 'SANDBOX — test tokens only. No real money.',
     };
   }
 
@@ -119,6 +157,7 @@ export class PaymentService implements OnModuleInit {
     input: { method?: string; scenario?: string },
     idempotencyKey: string,
   ) {
+    await this.assertPaymentRateLimit(principal.personId, 'pay');
     await this.assertPaymentsEnabled(principal, sessionId);
     return this.withIdempotency(
       principal.personId,
@@ -168,7 +207,61 @@ export class PaymentService implements OnModuleInit {
   }
 
   async getIntent(principal: Principal, id: string) {
-    return this.present(await this.requireOwner(principal.personId, id));
+    const intent = await this.requireOwner(principal.personId, id);
+    const order = await this.prisma.order.findUnique({
+      where: { paymentIntentId: intent.id },
+      select: { id: true, orderNumber: true },
+    });
+    return this.present(intent, order);
+  }
+
+  async listCustomerIntents(
+    principal: Principal,
+    query: { limit?: number; cursor?: string } = {},
+  ) {
+    const limit = Math.min(Math.max(query.limit ?? 25, 1), 50);
+    const rows = await this.prisma.paymentIntent.findMany({
+      where: { customerPersonId: principal.personId },
+      include: { attempts: { orderBy: { createdAt: 'desc' }, take: 1 } },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+    });
+    const page = rows.slice(0, limit);
+    const orderByIntent = await this.prisma.order.findMany({
+      where: { paymentIntentId: { in: page.map((row) => row.id) } },
+      select: { id: true, orderNumber: true, paymentIntentId: true },
+    });
+    const orderMap = new Map(orderByIntent.map((row) => [row.paymentIntentId, row]));
+    return {
+      data: page.map((row) =>
+        this.presentCustomerHistory(row, orderMap.get(row.id) ?? null),
+      ),
+      next_cursor: rows.length > limit ? page[page.length - 1]?.id ?? null : null,
+      sandbox: true,
+    };
+  }
+
+  async describeProductionBoundary(countryIso2?: string) {
+    const catalog = describeProductionPspBoundary(countryIso2);
+    const gate = countryIso2
+      ? await evaluateProductionPaymentAvailable(this.prisma, { countryCode: countryIso2 })
+      : null;
+    return {
+      ...catalog,
+      production_payment_gate: gate,
+      r14a_owner_confirmation_required:
+        !gate || gate.blockers.includes('R14_A_OWNER_CONFIRMATION_REQUIRED'),
+      never_fallback_to_mock: true,
+    };
+  }
+
+  async assertProductionPaymentAvailable(countryCode: string) {
+    return this.router.assertProductionPaymentAvailable(countryCode);
+  }
+
+  async evaluateProductionPaymentAvailable(countryCode: string) {
+    return this.router.evaluateProductionPaymentAvailable(countryCode);
   }
 
   confirm(principal: Principal, id: string, idempotencyKey: string) {
@@ -188,6 +281,45 @@ export class PaymentService implements OnModuleInit {
     });
   }
 
+  /** Sandbox UPI collect — simulates customer approving payment in PhonePe/GPay/Paytm. */
+  completeSandboxUpi(principal: Principal, id: string, idempotencyKey: string) {
+    assertSandboxOnlyRuntime('completeSandboxUpi');
+    return this.withIdempotency(
+      principal.personId,
+      idempotencyKey,
+      'POST',
+      `/payments/intents/${id}/complete-upi`,
+      async () => {
+        const intent = await this.requireOwner(principal.personId, id);
+        if (intent.method !== PaymentMethodFamily.MOBILE_PAYMENT) {
+          throw Errors.problem(
+            409,
+            'PAYMENT_METHOD_MISMATCH',
+            'Not a UPI payment',
+            'Only UPI (mobile payment) intents can be completed this way.',
+          );
+        }
+        if (intent.status !== PaymentIntentStatus.REQUIRES_ACTION) {
+          throw Errors.problem(
+            409,
+            'ILLEGAL_PAYMENT_TRANSITION',
+            'Illegal transition',
+            'UPI payment is not awaiting customer approval.',
+          );
+        }
+        const attempt = intent.attempts.find((row) => row.providerRef);
+        if (!attempt?.providerRef) {
+          throw Errors.problem(409, 'PAYMENT_UNKNOWN', 'Unknown payment', 'No provider reference for UPI intent.');
+        }
+        this.gateways.resolveMockStatus(attempt.providerRef, 'captured');
+        const route = await this.resolveAttemptGateway(attempt);
+        const gateway = this.gateways.resolve(route.code, route.environment);
+        const st = await gateway.status(attempt.providerRef);
+        return this.applyStatus(intent.id, attempt.id, st.status, st.providerRef);
+      },
+    );
+  }
+
   capture(principal: Principal, id: string, idempotencyKey: string) {
     return this.withIdempotency(principal.personId, idempotencyKey, 'POST', `/payments/intents/${id}/capture`, async () => {
       const intent = await this.requireOwner(principal.personId, id);
@@ -205,17 +337,24 @@ export class PaymentService implements OnModuleInit {
     });
   }
 
-  refund(actor: Principal, id: string, amountMinor: bigint | undefined, idempotencyKey: string, admin = false) {
+  async refund(
+    actor: Principal,
+    id: string,
+    amountMinor: bigint | undefined,
+    idempotencyKey: string,
+    admin = false,
+  ) {
+    await this.assertPaymentRateLimit(actor.personId, 'refund');
     return this.withIdempotency(actor.personId, idempotencyKey, 'POST', `/payments/intents/${id}/refund`, async () => {
       const intent = admin ? await this.loadIntent(id) : await this.requireOwner(actor.personId, id);
       if (intent.status !== PaymentIntentStatus.CAPTURED) {
         throw Errors.problem(409, 'ILLEGAL_PAYMENT_TRANSITION', 'Illegal transition', 'Only captured payments can be refunded.');
       }
-      const remaining = intent.capturedMinor - intent.refundedMinor;
-      const amt = amountMinor ?? remaining;
-      if (amt <= 0n || amt > remaining) {
-        throw Errors.problem(409, 'OVER_REFUND', 'Over refund', 'Refund exceeds captured remainder.');
-      }
+      const amt = assertRefundAmount({
+        amountMinor,
+        capturedMinor: intent.capturedMinor,
+        refundedMinor: intent.refundedMinor,
+      });
       return this.executeRefund(intent, amt, idempotencyKey, actor.personId);
     });
   }
@@ -328,7 +467,12 @@ export class PaymentService implements OnModuleInit {
         aggregateId: intent.id,
         producer: 'payment',
         countryId: intent.countryId,
-        payload: { amount_minor: amt.toString(), currency: intent.currency, sandbox: true },
+        payload: {
+          amount_minor: amt.toString(),
+          currency: intent.currency,
+          sandbox: true,
+          customer_person_id: intent.customerPersonId,
+        },
         occurrenceKey: `payment-refunded:${refundId}`,
       });
     });
@@ -802,45 +946,115 @@ export class PaymentService implements OnModuleInit {
     const intent = await this.loadIntent(intentId);
     const attempt = intent.attempts.find((a) => a.submitted);
     if (!attempt?.providerRef) {
+      await this.prisma.paymentReconciliation.create({
+        data: {
+          id: uuidv7(),
+          intentId: intent.id,
+          status: ReconciliationStatus.INVESTIGATE,
+          breakType: PAYMENT_RECON_DISCREPANCY.UNKNOWN_PROVIDER_TRANSACTION,
+          detail: 'No submitted attempt / provider reference to reconcile',
+        },
+      });
+      await this.security.emit({
+        type: 'PAYMENT_RECON_DISCREPANCY',
+        outcome: 'failure',
+        metadata: {
+          intent_id: intent.id,
+          discrepancy: PAYMENT_RECON_DISCREPANCY.UNKNOWN_PROVIDER_TRANSACTION,
+        },
+      });
       throw Errors.problem(409, 'PAYMENT_UNKNOWN', 'Unknown payment', 'No submitted attempt to reconcile.');
     }
     const route = await this.resolveAttemptGateway(attempt);
     const gateway = this.gateways.resolve(route.code, route.environment);
     const gw = await gateway.status(attempt.providerRef);
     const mapped = mapGatewayStatus(intent.status, gw.status);
-    if (intent.status === mapped) {
-      const prior = await this.prisma.paymentReconciliation.findFirst({
-        where: { intentId: intent.id, status: ReconciliationStatus.MATCHED, breakType: 'none' },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (prior) {
-        await this.syncFinanceAfterPaymentReconcile(intent.id);
-        return { status: 'MATCHED', intent: this.present(intent), sandbox: true, duplicate: true };
-      }
-    }
     const txn = await this.prisma.paymentTransaction.findFirst({
       where: { intentId: intent.id, kind: { in: ['capture', 'authorization'] } },
       orderBy: { createdAt: 'desc' },
     });
     let breakType: string | null = null;
+    // Always evaluate amount/currency before treating a prior MATCHED as authoritative.
     if ((gw.status === 'captured' || gw.status === 'authorized') && txn) {
       if (txn.amountMinor !== gw.amountMinor) {
-        breakType = 'amount_mismatch';
+        breakType = PAYMENT_RECON_DISCREPANCY.AMOUNT_MISMATCH;
       } else if (txn.currency !== gw.currency) {
-        breakType = 'currency_mismatch';
+        breakType = PAYMENT_RECON_DISCREPANCY.CURRENCY_MISMATCH;
+      }
+    }
+    if (!breakType && intent.status === mapped) {
+      const prior = await this.prisma.paymentReconciliation.findFirst({
+        where: {
+          intentId: intent.id,
+          status: ReconciliationStatus.MATCHED,
+          breakType: { in: ['none', PAYMENT_RECON_DISCREPANCY.NONE, PAYMENT_RECON_DISCREPANCY.MATCHED] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (prior) {
+        await this.syncFinanceAfterPaymentReconcile(intent.id);
+        return {
+          status: 'MATCHED',
+          discrepancy: PAYMENT_RECON_DISCREPANCY.MATCHED,
+          intent: this.present(intent),
+          sandbox: true,
+          duplicate: true,
+        };
       }
     }
     if (!txn && (gw.status === 'captured' || gw.status === 'authorized')) {
       if (intent.status === PaymentIntentStatus.CAPTURED || intent.status === PaymentIntentStatus.AUTHORIZED) {
-        breakType = 'missing_transaction';
+        breakType = PAYMENT_RECON_DISCREPANCY.MISSING_TRANSACTION;
       }
     }
+    if (mapped && intent.status !== mapped && !breakType) {
+      // Provider and internal disagree on state — record for review, do not silent-fix.
+      if (
+        (intent.status === PaymentIntentStatus.CAPTURED && gw.status !== 'captured') ||
+        (intent.status === PaymentIntentStatus.FAILED &&
+          (gw.status === 'captured' || gw.status === 'authorized'))
+      ) {
+        breakType = PAYMENT_RECON_DISCREPANCY.STATE_MISMATCH;
+      }
+    }
+    const webhookCount = await this.prisma.paymentWebhookEvent.count({
+      where: { gatewayId: attempt.gatewayId },
+    });
+    if (
+      !breakType &&
+      webhookCount === 0 &&
+      (intent.status === PaymentIntentStatus.CAPTURED || intent.status === PaymentIntentStatus.AUTHORIZED)
+    ) {
+      // Advisory only when reconciling without any webhook history for this gateway.
+      // Do not block MATCHED path solely on this for sandbox confirm flows.
+    }
     if (breakType) {
+      const normalized = normalizeReconBreakType(breakType);
       await this.prisma.paymentReconciliation.create({
-        data: { id: uuidv7(), intentId: intent.id, status: ReconciliationStatus.BREAK, breakType, detail: `sandbox ${breakType}` },
+        data: {
+          id: uuidv7(),
+          intentId: intent.id,
+          status: ReconciliationStatus.BREAK,
+          breakType: normalized,
+          detail: JSON.stringify({
+            expected_amount_minor: txn?.amountMinor?.toString() ?? null,
+            provider_amount_minor: gw.amountMinor?.toString() ?? null,
+            expected_currency: txn?.currency ?? intent.currency,
+            provider_currency: gw.currency ?? null,
+            internal_status: intent.status,
+            provider_status: gw.status,
+            provider_ref: attempt.providerRef,
+            reviewable: true,
+          }),
+        },
       });
-      this.metrics.increment('payment_reconciliation_breaks', { type: breakType });
-      return { status: 'BREAK', break_type: breakType, sandbox: true };
+      this.metrics.increment('payment_reconciliation_breaks', { type: normalized });
+      await this.security.emit({
+        type: 'PAYMENT_RECON_DISCREPANCY',
+        outcome: 'failure',
+        metadata: { intent_id: intent.id, discrepancy: normalized },
+      });
+      return { status: 'BREAK', break_type: normalized, discrepancy: normalized, sandbox: true };
     }
     const presented = await this.applyStatus(intent.id, attempt.id, gw.status, attempt.providerRef);
     await this.prisma.paymentReconciliation.create({
@@ -848,12 +1062,146 @@ export class PaymentService implements OnModuleInit {
         id: uuidv7(),
         intentId: intent.id,
         status: ReconciliationStatus.MATCHED,
+        // Keep legacy 'none' for observability compatibility; discrepancy field exposes MATCHED.
         breakType: 'none',
-        detail: 'sandbox matched',
+        detail: JSON.stringify({
+          discrepancy: PAYMENT_RECON_DISCREPANCY.MATCHED,
+          expected_amount_minor: txn?.amountMinor?.toString() ?? intent.amountMinor.toString(),
+          provider_amount_minor: gw.amountMinor?.toString() ?? null,
+          expected_currency: txn?.currency ?? intent.currency,
+          provider_currency: gw.currency ?? intent.currency,
+          internal_status: presented.status,
+          provider_status: gw.status,
+          provider_ref: attempt.providerRef,
+          reviewable: true,
+        }),
       },
     });
     await this.syncFinanceAfterPaymentReconcile(intent.id);
-    return { status: 'MATCHED', intent: presented, sandbox: true, duplicate: false };
+    await this.security.emit({
+      type: 'PAYMENT_RECON_MATCHED',
+      outcome: 'success',
+      metadata: { intent_id: intent.id },
+    });
+    return {
+      status: 'MATCHED',
+      discrepancy: PAYMENT_RECON_DISCREPANCY.MATCHED,
+      intent: presented,
+      sandbox: true,
+      duplicate: false,
+    };
+  }
+
+  /** Sprint 44 — admin reconciliation review queue (never auto-fixes mismatches). */
+  async adminReconciliationQueue(
+    _principal: Principal,
+    query: { country_code?: string; status?: ReconciliationStatus; limit?: number },
+  ): Promise<{ data: PaymentReconReviewRow[]; sandbox: true }> {
+    const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
+    const rows = await this.prisma.paymentReconciliation.findMany({
+      where: query.status ? { status: query.status } : undefined,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    const data: PaymentReconReviewRow[] = [];
+    for (const row of rows) {
+      let detailObj: Record<string, string | null | boolean> = {};
+      try {
+        detailObj = JSON.parse(row.detail) as Record<string, string | null | boolean>;
+      } catch {
+        detailObj = { note: row.detail };
+      }
+      const intent = row.intentId
+        ? await this.prisma.paymentIntent.findUnique({
+            where: { id: row.intentId },
+            select: {
+              id: true,
+              status: true,
+              amountMinor: true,
+              currency: true,
+              countryId: true,
+              country: { select: { isoAlpha2: true } },
+              attempts: {
+                where: { submitted: true },
+                take: 1,
+                orderBy: { createdAt: 'desc' },
+                select: { providerRef: true },
+              },
+            },
+          })
+        : null;
+      if (
+        query.country_code &&
+        intent &&
+        intent.country.isoAlpha2 !== query.country_code.trim().toUpperCase()
+      ) {
+        continue;
+      }
+      const order = row.intentId
+        ? await this.prisma.order.findUnique({
+            where: { paymentIntentId: row.intentId },
+            select: { id: true },
+          })
+        : null;
+      const webhook = row.intentId
+        ? await this.prisma.paymentWebhookEvent.findFirst({
+            orderBy: { createdAt: 'desc' },
+            where: {
+              gatewayId: {
+                in: (
+                  await this.prisma.paymentAttempt.findMany({
+                    where: { intentId: row.intentId },
+                    select: { gatewayId: true },
+                  })
+                ).map((a) => a.gatewayId),
+              },
+            },
+          })
+        : null;
+      data.push({
+        reconciliation_id: row.id,
+        intent_id: row.intentId,
+        order_id: order?.id ?? null,
+        provider_ref:
+          (typeof detailObj.provider_ref === 'string' ? detailObj.provider_ref : null) ??
+          intent?.attempts[0]?.providerRef ??
+          null,
+        internal_status:
+          (typeof detailObj.internal_status === 'string' ? detailObj.internal_status : null) ??
+          intent?.status ??
+          null,
+        provider_status:
+          typeof detailObj.provider_status === 'string' ? detailObj.provider_status : null,
+        expected_amount_minor:
+          (typeof detailObj.expected_amount_minor === 'string'
+            ? detailObj.expected_amount_minor
+            : null) ?? intent?.amountMinor.toString() ??
+          null,
+        provider_amount_minor:
+          typeof detailObj.provider_amount_minor === 'string'
+            ? detailObj.provider_amount_minor
+            : null,
+        expected_currency:
+          (typeof detailObj.expected_currency === 'string' ? detailObj.expected_currency : null) ??
+          intent?.currency ??
+          null,
+        provider_currency:
+          typeof detailObj.provider_currency === 'string' ? detailObj.provider_currency : null,
+        webhook_state: webhook
+          ? webhook.processed
+            ? 'PROCESSED'
+            : webhook.signatureOk
+              ? 'RECEIVED'
+              : 'SIGNATURE_FAILED'
+          : 'MISSING',
+        discrepancy: normalizeReconBreakType(row.breakType),
+        reconciliation_status: row.status,
+        detail: row.detail,
+        created_at: row.createdAt.toISOString(),
+        reviewable: true,
+      });
+    }
+    return { data, sandbox: true };
   }
 
   private async syncFinanceAfterPaymentReconcile(intentId: string): Promise<void> {
@@ -890,12 +1238,41 @@ export class PaymentService implements OnModuleInit {
     headers: Record<string, string | undefined> = {},
   ) {
     assertSandboxOnlyRuntime('webhook ingest');
+    const webhookHit = await this.rateLimit.hit(`webhook:pay:${gatewayCode}`, 300, 60);
+    if (!webhookHit.allowed) {
+      throw Errors.rateLimited(webhookHit.retryAfter);
+    }
+    // Sprint 132: production webhook path is fail-closed / EXTERNAL_GATED until real PSP
+    // webhook adapter + secrets-manager resolution exist. Never uses sandbox signing secrets.
+    if (readPaymentEnvironment() === 'production') {
+      const { assertProductionPspWebhookIngestAllowed } = await import(
+        './psp-payment-production-activation-path'
+      );
+      try {
+        assertProductionPspWebhookIngestAllowed(gatewayCode, 'webhook ingest');
+      } catch (err) {
+        await this.security.emit({
+          type: 'PAYMENT_WEBHOOK_REJECTED',
+          outcome: 'failure',
+          metadata: {
+            gateway_code: gatewayCode,
+            reason: 'PRODUCTION_WEBHOOK_EXTERNAL_GATED',
+          },
+        });
+        throw err;
+      }
+    }
     const gateway = await this.prisma.paymentGateway.findUnique({ where: { code: gatewayCode } });
     if (!gateway) {
       throw Errors.notFound('Gateway not found.');
     }
     const handler = this.webhooks.resolve(gatewayCode, gateway.environment);
     if (!handler.verify(raw, signature, headers)) {
+      await this.security.emit({
+        type: 'PAYMENT_WEBHOOK_REJECTED',
+        outcome: 'failure',
+        metadata: { gateway_code: gatewayCode, reason: 'INVALID_SIGNATURE' },
+      });
       throw Errors.unauthorized('Invalid sandbox webhook signature.');
     }
     let body: { event_id?: string; type?: string; provider_ref?: string };
@@ -903,9 +1280,30 @@ export class PaymentService implements OnModuleInit {
       const event = handler.parseEvent(raw);
       body = { event_id: event.eventId, type: event.type, provider_ref: event.providerRef };
     } catch {
+      await this.security.emit({
+        type: 'PAYMENT_WEBHOOK_REJECTED',
+        outcome: 'failure',
+        metadata: { gateway_code: gatewayCode, reason: 'INVALID_JSON' },
+      });
       throw Errors.validation('Invalid webhook JSON.');
     }
     const eventId = body.event_id ?? uuidv7();
+    // Pre-check avoids unique-constraint abort inside the tenant interceptor transaction
+    // (Postgres 25P02) so duplicate webhooks stay idempotent without failing the request.
+    const priorEvent = await this.prisma.paymentWebhookEvent.findUnique({
+      where: {
+        gatewayId_providerEventId: { gatewayId: gateway.id, providerEventId: eventId },
+      },
+      select: { id: true },
+    });
+    if (priorEvent) {
+      await this.security.emit({
+        type: 'PAYMENT_WEBHOOK_DUPLICATE',
+        outcome: 'success',
+        metadata: { gateway_code: gatewayCode, provider_event_id: eventId },
+      });
+      return { accepted: true, duplicate: true, sandbox: true };
+    }
     try {
       await this.prisma.paymentWebhookEvent.create({
         data: {
@@ -919,6 +1317,7 @@ export class PaymentService implements OnModuleInit {
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        // Concurrent replay race — return duplicate without further writes on this txn.
         return { accepted: true, duplicate: true, sandbox: true };
       }
       throw err;
@@ -939,11 +1338,42 @@ export class PaymentService implements OnModuleInit {
             }
           }
         }
+      } else {
+        await this.prisma.paymentReconciliation.create({
+          data: {
+            id: uuidv7(),
+            intentId: null,
+            status: ReconciliationStatus.INVESTIGATE,
+            breakType: PAYMENT_RECON_DISCREPANCY.UNKNOWN_PROVIDER_TRANSACTION,
+            detail: JSON.stringify({
+              provider_ref: body.provider_ref,
+              provider_event_id: eventId,
+              reviewable: true,
+            }),
+          },
+        });
+        await this.security.emit({
+          type: 'PAYMENT_RECON_DISCREPANCY',
+          outcome: 'failure',
+          metadata: {
+            discrepancy: PAYMENT_RECON_DISCREPANCY.UNKNOWN_PROVIDER_TRANSACTION,
+            provider_ref: body.provider_ref,
+          },
+        });
       }
     }
     await this.prisma.paymentWebhookEvent.updateMany({
       where: { gatewayId: gateway.id, providerEventId: eventId },
       data: { processed: true, processedAt: new Date() },
+    });
+    await this.security.emit({
+      type: 'PAYMENT_WEBHOOK_ACCEPTED',
+      outcome: 'success',
+      metadata: {
+        gateway_code: gatewayCode,
+        provider_event_id: eventId,
+        event_type: body.type ?? 'unknown',
+      },
     });
     return { accepted: true, duplicate: false, sandbox: true };
   }
@@ -958,6 +1388,7 @@ export class PaymentService implements OnModuleInit {
     input: { method?: string; scenario?: string },
   ) {
     assertPaymentSubmitAllowed('payment submit');
+    assertProductionPspInitiationAllowed('payment submit');
     const session = await this.prisma.checkoutSession.findUnique({
       where: { id: sessionId },
       include: { quotes: { orderBy: { createdAt: 'desc' }, take: 1 }, country: true },
@@ -981,8 +1412,8 @@ export class PaymentService implements OnModuleInit {
         'Payment is not available in this country policy. No PSP was contacted.',
       );
     }
-    const method = (input.method ?? resolved.document.payments.methods[0] ?? 'CARD') as PaymentMethodFamily;
-    if (!FAMILIES.has(method) || !resolved.document.payments.methods.includes(method)) {
+    const method = resolveCheckoutPaymentMethod(input.method, resolved.document.payments.methods);
+    if (!FAMILIES.has(method) || !allowedPaymentFamilies(resolved.document.payments.methods).includes(method)) {
       throw Errors.problem(409, 'PAYMENT_METHOD_UNAVAILABLE', 'Method unavailable', 'This method is not enabled by country policy.');
     }
     const decision = await this.risk.assess({
@@ -1016,6 +1447,10 @@ export class PaymentService implements OnModuleInit {
       if (prep.kind === 'existing') {
         return prep.presentation;
       }
+      await this.inventory.assertCheckoutHoldsActive({
+        skipInventoryHold: session.skipInventoryHold,
+        reservationIds: session.reservationIds,
+      });
       const intent = prep.intent;
       await this.emit(intent.id, session.countryId, 'PAYMENT_AUTHORIZED', { method: 'COD', sandbox: true });
       await this.orders.createFromPayment(principal, intent.id, `order:${intent.id}`);
@@ -1054,7 +1489,7 @@ export class PaymentService implements OnModuleInit {
           : 'No sandbox gateway matches this payment.',
       );
     }
-    const scenario = normalizeSandboxScenario(input.scenario);
+    const scenario = sandboxScenarioForSubmit(method, normalizeSandboxScenario(input.scenario));
     const prep = await this.prepareCheckoutPayment(session.id, async (tx) =>
       tx.paymentIntent.create({
         data: {
@@ -1075,6 +1510,10 @@ export class PaymentService implements OnModuleInit {
     if (prep.kind === 'existing') {
       return prep.presentation;
     }
+    await this.inventory.assertCheckoutHoldsActive({
+      skipInventoryHold: session.skipInventoryHold,
+      reservationIds: session.reservationIds,
+    });
     const intent = prep.intent;
     await this.emit(intent.id, session.countryId, 'PAYMENT_INTENT_CREATED', { amount_minor: quote.totalMinor.toString() });
     let submitted = false;
@@ -1088,16 +1527,20 @@ export class PaymentService implements OnModuleInit {
       if (!lock) {
         throw Errors.problem(409, 'PAYMENT_IN_FLIGHT', 'In flight', 'A gateway submit is already in progress.');
       }
-      const attempt = await this.prisma.paymentAttempt.create({
-        data: {
-          id: uuidv7(),
-          intentId: intent.id,
-          gatewayId: route.gatewayId,
-          method,
-          routingJson: routingJson(route),
-          status: PaymentAttemptStatus.CREATED,
-        },
-      });
+      const attempt = await this.runFreshCheckoutPaymentSideEffect(
+        { countryId: session.countryId, personId: principal.personId },
+        () =>
+          this.prisma.paymentAttempt.create({
+            data: {
+              id: uuidv7(),
+              intentId: intent.id,
+              gatewayId: route.gatewayId,
+              method,
+              routingJson: routingJson(route),
+              status: PaymentAttemptStatus.CREATED,
+            },
+          }),
+      );
       const useScenario = scenarioForGatewayAttempt(scenario, route, candidates);
       const gateway = this.gateways.resolve(route.gatewayCode, route.gatewayEnvironment);
       const result = await gateway.submit({
@@ -1112,10 +1555,14 @@ export class PaymentService implements OnModuleInit {
       });
       this.metrics.increment('payment_attempt_total', { gateway: route.gatewayCode, sandbox: 'true' });
       if (!result.submitted) {
-        await this.prisma.paymentAttempt.update({
-          where: { id: attempt.id },
-          data: { status: PaymentAttemptStatus.FAILED, errorCode: result.errorCode, submitted: false },
-        });
+        await this.runFreshCheckoutPaymentSideEffect(
+          { countryId: session.countryId, personId: principal.personId },
+          () =>
+            this.prisma.paymentAttempt.update({
+              where: { id: attempt.id },
+              data: { status: PaymentAttemptStatus.FAILED, errorCode: result.errorCode, submitted: false },
+            }),
+        );
         preSubmitAttempts.push({
           id: attempt.id,
           gatewayId: route.gatewayId,
@@ -1132,20 +1579,24 @@ export class PaymentService implements OnModuleInit {
         continue;
       }
       submitted = true;
-      await this.prisma.paymentAttempt.update({
-        where: { id: attempt.id },
-        data: {
-          submitted: true,
-          providerRef: result.providerRef,
-          status:
-            result.status === 'unknown'
-              ? PaymentAttemptStatus.UNKNOWN
-              : result.status === 'failed'
-                ? PaymentAttemptStatus.FAILED
-                : PaymentAttemptStatus.SUBMITTED,
-          errorCode: result.errorCode,
-        },
-      });
+      await this.runFreshCheckoutPaymentSideEffect(
+        { countryId: session.countryId, personId: principal.personId },
+        () =>
+          this.prisma.paymentAttempt.update({
+            where: { id: attempt.id },
+            data: {
+              submitted: true,
+              providerRef: result.providerRef,
+              status:
+                result.status === 'unknown'
+                  ? PaymentAttemptStatus.UNKNOWN
+                  : result.status === 'failed'
+                    ? PaymentAttemptStatus.FAILED
+                    : PaymentAttemptStatus.SUBMITTED,
+              errorCode: result.errorCode,
+            },
+          }),
+      );
       last = await this.applyStatus(intent.id, attempt.id, result.status, result.providerRef, result.nextAction);
     }
     if (!submitted) {
@@ -1193,7 +1644,7 @@ export class PaymentService implements OnModuleInit {
     } catch {
       throw Errors.problem(409, 'ILLEGAL_PAYMENT_TRANSITION', 'Illegal transition', `Cannot move ${intent.status} → ${mapped}.`);
     }
-    await this.prisma.$transaction(async (tx) => {
+    const persistStatusUpdate = async (tx: Prisma.TransactionClient) => {
       await tx.paymentIntent.update({
         where: { id: intentId },
         data: {
@@ -1241,7 +1692,13 @@ export class PaymentService implements OnModuleInit {
         aggregateId: intentId,
         producer: 'payment',
         countryId: intent.countryId,
-        payload: { status: mapped, sandbox: true, currency: intent.currency, amount_minor: intent.amountMinor.toString() },
+        payload: {
+          status: mapped,
+          sandbox: true,
+          currency: intent.currency,
+          amount_minor: intent.amountMinor.toString(),
+          customer_person_id: intent.customerPersonId,
+        },
         occurrenceKey: `payment:${intentId}:${mapped}:${attemptId}`,
       });
       if (
@@ -1256,7 +1713,24 @@ export class PaymentService implements OnModuleInit {
           outcome: 'paid',
         });
       }
-    });
+    };
+    const checkoutCaptureCommit =
+      intent.checkoutSessionId &&
+      (mapped === PaymentIntentStatus.CAPTURED || mapped === PaymentIntentStatus.AUTHORIZED_COD);
+    if (checkoutCaptureCommit) {
+      await this.prisma.runWithTenant(
+        workerTenantContext({
+          countryId: intent.countryId,
+          personId: intent.customerPersonId,
+        }),
+        async () => {
+          await this.prisma.$transaction(async (tx) => persistStatusUpdate(tx));
+        },
+        { fresh: true },
+      );
+    } else {
+      await this.prisma.$transaction(async (tx) => persistStatusUpdate(tx));
+    }
     this.metrics.increment(
       mapped === PaymentIntentStatus.CAPTURED
         ? 'payment_success_total'
@@ -1275,17 +1749,34 @@ export class PaymentService implements OnModuleInit {
       } else if (latest.imagingBookingId) {
         await this.confirmImagingBookingCapture(latest);
       } else if (latest.checkoutSessionId) {
-        await this.orders.createFromPayment(
-          {
-            personId: latest.customerPersonId,
-            sessionId: latest.customerPersonId,
-            audience: 'customer',
-            roles: [],
-            tokenVersion: 0,
-          },
-          intentId,
-          `order:${intentId}`,
-        );
+        try {
+          await this.orders.createFromPayment(
+            {
+              personId: latest.customerPersonId,
+              sessionId: latest.customerPersonId,
+              audience: 'customer',
+              roles: [],
+              tokenVersion: 0,
+            },
+            intentId,
+            `order:${intentId}`,
+          );
+        } catch (err) {
+          const existing = await this.prisma.order.findUnique({ where: { paymentIntentId: intentId } });
+          if (existing) {
+            return presented;
+          }
+          await this.compensateCheckoutOrderCreationFailure(intentId, latest);
+          if (err instanceof ProblemException) {
+            throw err;
+          }
+          throw Errors.problem(
+            409,
+            'ORDER_CREATION_FAILED',
+            'Order could not be created',
+            'Payment was reversed because the order could not be confirmed. Refresh checkout and try again.',
+          );
+        }
       }
     } else if (mapped === PaymentIntentStatus.FAILED) {
       const latest = await this.loadIntent(intentId);
@@ -1486,6 +1977,7 @@ export class PaymentService implements OnModuleInit {
     input: { method?: string; scenario?: string },
   ) {
     assertPaymentSubmitAllowed('lab booking payment submit');
+    assertProductionPspInitiationAllowed('lab booking payment submit');
     const booking = await this.prisma.labBooking.findUnique({
       where: { id: bookingId },
       include: { country: true },
@@ -1505,7 +1997,7 @@ export class PaymentService implements OnModuleInit {
         'Payment is not available in this country policy. No PSP was contacted.',
       );
     }
-    const method = (input.method ?? resolved.document.payments.methods[0] ?? 'CARD') as PaymentMethodFamily;
+    const method = resolveCheckoutPaymentMethod(input.method, resolved.document.payments.methods);
     if (method === PaymentMethodFamily.COD) {
       throw Errors.problem(
         409,
@@ -1514,7 +2006,7 @@ export class PaymentService implements OnModuleInit {
         'Cash on delivery is not available for lab diagnostics bookings (OD-LAB-16).',
       );
     }
-    if (!FAMILIES.has(method) || !resolved.document.payments.methods.includes(method)) {
+    if (!FAMILIES.has(method) || !allowedPaymentFamilies(resolved.document.payments.methods).includes(method)) {
       throw Errors.problem(409, 'PAYMENT_METHOD_UNAVAILABLE', 'Method unavailable', 'This method is not enabled by country policy.');
     }
     const decision = await this.risk.assess({
@@ -1537,7 +2029,7 @@ export class PaymentService implements OnModuleInit {
     if (!candidates.length) {
       throw Errors.problem(409, 'NO_PAYMENT_GATEWAY', 'No gateway', 'No sandbox gateway matches this payment.');
     }
-    const scenario = normalizeSandboxScenario(input.scenario);
+    const scenario = sandboxScenarioForSubmit(method, normalizeSandboxScenario(input.scenario));
     const intent = await this.prisma.paymentIntent.create({
       data: {
         id: uuidv7(),
@@ -1665,6 +2157,7 @@ export class PaymentService implements OnModuleInit {
     input: { method?: string; scenario?: string },
   ) {
     assertPaymentSubmitAllowed('imaging booking payment submit');
+    assertProductionPspInitiationAllowed('imaging booking payment submit');
     const booking = await this.prisma.imagingBooking.findUnique({
       where: { id: bookingId },
       include: { country: true },
@@ -1684,7 +2177,7 @@ export class PaymentService implements OnModuleInit {
         'Payment is not available in this country policy. No PSP was contacted.',
       );
     }
-    const method = (input.method ?? resolved.document.payments.methods[0] ?? 'CARD') as PaymentMethodFamily;
+    const method = resolveCheckoutPaymentMethod(input.method, resolved.document.payments.methods);
     if (method === PaymentMethodFamily.COD) {
       throw Errors.problem(
         409,
@@ -1693,7 +2186,7 @@ export class PaymentService implements OnModuleInit {
         'Cash on delivery is not available for imaging bookings.',
       );
     }
-    if (!FAMILIES.has(method) || !resolved.document.payments.methods.includes(method)) {
+    if (!FAMILIES.has(method) || !allowedPaymentFamilies(resolved.document.payments.methods).includes(method)) {
       throw Errors.problem(409, 'PAYMENT_METHOD_UNAVAILABLE', 'Method unavailable', 'This method is not enabled by country policy.');
     }
     const decision = await this.risk.assess({
@@ -1716,7 +2209,7 @@ export class PaymentService implements OnModuleInit {
     if (!candidates.length) {
       throw Errors.problem(409, 'NO_PAYMENT_GATEWAY', 'No gateway', 'No sandbox gateway matches this payment.');
     }
-    const scenario = normalizeSandboxScenario(input.scenario);
+    const scenario = sandboxScenarioForSubmit(method, normalizeSandboxScenario(input.scenario));
     const intent = await this.prisma.paymentIntent.create({
       data: {
         id: uuidv7(),
@@ -1889,7 +2382,8 @@ export class PaymentService implements OnModuleInit {
     });
   }
 
-  private present(intent: {
+  private present(
+    intent: {
     id: string;
     status: PaymentIntentStatus;
     amountMinor: bigint;
@@ -1909,7 +2403,9 @@ export class PaymentService implements OnModuleInit {
       routingJson: Prisma.JsonValue;
       providerRef: string | null;
     }>;
-  }) {
+  },
+    order?: { id: string; orderNumber: string | null } | null,
+  ) {
     return {
       id: intent.id,
       sandbox: true,
@@ -1922,6 +2418,8 @@ export class PaymentService implements OnModuleInit {
       remaining_refundable_minor: (intent.capturedMinor - intent.refundedMinor).toString(),
       currency: intent.currency,
       checkout_session_id: intent.checkoutSessionId,
+      order_id: order?.id ?? null,
+      order_number: order?.orderNumber ?? null,
       lab_booking_id: intent.labBookingId ?? null,
       imaging_booking_id: intent.imagingBookingId ?? null,
       next_action: intent.nextAction,
@@ -1936,8 +2434,102 @@ export class PaymentService implements OnModuleInit {
         ? 'SANDBOX imaging booking payment — not a production charge. No commerce Order is created.'
         : intent.labBookingId
           ? 'SANDBOX lab booking payment — not a production charge. No commerce Order is created.'
-          : 'SANDBOX payment — not a production charge. No order is created.',
+          : intent.checkoutSessionId
+            ? 'SANDBOX payment — not a production charge. Commerce order is created automatically on successful capture when checkout preconditions hold.'
+            : 'SANDBOX payment — not a production charge.',
     };
+  }
+
+  private presentCustomerHistory(
+    intent: {
+      id: string;
+      status: PaymentIntentStatus;
+      amountMinor: bigint;
+      capturedMinor: bigint;
+      refundedMinor: bigint;
+      currency: string;
+      method: PaymentMethodFamily;
+      checkoutSessionId: string | null;
+      createdAt: Date;
+      attempts: Array<{ providerRef: string | null; routingJson: Prisma.JsonValue }>;
+    },
+    order: { id: string; orderNumber: string | null } | null,
+  ) {
+    const remaining = intent.capturedMinor - intent.refundedMinor;
+    const refundStatus =
+      intent.refundedMinor <= 0n
+        ? 'none'
+        : remaining <= 0n
+          ? 'refunded'
+          : 'partially_refunded';
+    return {
+      id: intent.id,
+      status: intent.status,
+      method: intent.method,
+      amount_minor: intent.amountMinor.toString(),
+      captured_minor: intent.capturedMinor.toString(),
+      refunded_minor: intent.refundedMinor.toString(),
+      currency: intent.currency,
+      sandbox: true,
+      order_id: order?.id ?? null,
+      order_number: order?.orderNumber ?? null,
+      checkout_session_id: intent.checkoutSessionId,
+      refund_status: refundStatus,
+      created_at: intent.createdAt.toISOString(),
+      provider_ref: intent.attempts[0]?.providerRef ?? null,
+    };
+  }
+
+  /** Reverse a captured checkout payment when order creation fails after capture. */
+  private async compensateCheckoutOrderCreationFailure(
+    intentId: string,
+    intent: Awaited<ReturnType<PaymentService['loadIntent']>>,
+  ) {
+    await this.prisma.runWithTenant(
+      workerTenantContext({
+        countryId: intent.countryId,
+        personId: intent.customerPersonId,
+      }),
+      async () => {
+        const latest = await this.loadIntent(intentId);
+        const remaining = latest.capturedMinor - latest.refundedMinor;
+        if (remaining > 0n && latest.status === PaymentIntentStatus.CAPTURED) {
+          await this.executeRefund(latest, remaining, `compensate-order-failed:${intentId}`, latest.customerPersonId);
+        }
+        if (!latest.checkoutSessionId) {
+          return;
+        }
+        await this.prisma.$transaction(async (tx) => {
+          await this.inventory.releaseCheckoutReservationsForPaymentFailure(tx, {
+            checkoutSessionId: latest.checkoutSessionId!,
+            customerPersonId: latest.customerPersonId,
+            countryId: latest.countryId,
+            paymentIntentId: intentId,
+          });
+          await applyCheckoutSessionPaymentOutcome(tx, this.outbox, {
+            checkoutSessionId: latest.checkoutSessionId!,
+            customerPersonId: latest.customerPersonId,
+            countryId: latest.countryId,
+            paymentIntentId: intentId,
+            outcome: 'order_creation_failed',
+          });
+          await this.outbox.enqueue(tx, {
+            type: 'ORDER_CREATION_FAILED',
+            aggregateType: 'PaymentIntent',
+            aggregateId: intentId,
+            producer: 'payment',
+            countryId: latest.countryId,
+            actorId: latest.customerPersonId,
+            payload: {
+              checkout_session_id: latest.checkoutSessionId,
+              sandbox: true,
+            },
+            occurrenceKey: `order-creation-failed:${intentId}`,
+          });
+        });
+      },
+      { fresh: true },
+    );
   }
 
   private async resolveAttemptGateway(attempt: {
@@ -2007,6 +2599,17 @@ export class PaymentService implements OnModuleInit {
     );
   }
 
+  private async runFreshCheckoutPaymentSideEffect<T>(
+    input: { countryId: string; personId: string },
+    run: () => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.runWithTenant(
+      workerTenantContext({ countryId: input.countryId, personId: input.personId }),
+      run,
+      { fresh: true },
+    );
+  }
+
   private async prepareCheckoutPayment<T extends { id: string }>(
     sessionId: string,
     createIntent: (tx: Prisma.TransactionClient) => Promise<T>,
@@ -2014,30 +2617,45 @@ export class PaymentService implements OnModuleInit {
     | { kind: 'existing'; presentation: ReturnType<PaymentService['present']> }
     | { kind: 'new'; intent: T }
   > {
-    const outcome = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`
-        SELECT id FROM checkout_sessions WHERE id = ${sessionId}::uuid FOR UPDATE
-      `;
-      const intents = await tx.paymentIntent.findMany({
-        where: { checkoutSessionId: sessionId },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true, status: true, createdAt: true },
-      });
-      const decision = resolveCheckoutPayGuard(intents);
-      if (decision.action === 'return_existing') {
-        return { kind: 'existing' as const, intentId: decision.intentId };
-      }
-      if (decision.action === 'reject_in_flight') {
-        throw Errors.problem(
-          409,
-          'PAYMENT_IN_FLIGHT',
-          'In flight',
-          'A payment is already in progress for this checkout.',
-        );
-      }
-      const intent = await createIntent(tx);
-      return { kind: 'new' as const, intent };
+    const sessionMeta = await this.prisma.checkoutSession.findUnique({
+      where: { id: sessionId },
+      select: { customerPersonId: true, countryId: true },
     });
+    if (!sessionMeta) {
+      throw Errors.notFound('Checkout session not found.');
+    }
+    const outcome = await this.prisma.runWithTenant(
+      workerTenantContext({
+        countryId: sessionMeta.countryId,
+        personId: sessionMeta.customerPersonId,
+      }),
+      async () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`
+            SELECT id FROM checkout_sessions WHERE id = ${sessionId}::uuid FOR UPDATE
+          `;
+          const intents = await tx.paymentIntent.findMany({
+            where: { checkoutSessionId: sessionId },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, status: true, createdAt: true },
+          });
+          const decision = resolveCheckoutPayGuard(intents);
+          if (decision.action === 'return_existing') {
+            return { kind: 'existing' as const, intentId: decision.intentId };
+          }
+          if (decision.action === 'reject_in_flight') {
+            throw Errors.problem(
+              409,
+              'PAYMENT_IN_FLIGHT',
+              'In flight',
+              'A payment is already in progress for this checkout.',
+            );
+          }
+          const intent = await createIntent(tx);
+          return { kind: 'new' as const, intent };
+        }),
+      { fresh: true },
+    );
     if (outcome.kind === 'existing') {
       return {
         kind: 'existing',
@@ -2073,28 +2691,7 @@ export class PaymentService implements OnModuleInit {
     path: string,
     run: () => Promise<T>,
   ): Promise<T> {
-    if (!key) {
-      throw Errors.validation('Idempotency-Key is required.');
-    }
-    const prior = await this.prisma.idempotencyRecord.findUnique({
-      where: { personId_key: { personId, key } },
-    });
-    if (prior) {
-      return prior.body as T;
-    }
-    const result = await run();
-    await this.prisma.idempotencyRecord.create({
-      data: {
-        id: uuidv7(),
-        personId,
-        key,
-        method,
-        path,
-        statusCode: 200,
-        body: result as Prisma.InputJsonValue,
-      },
-    });
-    return result;
+    return runPaymentIdempotent(this.prisma, { personId, key, method, path, run });
   }
 }
 
@@ -2131,6 +2728,13 @@ function normalizeSandboxScenario(scenario?: string): SandboxScenario {
   return scenario as SandboxScenario;
 }
 
+function sandboxScenarioForSubmit(method: PaymentMethodFamily, scenario: SandboxScenario): SandboxScenario {
+  if (method === PaymentMethodFamily.MOBILE_PAYMENT && scenario === 'success') {
+    return 'upi_collect';
+  }
+  return scenario;
+}
+
 function scenarioForGatewayAttempt(
   scenario: SandboxScenario,
   route: { gatewayCode: string },
@@ -2147,4 +2751,17 @@ function scenarioForGatewayAttempt(
     return 'success';
   }
   return scenario;
+}
+
+function resolveCheckoutPaymentMethod(input: string | undefined, policyMethods: string[]): PaymentMethodFamily {
+  try {
+    return resolvePaymentMethodFromInput(input, policyMethods);
+  } catch {
+    throw Errors.problem(
+      409,
+      'PAYMENT_METHOD_UNAVAILABLE',
+      'Method unavailable',
+      'This method is not enabled by country policy.',
+    );
+  }
 }

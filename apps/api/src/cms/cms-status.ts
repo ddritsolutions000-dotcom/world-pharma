@@ -4,7 +4,7 @@ import { Errors } from '../common/problem';
 const TRANSITIONS: Record<CmsContentStatus, CmsContentStatus[]> = {
   [CmsContentStatus.DRAFT]: [CmsContentStatus.IN_REVIEW],
   [CmsContentStatus.IN_REVIEW]: [CmsContentStatus.PUBLISHED, CmsContentStatus.DRAFT],
-  [CmsContentStatus.PUBLISHED]: [CmsContentStatus.ARCHIVED],
+  [CmsContentStatus.PUBLISHED]: [CmsContentStatus.ARCHIVED, CmsContentStatus.DRAFT],
   [CmsContentStatus.ARCHIVED]: [CmsContentStatus.PUBLISHED],
 };
 

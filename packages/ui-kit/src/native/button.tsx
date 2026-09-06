@@ -1,5 +1,15 @@
 import { Pressable, Text } from 'react-native';
-import { nativeColors, nativeTouch, type ColorMode } from './theme';
+import { nativeColors, nativeRadius, nativeTouch, type ColorMode } from './theme';
+
+export type NativeButtonProps = {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
+  mode?: ColorMode;
+  key?: string | number;
+};
 
 export function NativeButton({
   label,
@@ -8,18 +18,22 @@ export function NativeButton({
   loading,
   variant = 'primary',
   mode = 'light',
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-  variant?: 'primary' | 'secondary' | 'danger';
-  mode?: ColorMode;
-}) {
+}: NativeButtonProps) {
   const color = nativeColors(mode);
   const background =
-    variant === 'primary' ? color.action.primary : variant === 'danger' ? color.action.danger : color.background.surface;
-  const fg = variant === 'secondary' ? color.text.primary : variant === 'danger' ? color.action.onDanger : color.action.onPrimary;
+    variant === 'primary'
+      ? color.action.primary
+      : variant === 'danger'
+        ? color.action.danger
+        : variant === 'ghost'
+          ? 'transparent'
+          : color.background.surface;
+  const fg =
+    variant === 'secondary' || variant === 'ghost'
+      ? color.text.primary
+      : variant === 'danger'
+        ? color.action.onDanger
+        : color.action.onPrimary;
   return (
     <Pressable
       accessibilityRole="button"
@@ -30,17 +44,19 @@ export function NativeButton({
       style={{
         minHeight: nativeTouch,
         minWidth: nativeTouch,
-        paddingHorizontal: 16,
-        borderRadius: 8,
+        paddingHorizontal: 18,
+        borderRadius: nativeRadius.md,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: background,
-        opacity: disabled ? 0.48 : 1,
+        opacity: disabled ? 0.45 : 1,
         borderWidth: variant === 'secondary' ? 1 : 0,
         borderColor: color.border.default,
       }}
     >
-      <Text style={{ color: fg, fontWeight: '600' }}>{loading ? 'Working…' : label}</Text>
+      <Text style={{ color: fg, fontWeight: '700', fontSize: 15, letterSpacing: 0.2 }}>
+        {loading ? 'Working…' : label}
+      </Text>
     </Pressable>
   );
 }

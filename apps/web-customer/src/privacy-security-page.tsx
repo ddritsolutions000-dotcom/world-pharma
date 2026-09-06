@@ -1,19 +1,17 @@
 'use client';
 
-import { useCallback, useState } from 'react';
 import Link from 'next/link';
+import { useCallback, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
-  Heading,
   NetworkErrorState,
   PermissionDeniedState,
   SessionExpiredState,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import { logoutAllSessions } from './account-api';
+import { AccountPage } from './ui/account-hub-nav';
+import { MgBtn, MgCard, Section } from './ui/mg-ui';
 
 export function PrivacySecurityScreen() {
   const { session, getAccessToken, signOut, expire } = useSession();
@@ -28,7 +26,15 @@ export function PrivacySecurityScreen() {
   }
 
   if (session.status !== 'authenticated') {
-    return <EmptyState title="Sign in required" description="Sign in to review privacy and security settings." />;
+    return (
+      <AccountPage title="Privacy & security" subtitle="Manage your data and sessions.">
+        <EmptyState
+          title="Sign in required"
+          description="Sign in to review privacy and security settings."
+          action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }}
+        />
+      </AccountPage>
+    );
   }
 
   if (session.audience !== 'customer') {
@@ -54,78 +60,64 @@ export function PrivacySecurityScreen() {
   }
 
   return (
-    <section>
-      <Heading level={1}>Privacy &amp; security</Heading>
-      <Text tone="secondary">
-        Manage account security, sessions, and links to consent and notification settings. Legal copy is policy-driven
-        and may be updated by your country pack.
-      </Text>
-      <Link href="/account">
-        <Button variant="tertiary" size="sm">
-          Back to account
-        </Button>
-      </Link>
+    <AccountPage title="Privacy & security" subtitle="Your data, sessions, and notification settings.">
+      <Section title="Privacy">
+        <MgCard>
+          <h3 className="mg-list-title">Data access & consent</h3>
+          <p className="mg-list-meta">
+            Manage who can access your health records for consultations and lab services.
+          </p>
+          <MgBtn href="/account/consent" variant="secondary" size="sm">
+            Manage consent
+          </MgBtn>
+        </MgCard>
+      </Section>
 
-      <Heading level={2}>Privacy</Heading>
-      <Card>
-        <Text>Data access &amp; consent</Text>
-        <Text size="caption" tone="secondary">
-          [Policy placeholder] Your country policy pack defines what data is collected, how it is used for clinical
-          and commerce services, and how consent is recorded. This text is not legal advice — refer to published policy
-          when available.
-        </Text>
-        <Link href="/account/consent">
-          <Button variant="secondary" size="sm">
-            Manage consent grants
-          </Button>
-        </Link>
-      </Card>
+      <Section title="Security">
+        <MgCard>
+          <h3 className="mg-list-title">Active sessions</h3>
+          <p className="mg-list-meta">
+            Sign out everywhere you are logged in. You will need to sign in again on each device.
+          </p>
+          <div className="mg-toolbar">
+            <MgBtn variant="secondary" size="sm" onClick={() => void handleLogoutAll()}>
+              {busy ? 'Signing out…' : 'Sign out all sessions'}
+            </MgBtn>
+            <MgBtn variant="ghost" size="sm" onClick={() => signOut()}>
+              Sign out this device
+            </MgBtn>
+          </div>
+        </MgCard>
+      </Section>
 
-      <Heading level={2}>Security</Heading>
-      <Card>
-        <Text>Active sessions</Text>
-        <Text size="caption" tone="secondary">
-          Sign out of all devices where you are signed in with this identity. You will need to sign in again on each
-          device.
-        </Text>
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => void handleLogoutAll()}>
-          {busy ? 'Signing out…' : 'Sign out all sessions'}
-        </Button>
-        <Button variant="tertiary" size="sm" onClick={() => signOut()}>
-          Sign out this device
-        </Button>
-      </Card>
+      <Section title="Notifications">
+        <MgCard>
+          <h3 className="mg-list-title">Alert preferences</h3>
+          <p className="mg-list-meta">Control order, appointment, and delivery notifications.</p>
+          <MgBtn href="/account/preferences" variant="secondary" size="sm">
+            Open alert settings
+          </MgBtn>
+        </MgCard>
+      </Section>
 
-      <Heading level={2}>Notifications</Heading>
-      <Card>
-        <Text>Notification preferences</Text>
-        <Text size="caption" tone="secondary">
-          Control order, appointment, and delivery notifications separately from clinical consent.
-        </Text>
-        <Link href="/account/preferences">
-          <Button variant="secondary" size="sm">
-            Open notification preferences
-          </Button>
-        </Link>
-      </Card>
-
-      <Heading level={2}>Support</Heading>
-      <Card>
-        <Text>Need help?</Text>
-        <Text size="caption" tone="secondary">
-          Contact support for account access issues. Do not share clinical details in support tickets unless required.
-        </Text>
-        <Link href="/account/support">
-          <Button variant="secondary" size="sm">
+      <Section title="Help">
+        <MgCard>
+          <h3 className="mg-list-title">Need help?</h3>
+          <p className="mg-list-meta">Contact support for account access issues.</p>
+          <MgBtn href="/account/support" variant="secondary" size="sm">
             Open support
-          </Button>
-        </Link>
-      </Card>
+          </MgBtn>
+        </MgCard>
+      </Section>
+
+      <p className="mg-list-meta">
+        <Link href="/help">Visit Help Center</Link> for FAQs on orders, refunds, and privacy policy.
+      </p>
 
       {error === 'network' ? (
         <NetworkErrorState action={{ label: 'Dismiss', onClick: () => setError(null) }} />
       ) : null}
-      {message ? <Text>{message}</Text> : null}
-    </section>
+      {message ? <p className="mg-page-subtitle">{message}</p> : null}
+    </AccountPage>
   );
 }

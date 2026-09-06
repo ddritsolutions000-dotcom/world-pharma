@@ -24,7 +24,7 @@ export class CmsContentService {
 
   async listContent(
     principal: Principal,
-    query: { country_code?: string; status?: string; content_type?: string },
+    query: { country_code?: string; status?: string; content_type?: string; slug?: string },
   ) {
     const country = await resolveCountryByCode(this.prisma, query.country_code);
     return runWithTenant(workerTenantContext({ countryId: country.id, personId: principal.personId }), async () => {
@@ -42,6 +42,9 @@ export class CmsContentService {
           throw Errors.validation(`Invalid CMS content type: ${query.content_type}`);
         }
         where.contentType = contentType;
+      }
+      if (query.slug?.trim()) {
+        where.slug = query.slug.trim();
       }
       const rows = await this.prisma.cmsContentItem.findMany({
         where,
@@ -332,7 +335,20 @@ export class CmsContentService {
       if (item.status === CmsContentStatus.PUBLISHED && idempotencyKey) {
         return this.presentItem(item);
       }
+      if (item.status !== CmsContentStatus.IN_REVIEW) {
+        throw Errors.conflict('CMS content must be IN_REVIEW before publish. Submit for review first.');
+      }
       assertCmsTransition(item.status, CmsContentStatus.PUBLISHED);
+
+      const lastRevision = await this.prisma.cmsContentRevision.findFirst({
+        where: { contentItemId: contentId },
+        orderBy: { revisionNumber: 'desc' },
+        select: { createdByPersonId: true },
+      });
+      const lastEditorId = lastRevision?.createdByPersonId ?? item.authorPersonId;
+      if (lastEditorId === principal.personId) {
+        throw Errors.conflict('CMS dual-control: publisher cannot be the same operator who last edited this draft');
+      }
 
       const publicationVersion = item.publishedVersion + 1;
       const now = new Date();
@@ -400,6 +416,55 @@ export class CmsContentService {
       });
 
       return this.presentItem(updated.row);
+    });
+  }
+
+  async revise(principal: Principal, contentId: string, countryCode?: string) {
+    assertUuid(contentId, 'content id');
+    const country = await resolveCountryByCode(this.prisma, countryCode);
+    return runWithTenant(workerTenantContext({ countryId: country.id, personId: principal.personId }), async () => {
+      const item = await this.prisma.cmsContentItem.findFirst({
+        where: { id: contentId, countryId: country.id },
+      });
+      if (!item) {
+        throw Errors.notFound('CMS content not found');
+      }
+      if (isEditableCmsStatus(item.status)) {
+        return this.presentItem(item);
+      }
+      assertCmsTransition(item.status, CmsContentStatus.DRAFT);
+
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.cmsContentItem.update({
+          where: { id: contentId },
+          data: { status: CmsContentStatus.DRAFT, version: { increment: 1 } },
+        });
+        await this.audits.record({
+          contentItemId: contentId,
+          actorPersonId: principal.personId,
+          action: 'CMS_CONTENT_REVISED',
+        });
+        await this.outbox.enqueue(tx, {
+          type: 'CMS_CONTENT_REVISED',
+          aggregateType: 'cms_content_item',
+          aggregateId: contentId,
+          producer: 'cms',
+          countryId: country.id,
+          actorId: principal.personId,
+          payload: { content_id: contentId },
+          occurrenceKey: `CMS_CONTENT_REVISED:${contentId}:${row.version}`,
+        });
+        return row;
+      });
+
+      await this.securityEvents.emit({
+        type: 'CMS_CONTENT_REVISED',
+        outcome: 'success',
+        personId: principal.personId,
+        metadata: { content_id: contentId },
+      });
+
+      return this.presentItem(updated);
     });
   }
 

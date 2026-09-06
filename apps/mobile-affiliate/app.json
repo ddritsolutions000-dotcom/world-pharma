@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "World Pharma Affiliate",
+    "slug": "world-pharma-affiliate",
+    "scheme": "worldpharmaaffiliate",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.worldpharma.affiliate" },
+    "android": { "package": "com.worldpharma.affiliate", "versionCode": 1 },
+    "extra": { "appEnv": "local" }
+  }
+}

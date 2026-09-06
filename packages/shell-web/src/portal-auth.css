@@ -1,0 +1,162 @@
+.wp-auth-page {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  background: #f8f9fb;
+}
+
+@media (max-width: 860px) {
+  .wp-auth-page {
+    grid-template-columns: 1fr;
+  }
+  .wp-auth-hero {
+    min-height: 220px;
+  }
+}
+
+.wp-auth-hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3rem 2.5rem;
+  color: #fff;
+  background: linear-gradient(145deg, var(--wp-auth-accent, #1A365D) 0%, #0F2744 100%);
+}
+
+.wp-auth-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+}
+
+.wp-auth-logo-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  display: grid;
+  place-items: center;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.wp-auth-hero h1 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.wp-auth-hero p {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.55;
+  opacity: 0.92;
+  max-width: 28rem;
+}
+
+.wp-auth-trust {
+  margin-top: 2rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  font-size: 0.8125rem;
+  opacity: 0.88;
+}
+
+.wp-auth-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+}
+
+.wp-auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  padding: 2rem;
+}
+
+.wp-auth-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid #e8e8e8;
+  padding-bottom: 0.75rem;
+}
+
+.wp-auth-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #767676;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.wp-auth-tab.is-active {
+  color: var(--wp-auth-accent, #1A365D);
+  background: color-mix(in srgb, var(--wp-auth-accent, #1A365D) 10%, transparent);
+}
+
+.wp-auth-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.25rem;
+  color: #3b3b3b;
+}
+
+.wp-auth-card .wp-auth-sub {
+  margin: 0 0 1.25rem;
+  font-size: 0.875rem;
+  color: #767676;
+  line-height: 1.45;
+}
+
+.wp-auth-sandbox {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: #f3f6fb;
+  border: 1px solid #d9e2ef;
+  font-size: 0.8125rem;
+  color: #1e3a5f;
+}
+
+.wp-auth-sandbox code {
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.wp-auth-footer {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e8e8e8;
+  font-size: 0.8125rem;
+  color: #767676;
+  line-height: 1.45;
+}
+
+.wp-auth-footer a {
+  color: var(--wp-auth-accent, #1A365D);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.wp-auth-footer a:hover {
+  text-decoration: underline;
+}
+
+.wp-auth-form .wp-btn-primary {
+  width: 100%;
+  margin-top: 0.5rem;
+}

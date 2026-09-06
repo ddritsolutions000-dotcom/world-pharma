@@ -26,6 +26,7 @@ export class HealthTimelineService {
       title: string;
       occurredAt: Date;
       sandbox?: boolean;
+      subjectFamilyMemberId?: string | null;
     },
   ) {
     const existing = await tx.healthTimelineEvent.findFirst({
@@ -53,6 +54,7 @@ export class HealthTimelineService {
         status: HealthTimelineEventStatus.ACTIVE,
         occurredAt: input.occurredAt,
         sandbox: input.sandbox ?? true,
+        subjectFamilyMemberId: input.subjectFamilyMemberId ?? null,
       },
     });
   }
@@ -109,6 +111,7 @@ export class HealthTimelineService {
       title: string;
       occurredAt: Date;
       sandbox?: boolean;
+      subjectFamilyMemberId?: string | null;
     },
   ) {
     const existing = await tx.healthTimelineEvent.findFirst({
@@ -136,6 +139,7 @@ export class HealthTimelineService {
         status: HealthTimelineEventStatus.ACTIVE,
         occurredAt: input.occurredAt,
         sandbox: input.sandbox ?? true,
+        subjectFamilyMemberId: input.subjectFamilyMemberId ?? null,
       },
     });
   }
@@ -146,6 +150,7 @@ export class HealthTimelineService {
     types?: HealthArtifactType[];
     cursor?: string;
     limit?: number;
+    subjectFamilyMemberId?: string | null;
   }) {
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 50);
     const rows = await this.prisma.healthTimelineEvent.findMany({
@@ -153,6 +158,7 @@ export class HealthTimelineService {
         personId: input.personId,
         countryId: input.countryId,
         status: HealthTimelineEventStatus.ACTIVE,
+        subjectFamilyMemberId: input.subjectFamilyMemberId ?? null,
         ...(input.types?.length ? { artifactType: { in: input.types } } : {}),
         ...(input.cursor
           ? {
@@ -188,6 +194,7 @@ export class HealthTimelineService {
     status: HealthTimelineEventStatus;
     occurredAt: Date;
     sandbox: boolean;
+    subjectFamilyMemberId?: string | null;
   }) {
     return {
       id: row.id,
@@ -197,9 +204,57 @@ export class HealthTimelineService {
       source_module: row.sourceModule,
       source_id: row.sourceId,
       title: row.title,
+      /** Safe non-PHI summary for dashboard/timeline cards only. */
+      summary: this.safeSummary(row.eventType, row.artifactType, row.title),
       status: row.status,
       occurred_at: row.occurredAt.toISOString(),
       sandbox: row.sandbox,
+      subject_family_member_id: row.subjectFamilyMemberId ?? null,
+      deep_link: this.deepLinkHint(row.artifactType, row.artifactId, row.sourceModule, row.sourceId),
     };
+  }
+
+  private safeSummary(
+    eventType: HealthTimelineEventType,
+    artifactType: HealthArtifactType | null,
+    title: string,
+  ): string {
+    if (eventType === HealthTimelineEventType.CONSULT_COMPLETED) {
+      return 'Consultation completed. Open the authorized summary for details.';
+    }
+    if (artifactType === HealthArtifactType.PRESCRIPTION_STRUCTURED) {
+      return 'A prescription is available. Clinical details require authorized access.';
+    }
+    if (artifactType === HealthArtifactType.LAB_REPORT) {
+      return 'A lab report is available. Results require authorized access.';
+    }
+    if (artifactType === HealthArtifactType.IMAGING_REPORT) {
+      return 'An imaging report is available. Findings require authorized access.';
+    }
+    return title;
+  }
+
+  private deepLinkHint(
+    artifactType: HealthArtifactType | null,
+    artifactId: string | null,
+    sourceModule: string,
+    sourceId: string,
+  ): string | null {
+    if (artifactId) {
+      return `/health/artifacts/${artifactId}`;
+    }
+    if (sourceModule === 'encounter') {
+      return `/appointments/${sourceId}`;
+    }
+    if (sourceModule === 'lab') {
+      return `/lab/bookings/${sourceId}`;
+    }
+    if (sourceModule === 'radiology') {
+      return `/radiology/bookings/${sourceId}`;
+    }
+    if (artifactType === HealthArtifactType.PRESCRIPTION_STRUCTURED) {
+      return '/prescriptions';
+    }
+    return '/health';
   }
 }

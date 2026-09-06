@@ -200,6 +200,7 @@ model Person {
   paymentIntents    PaymentIntent[]
   orders            Order[]
   doctorProfiles    DoctorProfile[]
+  doctorWallets     DoctorWallet[]
   consentGrantsAsSubject ConsentGrant[] @relation("ConsentSubject")
   consentGrantsAsActor   ConsentGrant[] @relation("ConsentActor")
   clinicalRelationshipsAsPatient ClinicalRelationship[]
@@ -274,6 +275,10 @@ model Person {
   crmSuppressions             CrmSuppression[]
   crmAutomationRuns           CrmAutomationRun[]
   wishlistItems               WishlistItem[]
+  medicationReminders         MedicationReminder[]
+  familyMembers               CustomerFamilyMember[]
+  healthProfilesOwned         CustomerHealthProfile[] @relation("HealthProfileOwner")
+  carePlanMemberships         CustomerCarePlanMembership[]
   loyaltyAccounts             LoyaltyAccount[]
   productReviewsAuthored      ProductReview[] @relation("ProductReviewAuthor")
   productReviewResponses      ProductReviewResponse[]
@@ -598,6 +603,15 @@ enum CountryStatus {
   ACTIVE
 }
 
+/** Sprint 42 — production activation lifecycle (independent of sandbox CountryStatus). */
+enum CountryProductionLifecycle {
+  CONFIGURED
+  UNDER_REVIEW
+  READY_FOR_ACTIVATION
+  ACTIVE
+  SUSPENDED
+}
+
 enum PolicyPackStatus {
   DRAFT
   PUBLISHED
@@ -620,6 +634,13 @@ model Country {
   isoAlpha3               String         @map("iso3166_a3")
   nameI18n                Json          @map("name_i18n")
   status                  CountryStatus  @default(INACTIVE)
+  /// Production activation lifecycle — separate from sandbox CountryStatus ACTIVE/INACTIVE.
+  productionLifecycle     CountryProductionLifecycle @default(CONFIGURED) @map("production_lifecycle")
+  productionActivatedAt   DateTime?     @map("production_activated_at") @db.Timestamptz
+  productionActivatedById String?       @map("production_activated_by_id") @db.Uuid
+  productionSuspendedAt   DateTime?     @map("production_suspended_at") @db.Timestamptz
+  productionSuspendedById String?       @map("production_suspended_by_id") @db.Uuid
+  productionSuspendReason String?       @map("production_suspend_reason")
   defaultLocale           String         @map("default_locale")
   defaultCurrency         String         @map("default_currency")
   defaultTimezone         String         @map("default_timezone")
@@ -633,6 +654,15 @@ model Country {
   region                  OperatingRegion? @relation(fields: [regionId], references: [id])
   incorporatedLegalEntities LegalEntity[] @relation("LegalEntityIncorporation")
   policyPacks             PolicyPack[]
+  healthcarePolicies      HealthcarePolicy[]
+  regulatoryRequirements  RegulatoryRequirement[]
+  regulatoryEvidence      RegulatoryEvidence[]
+  productionDependencies  ProductionDependency[]
+  readinessGates          CountryReadinessGate[]
+  pharmacyLicences        PharmacyLicence[]
+  partnerCommercialApprovals PartnerCommercialApproval[]
+  productDuplicateCandidates ProductDuplicateCandidate[]
+  pharmacyCatalogImportBatches PharmacyCatalogImportBatch[]
   partners                Partner[]
   organizations           Organization[]
   catalogItemCountries     CatalogItemCountry[]
@@ -674,6 +704,7 @@ model Country {
   settlementImportRecords SettlementImportRecord[]
   financeReconciliations  FinanceReconciliation[]
   doctorProfiles          DoctorProfile[]
+  doctorWallets           DoctorWallet[]
   doctorCredentials       DoctorCredential[]
   consentGrants           ConsentGrant[]
   clinicalRelationships   ClinicalRelationship[]
@@ -719,6 +750,15 @@ model Country {
   affiliateLinks          AffiliateLink[]
   affiliateClicks         AffiliateClick[]
   wishlistItems           WishlistItem[]
+  medicationReminders     MedicationReminder[]
+  familyMembers           CustomerFamilyMember[]
+  customerHealthProfiles  CustomerHealthProfile[]
+  carePlanMemberships     CustomerCarePlanMembership[]
+  healthPackages          HealthPackage[]
+  carePlanDefinitions     CarePlanDefinition[]
+  serviceabilityZones     ServiceabilityZone[]
+  medicineSubstituteEdges MedicineSubstituteEdge[]
+  notificationCountryProviders NotificationCountryProvider[]
   loyaltyPrograms         LoyaltyProgram[]
   loyaltyAccounts         LoyaltyAccount[]
   loyaltyLedgerEntries    LoyaltyLedgerEntry[]
@@ -749,6 +789,397 @@ model PolicyPack {
   @@unique([countryId, version])
   @@index([countryId, status])
   @@map("policy_packs")
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Sprint 40 — Pharmacy partner licence + commercial approval models
+// ──────────────────────────────────────────────────────────────────
+
+enum PharmacyLicenceStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+/** Structured pharmacy licence record attached to a partner/org, country-scoped. */
+model PharmacyLicence {
+  id                  String                 @id @db.Uuid
+  partnerId           String                 @map("partner_id") @db.Uuid
+  countryId           String                 @map("country_id") @db.Uuid
+  licenceAuthority    String                 @map("licence_authority")
+  licenceNumber       String                 @map("licence_number")
+  responsiblePharmacist String?             @map("responsible_pharmacist")
+  issuedAt            DateTime?              @map("issued_at") @db.Timestamptz
+  expiresAt           DateTime?              @map("expires_at") @db.Timestamptz
+  status              PharmacyLicenceStatus  @default(NOT_SUBMITTED)
+  verifiedById        String?                @map("verified_by_id") @db.Uuid
+  verifiedAt          DateTime?              @map("verified_at") @db.Timestamptz
+  rejectedAt          DateTime?              @map("rejected_at") @db.Timestamptz
+  rejectionReason     String?                @map("rejection_reason")
+  /** Opaque key into private object store — never a public URL. */
+  evidenceObjectKey   String?                @map("evidence_object_key")
+  regulatoryEvidenceId String?              @map("regulatory_evidence_id") @db.Uuid
+  notes               String?
+  createdById         String?                @map("created_by_id") @db.Uuid
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+
+  partner             Partner                @relation(fields: [partnerId], references: [id])
+  country             Country                @relation(fields: [countryId], references: [id])
+  events              PharmacyLicenceEvent[]
+
+  @@index([partnerId, countryId])
+  @@index([status])
+  @@map("pharmacy_licences")
+}
+
+/** Audit trail for pharmacy licence mutations — never stores document bytes. */
+model PharmacyLicenceEvent {
+  id          String   @id @db.Uuid
+  licenceId   String   @map("licence_id") @db.Uuid
+  partnerId   String   @map("partner_id") @db.Uuid
+  countryId   String   @map("country_id") @db.Uuid
+  action      String
+  fromStatus  String?  @map("from_status")
+  toStatus    String?  @map("to_status")
+  actorId     String?  @map("actor_id") @db.Uuid
+  reason      String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  licence     PharmacyLicence @relation(fields: [licenceId], references: [id], onDelete: Cascade)
+
+  @@index([licenceId, createdAt])
+  @@index([partnerId, createdAt])
+  @@map("pharmacy_licence_events")
+}
+
+/** Admin-only commercial approval gate for a partner. Not self-approvable. */
+model PartnerCommercialApproval {
+  id              String   @id @db.Uuid
+  partnerId       String   @map("partner_id") @db.Uuid
+  countryId       String   @map("country_id") @db.Uuid
+  approved        Boolean  @default(false)
+  approvedById    String?  @map("approved_by_id") @db.Uuid
+  approvedAt      DateTime? @map("approved_at") @db.Timestamptz
+  revokedById     String?  @map("revoked_by_id") @db.Uuid
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  partner         Partner  @relation(fields: [partnerId], references: [id])
+  country         Country  @relation(fields: [countryId], references: [id])
+  events          PartnerCommercialApprovalEvent[]
+
+  @@unique([partnerId, countryId])
+  @@index([partnerId])
+  @@map("partner_commercial_approvals")
+}
+
+/** Audit trail for commercial approval grant/revoke — no secrets/PHI. */
+model PartnerCommercialApprovalEvent {
+  id              String   @id @db.Uuid
+  approvalId      String   @map("approval_id") @db.Uuid
+  partnerId       String   @map("partner_id") @db.Uuid
+  countryId       String   @map("country_id") @db.Uuid
+  action          String
+  approved        Boolean?
+  actorId         String?  @map("actor_id") @db.Uuid
+  reason          String?
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  approval        PartnerCommercialApproval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+
+  @@index([approvalId, createdAt])
+  @@index([partnerId, createdAt])
+  @@map("partner_commercial_approval_events")
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Sprint 41 — Catalog quality, duplicate review, pharmacy feed import
+// ──────────────────────────────────────────────────────────────────
+
+enum ProductDuplicateStatus {
+  POSSIBLE_DUPLICATE
+  DISMISSED
+  CONFIRMED_DISTINCT
+}
+
+enum PharmacyCatalogImportStatus {
+  RECEIVED
+  VALIDATING
+  ACCEPTED
+  REJECTED
+  PARTIAL
+}
+
+enum PharmacyCatalogImportRowStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  DUPLICATE
+}
+
+/** Non-destructive duplicate candidate for admin review. Never auto-merges. */
+model ProductDuplicateCandidate {
+  id              String                  @id @db.Uuid
+  countryId       String                  @map("country_id") @db.Uuid
+  itemId          String                  @map("item_id") @db.Uuid
+  matchItemId     String                  @map("match_item_id") @db.Uuid
+  matchKeys       Json                    @default("[]") @map("match_keys")
+  status          ProductDuplicateStatus  @default(POSSIBLE_DUPLICATE)
+  reviewedById    String?                 @map("reviewed_by_id") @db.Uuid
+  reviewedAt      DateTime?               @map("reviewed_at") @db.Timestamptz
+  notes           String?
+  createdAt       DateTime                @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime                @updatedAt @map("updated_at") @db.Timestamptz
+
+  country         Country                 @relation(fields: [countryId], references: [id])
+
+  @@unique([itemId, matchItemId])
+  @@index([countryId, status])
+  @@map("product_duplicate_candidates")
+}
+
+/** Authorized pharmacy catalog feed batch (CSV/API/manual). Not a 1mg scrape. */
+model PharmacyCatalogImportBatch {
+  id              String                       @id @db.Uuid
+  sellerOrgId     String                       @map("seller_org_id") @db.Uuid
+  countryId       String                       @map("country_id") @db.Uuid
+  sourceId        String                       @map("source_id")
+  sourceVersion   String                       @map("source_version")
+  status          PharmacyCatalogImportStatus  @default(RECEIVED)
+  importedAt      DateTime                     @default(now()) @map("imported_at") @db.Timestamptz
+  createdById     String?                      @map("created_by_id") @db.Uuid
+  acceptedCount   Int                          @default(0) @map("accepted_count")
+  rejectedCount   Int                          @default(0) @map("rejected_count")
+  createdAt       DateTime                     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime                     @updatedAt @map("updated_at") @db.Timestamptz
+
+  sellerOrg       Organization                 @relation(fields: [sellerOrgId], references: [id])
+  country         Country                      @relation(fields: [countryId], references: [id])
+  rows            PharmacyCatalogImportRow[]
+
+  @@unique([sellerOrgId, sourceId, sourceVersion])
+  @@index([countryId, status])
+  @@map("pharmacy_catalog_import_batches")
+}
+
+model PharmacyCatalogImportRow {
+  id              String                          @id @db.Uuid
+  batchId         String                          @map("batch_id") @db.Uuid
+  sourceRowKey    String                          @map("source_row_key")
+  productId       String?                         @map("product_id")
+  sku             String?
+  priceMinor      BigInt?                         @map("price_minor")
+  currency        String?                         @db.Char(3)
+  stockQty        Int?                            @map("stock_qty")
+  countryCode     String?                         @map("country_code") @db.Char(2)
+  payload         Json                            @default("{}")
+  status          PharmacyCatalogImportRowStatus  @default(PENDING)
+  rejectReasons   Json                            @default("[]") @map("reject_reasons")
+  offerId         String?                         @map("offer_id") @db.Uuid
+  createdAt       DateTime                        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime                        @updatedAt @map("updated_at") @db.Timestamptz
+
+  batch           PharmacyCatalogImportBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, sourceRowKey])
+  @@index([batchId, status])
+  @@map("pharmacy_catalog_import_rows")
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Sprint 39 — Launch-market regulatory & production-dependency models
+// ──────────────────────────────────────────────────────────────────
+
+enum HealthcarePolicyStatus {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+}
+
+enum RegulatoryRequirementStatus {
+  REQUIRED
+  WAIVED
+  NOT_APPLICABLE
+}
+
+enum RegulatoryEvidenceStatus {
+  PENDING
+  SUBMITTED
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum ProductionDependencyStatus {
+  MISSING
+  CONFIGURED
+  EXTERNAL_GATED
+  VERIFIED
+  EXPIRED
+  BLOCKED
+}
+
+enum CountryReadinessDimension {
+  SOFTWARE
+  LEGAL
+  COMMERCIAL
+  PARTNER
+  INTEGRATION
+  PRODUCTION
+}
+
+enum CountryReadinessGateStatus {
+  READY
+  MISSING
+  EXTERNAL_GATED
+  EXPIRED
+  BLOCKED
+}
+
+/** Country-scoped healthcare regulatory policy — configures requirements without inventing approvals. */
+model HealthcarePolicy {
+  id              String                   @id @db.Uuid
+  countryId       String                   @map("country_id") @db.Uuid
+  version         Int
+  status          HealthcarePolicyStatus   @default(DRAFT)
+  /// JSON document: array of { code, label, description, required, note }
+  requirements    Json
+  regulatoryBody  String?                  @map("regulatory_body")
+  effectiveFrom   DateTime?                @map("effective_from") @db.Timestamptz
+  publishedAt     DateTime?                @map("published_at") @db.Timestamptz
+  publishedById   String?                  @map("published_by_id") @db.Uuid
+  createdById     String?                  @map("created_by_id") @db.Uuid
+  supersededAt    DateTime?                @map("superseded_at") @db.Timestamptz
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz
+
+  country         Country                  @relation(fields: [countryId], references: [id])
+  evidenceRecords RegulatoryEvidence[]
+
+  @@unique([countryId, version])
+  @@index([countryId, status])
+  @@map("healthcare_policies")
+}
+
+/** A single trackable regulatory/compliance requirement for a country. */
+model RegulatoryRequirement {
+  id              String                       @id @db.Uuid
+  countryId       String                       @map("country_id") @db.Uuid
+  code            String
+  label           String
+  description     String?
+  status          RegulatoryRequirementStatus  @default(REQUIRED)
+  category        String
+  referenceUrl    String?                      @map("reference_url")
+  notes           String?
+  createdById     String?                      @map("created_by_id") @db.Uuid
+  createdAt       DateTime                     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime                     @updatedAt @map("updated_at") @db.Timestamptz
+
+  country         Country                      @relation(fields: [countryId], references: [id])
+  evidence        RegulatoryEvidence[]
+
+  @@unique([countryId, code])
+  @@index([countryId])
+  @@map("regulatory_requirements")
+}
+
+/** Metadata for regulatory evidence attached to a requirement. No document bytes stored here. */
+model RegulatoryEvidence {
+  id                  String                   @id @db.Uuid
+  countryId           String                   @map("country_id") @db.Uuid
+  requirementId       String?                  @map("requirement_id") @db.Uuid
+  healthcarePolicyId  String?                  @map("healthcare_policy_id") @db.Uuid
+  documentType        String                   @map("document_type")
+  status              RegulatoryEvidenceStatus @default(PENDING)
+  issuer              String?
+  referenceNumber     String?                  @map("reference_number")
+  issuedAt            DateTime?                @map("issued_at") @db.Timestamptz
+  expiresAt           DateTime?                @map("expires_at") @db.Timestamptz
+  storageObjectKey    String?                  @map("storage_object_key")
+  verificationStatus  String?                  @map("verification_status")
+  verifiedById        String?                  @map("verified_by_id") @db.Uuid
+  verifiedAt          DateTime?                @map("verified_at") @db.Timestamptz
+  notes               String?
+  createdById         String?                  @map("created_by_id") @db.Uuid
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime                 @updatedAt @map("updated_at") @db.Timestamptz
+
+  country             Country                  @relation(fields: [countryId], references: [id])
+  requirement         RegulatoryRequirement?   @relation(fields: [requirementId], references: [id])
+  healthcarePolicy    HealthcarePolicy?        @relation(fields: [healthcarePolicyId], references: [id])
+  events              RegulatoryEvidenceEvent[]
+
+  @@index([countryId, status])
+  @@index([requirementId])
+  @@map("regulatory_evidence")
+}
+
+/** Audit trail for regulatory evidence mutations — never stores document bytes. */
+model RegulatoryEvidenceEvent {
+  id          String   @id @db.Uuid
+  evidenceId  String   @map("evidence_id") @db.Uuid
+  countryId   String   @map("country_id") @db.Uuid
+  action      String
+  fromStatus  String?  @map("from_status")
+  toStatus    String?  @map("to_status")
+  actorId     String?  @map("actor_id") @db.Uuid
+  reason      String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  evidence    RegulatoryEvidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+
+  @@index([evidenceId, createdAt])
+  @@index([countryId, createdAt])
+  @@map("regulatory_evidence_events")
+}
+
+/** Registry of production dependencies per country/environment. Stores metadata only — no secrets. */
+model ProductionDependency {
+  id                  String                      @id @db.Uuid
+  countryId           String?                     @map("country_id") @db.Uuid
+  dependencyType      String                      @map("dependency_type")
+  environment         String                      @default("production")
+  status              ProductionDependencyStatus  @default(MISSING)
+  providerIdentifier  String?                     @map("provider_identifier")
+  configReference     String?                     @map("config_reference")
+  verificationStatus  String?                     @map("verification_status")
+  lastVerifiedAt      DateTime?                   @map("last_verified_at") @db.Timestamptz
+  externalGated       Boolean                     @default(true) @map("external_gated")
+  notes               String?
+  createdById         String?                     @map("created_by_id") @db.Uuid
+  createdAt           DateTime                    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime                    @updatedAt @map("updated_at") @db.Timestamptz
+
+  country             Country?                    @relation(fields: [countryId], references: [id])
+
+  @@index([countryId, dependencyType])
+  @@index([dependencyType, environment])
+  @@map("production_dependencies")
+}
+
+/** Five-dimension readiness gate snapshot for a country (computed + persisted). */
+model CountryReadinessGate {
+  id          String                     @id @db.Uuid
+  countryId   String                     @map("country_id") @db.Uuid
+  dimension   CountryReadinessDimension
+  status      CountryReadinessGateStatus @default(MISSING)
+  blockers    Json                       @default("[]")
+  notes       String?
+  recordedAt  DateTime                   @default(now()) @map("recorded_at") @db.Timestamptz
+  updatedAt   DateTime                   @updatedAt @map("updated_at") @db.Timestamptz
+
+  country     Country                    @relation(fields: [countryId], references: [id])
+
+  @@unique([countryId, dimension])
+  @@index([countryId])
+  @@map("country_readiness_gates")
 }
 
 enum PartnerStatus {
@@ -870,11 +1301,130 @@ model Partner {
   healthArtifactAccessAudits HealthArtifactAccessAudit[]
   breakGlassGrants        BreakGlassGrant[]
   affiliateReferralCodes  AffiliateReferralCode[]
+  pharmacyLicences        PharmacyLicence[]
+  commercialApprovals     PartnerCommercialApproval[]
+  wallet                  PartnerWallet?
 
   @@unique([personId, partnerTypeCode, countryId])
   @@index([countryId, status])
   @@index([partnerTypeCode, status])
   @@map("partners")
+}
+
+/** Shared partner earnings wallet (lab / affiliate / delivery / doctor migration target). */
+enum PartnerWalletLedgerKind {
+  EARNING_CREDIT
+  WITHDRAW_HOLD
+  WITHDRAW_PAID
+  WITHDRAW_RELEASE
+  ADJUSTMENT
+}
+
+enum PartnerWithdrawStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum PartnerPayoutMethod {
+  BANK
+  UPI
+}
+
+model PartnerWallet {
+  id                     String   @id @db.Uuid
+  partnerId              String   @unique @map("partner_id") @db.Uuid
+  personId               String   @map("person_id") @db.Uuid
+  organizationId         String?  @map("organization_id") @db.Uuid
+  countryId              String   @map("country_id") @db.Uuid
+  currency               String   @db.Char(3)
+  availableMinor         BigInt   @default(0) @map("available_minor")
+  heldMinor              BigInt   @default(0) @map("held_minor")
+  lifetimeEarnedMinor    BigInt   @default(0) @map("lifetime_earned_minor")
+  lifetimeWithdrawnMinor BigInt   @default(0) @map("lifetime_withdrawn_minor")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  partner          Partner                    @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  entries          PartnerWalletLedgerEntry[]
+  withdrawRequests PartnerWithdrawRequest[]
+  payoutAccount    PartnerPayoutAccount?
+
+  @@index([personId])
+  @@index([organizationId])
+  @@map("partner_wallets")
+}
+
+model PartnerWalletLedgerEntry {
+  id                String                 @id @db.Uuid
+  walletId          String                 @map("wallet_id") @db.Uuid
+  kind              PartnerWalletLedgerKind
+  amountMinor       BigInt                 @map("amount_minor")
+  currency          String                 @db.Char(3)
+  balanceAfterMinor BigInt                 @map("balance_after_minor")
+  source            String
+  sourceKey         String                 @map("source_key")
+  note              String?
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz
+
+  wallet PartnerWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@unique([source, sourceKey, kind])
+  @@index([walletId, createdAt])
+  @@map("partner_wallet_ledger_entries")
+}
+
+model PartnerPayoutAccount {
+  id                  String              @id @db.Uuid
+  walletId            String              @unique @map("wallet_id") @db.Uuid
+  method              PartnerPayoutMethod @default(BANK)
+  accountHolderName   String              @map("account_holder_name")
+  bankName            String?             @map("bank_name")
+  accountNumberMasked String?             @map("account_number_masked")
+  ifscOrRouting       String?             @map("ifsc_or_routing")
+  upiIdMasked         String?             @map("upi_id_masked")
+  /** AES-GCM ciphertext — never return to clients. */
+  accountNumberCipher String?             @map("account_number_cipher")
+  upiIdCipher         String?             @map("upi_id_cipher")
+  beneficiaryLiveReady Boolean            @default(false) @map("beneficiary_live_ready")
+  verifiedSandbox     Boolean             @default(true) @map("verified_sandbox")
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  wallet PartnerWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@map("partner_payout_accounts")
+}
+
+model PartnerWithdrawRequest {
+  id              String                @id @db.Uuid
+  walletId        String                @map("wallet_id") @db.Uuid
+  amountMinor     BigInt                @map("amount_minor")
+  currency        String                @db.Char(3)
+  status          PartnerWithdrawStatus @default(REQUESTED)
+  destinationHint String?               @map("destination_hint")
+  sandbox         Boolean               @default(true)
+  livePayout      Boolean               @default(false) @map("live_payout")
+  providerRef     String?               @map("provider_ref")
+  failureCode     String?               @map("failure_code")
+  requestedBy     String                @map("requested_by") @db.Uuid
+  approvedBy      String?               @map("approved_by") @db.Uuid
+  approvedAt      DateTime?             @map("approved_at") @db.Timestamptz
+  executedBy      String?               @map("executed_by") @db.Uuid
+  rejectedBy      String?               @map("rejected_by") @db.Uuid
+  rejectNote      String?               @map("reject_note")
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz
+  paidAt          DateTime?             @map("paid_at") @db.Timestamptz
+
+  wallet PartnerWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+  @@index([status, createdAt])
+  @@map("partner_withdraw_requests")
 }
 
 model PartnerApplication {
@@ -888,6 +1438,8 @@ model PartnerApplication {
   reviewerId      String?                    @map("reviewer_id") @db.Uuid
   rejectionReason String?                   @map("rejection_reason")
   infoRequest     String?                    @map("info_request")
+  applicationFields Json                     @default("{}") @map("application_fields")
+  requestedFields Json                       @default("[]") @map("requested_fields")
   submittedAt     DateTime?                @map("submitted_at") @db.Timestamptz
   reviewedAt      DateTime?                @map("reviewed_at") @db.Timestamptz
   approvedAt      DateTime?                @map("approved_at") @db.Timestamptz
@@ -996,6 +1548,7 @@ model Organization {
   invitations PartnerInvitation[]
   catalogItems CatalogItem[]
   catalogOffers CatalogOffer[]
+  pharmacyCatalogImportBatches PharmacyCatalogImportBatch[]
   commercialRules CommercialRule[]
   warehouseProfiles WarehouseProfile[]
   inventoryLots InventoryLot[]
@@ -1271,6 +1824,8 @@ model CatalogItem {
   productReviews  ProductReview[]
   productQuestions ProductQuestion[]
   personalizationEvents PersonalizationEvent[]
+  substituteEdgesFrom   MedicineSubstituteEdge[] @relation("SubstituteFrom")
+  substituteEdgesTo     MedicineSubstituteEdge[] @relation("SubstituteTo")
 
   @@index([status, categoryId])
   @@index([brandId])
@@ -1313,6 +1868,7 @@ model CatalogItemCountry {
   rxRequired      Boolean         @default(false) @map("rx_required")
   maxQtyPerOrder  Int?           @map("max_qty_per_order")
   legalName       String?        @map("legal_name")
+  attributes      Json           @default("{}")
   /// LEGAL/COMPLIANCE REVIEW REQUIRED before enabling sale of regulated classes.
   complianceNote String?        @map("compliance_note")
   item            CatalogItem   @relation(fields: [itemId], references: [id], onDelete: Cascade)
@@ -1429,6 +1985,13 @@ model CatalogSearchDocument {
   categoryName  String    @default("") @map("category_name")
   published     Boolean   @default(false)
   inStock       Boolean   @default(false) @map("in_stock")
+  rxRequired    Boolean   @default(false) @map("rx_required")
+  minSellMinor  BigInt?   @map("min_sell_minor")
+  maxDiscountPct Int?     @map("max_discount_pct")
+  avgRating     Float?    @map("avg_rating")
+  reviewCount   Int       @default(0) @map("review_count")
+  manufacturerName String @default("") @map("manufacturer_name")
+  composition   String    @default("")
   version       Int       @default(0)
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   country       Country   @relation(fields: [countryId], references: [id])
@@ -1991,6 +2554,54 @@ enum ReconciliationStatus {
   MATCHED
   BREAK
   INVESTIGATE
+}
+
+/// R14-A human-gate configuration store. PLACEHOLDER rows are DEV/DEMO only and are never Book-263 production evidence.
+enum R14AGateCode {
+  NAMED_PSP
+  PRODUCTION_COUNTRY
+  LEGAL_ENTITY
+  MERCHANT_OF_RECORD
+  PSP_CONTRACT
+  VAULT_PATH
+  PCI_SAQ
+}
+
+enum R14AGateEvidenceClass {
+  PLACEHOLDER
+  OWNER_EVIDENCED
+}
+
+model R14AHumanGate {
+  gateCode           R14AGateCode           @id @map("gate_code")
+  valueText          String                 @map("value_text")
+  evidenceClass      R14AGateEvidenceClass  @map("evidence_class")
+  evidenceRef        String?                @map("evidence_ref")
+  updatedByPersonId  String?                @map("updated_by_person_id") @db.Uuid
+  verifiedByPersonId String?                @map("verified_by_person_id") @db.Uuid
+  verifiedAt         DateTime?              @map("verified_at") @db.Timestamptz
+  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+  revisions          R14AHumanGateRevision[]
+
+  @@map("r14a_human_gates")
+}
+
+model R14AHumanGateRevision {
+  id                     String                @id @db.Uuid
+  gateCode               R14AGateCode          @map("gate_code")
+  previousValueText      String                @map("previous_value_text")
+  newValueText           String                @map("new_value_text")
+  previousEvidenceClass  R14AGateEvidenceClass @map("previous_evidence_class")
+  newEvidenceClass       R14AGateEvidenceClass @map("new_evidence_class")
+  actorPersonId          String                @map("actor_person_id") @db.Uuid
+  action                 String
+  note                   String?
+  createdAt              DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  gate                   R14AHumanGate         @relation(fields: [gateCode], references: [gateCode], onDelete: Restrict)
+
+  @@index([gateCode, createdAt])
+  @@map("r14a_human_gate_revisions")
 }
 
 model PaymentGateway {
@@ -2684,6 +3295,7 @@ model Shipment {
   costAdjustments      CarrierCostAdjustment[]
   returnShipment       ReturnShipment?
   logisticsJobs        LogisticsJob[]
+  returnRequests       ReturnRequest[]
 
   @@index([customerPersonId, createdAt])
   @@index([sellerOrgId, status])
@@ -2692,15 +3304,20 @@ model Shipment {
 }
 
 model ReturnRequest {
-  id        String @id @db.Uuid
-  orderId   String  @map("order_id") @db.Uuid
-  reason    ReturnReason
-  status    String  @default("REQUESTED")
-  note      String?
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  id              String    @id @db.Uuid
+  orderId         String    @map("order_id") @db.Uuid
+  reason          ReturnReason
+  status          String    @default("REQUESTED")
+  note            String?
+  pickupSlotStart DateTime? @map("pickup_slot_start") @db.Timestamptz
+  pickupSlotEnd   DateTime? @map("pickup_slot_end") @db.Timestamptz
+  shipmentId      String?   @map("shipment_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  order           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shipment        Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+  @@index([shipmentId])
   @@map("return_requests")
 }
 
@@ -2863,13 +3480,24 @@ model DeliveryAttempt {
 }
 
 model ProofOfDelivery {
-  id          String @id @db.Uuid
-  shipmentId  String  @map("shipment_id") @db.Uuid
-  kind        ProofOfDeliveryKind
-  secretHash  String  @map("secret_hash")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
-  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  id              String              @id @db.Uuid
+  shipmentId      String              @map("shipment_id") @db.Uuid
+  kind            ProofOfDeliveryKind
+  secretHash      String              @map("secret_hash")
+  objectKey       String?             @map("object_key")
+  metadata        Json                @default("{}")
+  idempotencyKey  String?             @unique @map("idempotency_key")
+  /// Sprint 45 — OTP attempt / expiry (never store plaintext OTP).
+  attemptCount    Int                 @default(0) @map("attempt_count")
+  maxAttempts     Int                 @default(5) @map("max_attempts")
+  expiresAt       DateTime?           @map("expires_at") @db.Timestamptz
+  consumedAt      DateTime?           @map("consumed_at") @db.Timestamptz
+  purpose         String              @default("DELIVERY_POD")
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  shipment        Shipment            @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
 
+  @@index([shipmentId, kind])
+  @@index([shipmentId, purpose])
   @@map("proofs_of_delivery")
 }
 
@@ -3002,6 +3630,9 @@ model RiderPresence {
   personId       String        @unique @map("person_id") @db.Uuid
   organizationId String?       @map("organization_id") @db.Uuid
   online         Boolean       @default(false)
+  /** Coarse last-known rider GPS for nearest-job assignment (not continuous tracking). */
+  latitude       Decimal?      @db.Decimal(9, 6)
+  longitude      Decimal?      @db.Decimal(9, 6)
   createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -3617,9 +4248,122 @@ model DoctorProfile {
   encounterConsultNotes EncounterConsultNote[]
   videoSessions       VideoSession[]
   prescriptions       Prescription[]
+  wallet              DoctorWallet?
+  payoutAccount       DoctorPayoutAccount?
 
   @@index([countryId, personId])
   @@map("doctor_profiles")
+}
+
+/** Masked payout destination for doctor wallet withdraw. Full account numbers are never returned after save. */
+enum DoctorPayoutMethod {
+  BANK
+  UPI
+}
+
+model DoctorPayoutAccount {
+  id                  String             @id @db.Uuid
+  doctorProfileId     String             @unique @map("doctor_profile_id") @db.Uuid
+  personId            String             @map("person_id") @db.Uuid
+  countryId           String             @map("country_id") @db.Uuid
+  method              DoctorPayoutMethod @default(BANK)
+  accountHolderName   String             @map("account_holder_name")
+  bankName            String?            @map("bank_name")
+  /// Masked only, e.g. ****1234 — never return full PAN after create.
+  accountNumberMasked String?            @map("account_number_masked")
+  ifscOrRouting       String?            @map("ifsc_or_routing")
+  upiIdMasked         String?            @map("upi_id_masked")
+  verifiedSandbox     Boolean            @default(true) @map("verified_sandbox")
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+
+  @@index([personId])
+  @@map("doctor_payout_accounts")
+}
+
+/** Doctor earnings wallet — consult fees credit here; doctor can request sandbox withdraw. Live bank/PSP remains EXTERNAL_GATED. */
+enum DoctorWalletLedgerKind {
+  CONSULT_CREDIT
+  WITHDRAW_HOLD
+  WITHDRAW_PAID
+  WITHDRAW_RELEASE
+  ADJUSTMENT
+}
+
+enum DoctorWithdrawStatus {
+  REQUESTED
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+model DoctorWallet {
+  id              String   @id @db.Uuid
+  doctorProfileId String   @unique @map("doctor_profile_id") @db.Uuid
+  personId        String   @map("person_id") @db.Uuid
+  countryId       String   @map("country_id") @db.Uuid
+  currency        String   @db.Char(3)
+  /// Available balance in minor units (credits − holds − paid withdrawals).
+  availableMinor  BigInt   @default(0) @map("available_minor")
+  heldMinor       BigInt   @default(0) @map("held_minor")
+  lifetimeEarnedMinor BigInt @default(0) @map("lifetime_earned_minor")
+  lifetimeWithdrawnMinor BigInt @default(0) @map("lifetime_withdrawn_minor")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  person        Person        @relation(fields: [personId], references: [id], onDelete: Cascade)
+  country       Country       @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  entries       DoctorWalletLedgerEntry[]
+  withdrawRequests DoctorWithdrawRequest[]
+
+  @@index([personId])
+  @@map("doctor_wallets")
+}
+
+model DoctorWalletLedgerEntry {
+  id          String                 @id @db.Uuid
+  walletId    String                 @map("wallet_id") @db.Uuid
+  kind        DoctorWalletLedgerKind
+  amountMinor BigInt                 @map("amount_minor")
+  currency    String                 @db.Char(3)
+  balanceAfterMinor BigInt           @map("balance_after_minor")
+  source      String
+  sourceKey   String                 @map("source_key")
+  appointmentId String?              @map("appointment_id") @db.Uuid
+  note        String?
+  createdAt   DateTime               @default(now()) @map("created_at") @db.Timestamptz
+
+  wallet DoctorWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@unique([source, sourceKey, kind])
+  @@index([walletId, createdAt])
+  @@map("doctor_wallet_ledger_entries")
+}
+
+model DoctorWithdrawRequest {
+  id              String               @id @db.Uuid
+  walletId        String               @map("wallet_id") @db.Uuid
+  amountMinor     BigInt               @map("amount_minor")
+  currency        String               @db.Char(3)
+  status          DoctorWithdrawStatus @default(REQUESTED)
+  destinationHint String?              @map("destination_hint")
+  sandbox         Boolean              @default(true)
+  livePayout      Boolean              @default(false) @map("live_payout")
+  providerRef     String?              @map("provider_ref")
+  failureCode     String?              @map("failure_code")
+  requestedBy     String               @map("requested_by") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz
+  paidAt          DateTime?            @map("paid_at") @db.Timestamptz
+
+  wallet DoctorWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+  @@map("doctor_withdraw_requests")
 }
 
 model DoctorCredential {
@@ -3823,6 +4567,7 @@ model Appointment {
   id                   String            @id @db.Uuid
   countryId            String             @map("country_id") @db.Uuid
   customerPersonId     String             @map("customer_person_id") @db.Uuid
+  subjectFamilyMemberId String?           @map("subject_family_member_id") @db.Uuid
   doctorProfileId      String             @map("doctor_profile_id") @db.Uuid
   doctorPartnerId      String             @map("doctor_partner_id") @db.Uuid
   organizationId        String?            @map("organization_id") @db.Uuid
@@ -3843,6 +4588,7 @@ model Appointment {
 
   country              Country            @relation(fields: [countryId], references: [id])
   customer             Person             @relation(fields: [customerPersonId], references: [id])
+  subjectFamilyMember  CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
   doctorProfile        DoctorProfile      @relation(fields: [doctorProfileId], references: [id])
   doctorPartner        Partner             @relation(fields: [doctorPartnerId], references: [id])
   organization         Organization?      @relation(fields: [organizationId], references: [id])
@@ -3855,6 +4601,7 @@ model Appointment {
 
   @@index([doctorProfileId, startsAt])
   @@index([customerPersonId, startsAt])
+  @@index([subjectFamilyMemberId])
   @@index([organizationId, startsAt])
   @@index([status, startsAt])
   @@index([countryId, status])
@@ -4028,8 +4775,9 @@ enum PrescriptionOrigin {
 model Prescription {
   id                 String              @id @db.Uuid
   countryId          String              @map("country_id") @db.Uuid
-  patientPersonId    String              @map("patient_person_id") @db.Uuid
-  doctorProfileId    String              @map("doctor_profile_id") @db.Uuid
+  patientPersonId       String              @map("patient_person_id") @db.Uuid
+  subjectFamilyMemberId String?             @map("subject_family_member_id") @db.Uuid
+  doctorProfileId       String              @map("doctor_profile_id") @db.Uuid
   doctorPartnerId    String              @map("doctor_partner_id") @db.Uuid
   encounterId        String              @map("encounter_id") @db.Uuid
   organizationId     String?             @map("organization_id") @db.Uuid
@@ -4043,6 +4791,7 @@ model Prescription {
 
   country            Country             @relation(fields: [countryId], references: [id])
   patient            Person              @relation("PrescriptionPatient", fields: [patientPersonId], references: [id])
+  subjectFamilyMember CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
   doctorProfile      DoctorProfile       @relation(fields: [doctorProfileId], references: [id])
   encounter          Encounter           @relation(fields: [encounterId], references: [id])
   organization       Organization?       @relation(fields: [organizationId], references: [id])
@@ -4053,8 +4802,10 @@ model Prescription {
   dispensingCases    DispensingCase[]
   healthArtifacts    HealthArtifact[]
   erxSubmissions     PrescriptionErxSubmission[]
+  medicationReminders MedicationReminder[]
 
   @@index([patientPersonId, createdAt])
+  @@index([subjectFamilyMemberId])
   @@index([doctorProfileId, createdAt])
   @@index([countryId, status])
   @@index([encounterId])
@@ -4363,8 +5114,9 @@ enum LabBookingStatus {
 model LabBooking {
   id                 String             @id @db.Uuid
   countryId          String             @map("country_id") @db.Uuid
-  customerPersonId   String             @map("customer_person_id") @db.Uuid
-  labOrgId           String             @map("lab_org_id") @db.Uuid
+  customerPersonId      String             @map("customer_person_id") @db.Uuid
+  subjectFamilyMemberId String?            @map("subject_family_member_id") @db.Uuid
+  labOrgId              String             @map("lab_org_id") @db.Uuid
   /// CENTER mode: must belong to labOrgId and LocationKind.LAB (server-validated).
   labLocationId      String?            @map("lab_location_id") @db.Uuid
   collectionMode     LabCollectionMode  @map("collection_mode")
@@ -4384,6 +5136,7 @@ model LabBooking {
 
   country            Country            @relation(fields: [countryId], references: [id])
   customer           Person             @relation(fields: [customerPersonId], references: [id])
+  subjectFamilyMember CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
   labOrg             Organization       @relation(fields: [labOrgId], references: [id])
   labLocation        Location?          @relation(fields: [labLocationId], references: [id])
   customerAddress    CustomerAddress?   @relation(fields: [customerAddressId], references: [id])
@@ -4396,6 +5149,7 @@ model LabBooking {
   physicalReportRequest PhysicalReportRequest?
 
   @@index([customerPersonId, status])
+  @@index([subjectFamilyMemberId])
   @@index([labOrgId, status])
   @@index([countryId, status])
   @@index([labLocationId])
@@ -4677,6 +5431,7 @@ model LabResultLine {
 model HealthArtifact {
   id                     String               @id @db.Uuid
   personId               String               @map("person_id") @db.Uuid
+  subjectFamilyMemberId  String?              @map("subject_family_member_id") @db.Uuid
   countryId              String?              @map("country_id") @db.Uuid
   artifactType           HealthArtifactType   @map("artifact_type")
   status                 HealthArtifactStatus @default(ACTIVE)
@@ -4693,6 +5448,7 @@ model HealthArtifact {
   createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz
 
   person               Person                @relation(fields: [personId], references: [id])
+  subjectFamilyMember  CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
   country              Country?              @relation(fields: [countryId], references: [id])
   labReportVersion     LabReportVersion?     @relation(fields: [labReportVersionId], references: [id], onDelete: Cascade)
   labBooking           LabBooking?           @relation(fields: [labBookingId], references: [id], onDelete: Cascade)
@@ -4706,6 +5462,7 @@ model HealthArtifact {
   upload               HealthArtifactUpload?
 
   @@index([personId, publishedAt])
+  @@index([subjectFamilyMemberId])
   @@index([imagingBookingId])
   @@index([prescriptionId])
   @@index([encounterId])
@@ -4737,9 +5494,10 @@ model EncounterConsultNote {
 
 /// R9-A: patient-visible health timeline index (metadata only).
 model HealthTimelineEvent {
-  id           String                    @id @db.Uuid
-  personId     String                    @map("person_id") @db.Uuid
-  countryId    String                    @map("country_id") @db.Uuid
+  id                    String                    @id @db.Uuid
+  personId              String                    @map("person_id") @db.Uuid
+  subjectFamilyMemberId String?                   @map("subject_family_member_id") @db.Uuid
+  countryId             String                    @map("country_id") @db.Uuid
   eventType    HealthTimelineEventType   @map("event_type")
   artifactId   String?                   @map("artifact_id") @db.Uuid
   artifactType HealthArtifactType?       @map("artifact_type")
@@ -4751,11 +5509,13 @@ model HealthTimelineEvent {
   sandbox      Boolean                   @default(true)
   createdAt    DateTime                  @default(now()) @map("created_at") @db.Timestamptz
 
-  person   Person          @relation(fields: [personId], references: [id])
-  country  Country         @relation(fields: [countryId], references: [id])
+  person            Person                 @relation(fields: [personId], references: [id])
+  subjectFamilyMember CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
+  country           Country                @relation(fields: [countryId], references: [id])
   artifact HealthArtifact? @relation(fields: [artifactId], references: [id], onDelete: SetNull)
 
   @@index([personId, occurredAt(sort: Desc)])
+  @@index([subjectFamilyMemberId])
   @@index([artifactId])
   @@map("health_timeline_events")
 }
@@ -5038,8 +5798,9 @@ enum ImagingBookingStatus {
 model ImagingBooking {
   id                 String               @id @db.Uuid
   countryId          String               @map("country_id") @db.Uuid
-  customerPersonId   String               @map("customer_person_id") @db.Uuid
-  imagingOrgId       String               @map("imaging_org_id") @db.Uuid
+  customerPersonId      String               @map("customer_person_id") @db.Uuid
+  subjectFamilyMemberId String?              @map("subject_family_member_id") @db.Uuid
+  imagingOrgId          String               @map("imaging_org_id") @db.Uuid
   /// CENTER mode: must belong to imagingOrgId and LocationKind.IMAGING (server-validated).
   imagingLocationId  String               @map("imaging_location_id") @db.Uuid
   status             ImagingBookingStatus @default(BOOKED)
@@ -5058,6 +5819,7 @@ model ImagingBooking {
 
   country            Country              @relation(fields: [countryId], references: [id])
   customer           Person               @relation(fields: [customerPersonId], references: [id])
+  subjectFamilyMember CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
   imagingOrg         Organization         @relation(fields: [imagingOrgId], references: [id])
   imagingLocation    Location             @relation(fields: [imagingLocationId], references: [id])
   lines              ImagingBookingLine[]
@@ -5070,6 +5832,7 @@ model ImagingBooking {
   physicalReportRequest ImagingPhysicalReportRequest?
 
   @@index([customerPersonId, status])
+  @@index([subjectFamilyMemberId])
   @@index([imagingOrgId, status])
   @@index([countryId, status])
   @@index([imagingLocationId, slotStartsAt, slotEndsAt])
@@ -5150,10 +5913,15 @@ model ImagingStudy {
   countryId         String             @map("country_id") @db.Uuid
   status            ImagingStudyStatus @default(SCHEDULED)
   accessionNumber   String             @unique @map("accession_number")
+  /// DICOM Study Instance UID — immutable after creation (sandbox OID/UUID encoding).
+  studyInstanceUid  String             @unique @map("study_instance_uid")
+  studyDescription  String?            @map("study_description")
+  studyDateTime     DateTime?          @map("study_date_time") @db.Timestamptz
   modalityCode      String?            @map("modality_code")
   bodyRegionCode    String?            @map("body_region_code")
   assigneePersonId  String?            @map("assignee_person_id") @db.Uuid
   idempotencyKey    String?            @unique @map("idempotency_key")
+  ingestIdempotencyKey String?          @unique @map("ingest_idempotency_key")
   sandbox           Boolean            @default(true)
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
   updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz
@@ -5166,6 +5934,7 @@ model ImagingStudy {
   acquisition   ImagingAcquisition?
   history       ImagingStudyStatusHistory[]
   report        ImagingReport?
+  series        ImagingStudySeries[]
 
   @@index([imagingOrgId, status])
   @@index([countryId, status])
@@ -5211,6 +5980,52 @@ model ImagingAcquisition {
 
   @@index([technicianPersonId, status])
   @@map("imaging_acquisitions")
+}
+
+/// S24: DICOM series within an imaging study (sandbox foundation).
+model ImagingStudySeries {
+  id                String   @id @db.Uuid
+  imagingStudyId    String   @map("imaging_study_id") @db.Uuid
+  seriesInstanceUid String   @unique @map("series_instance_uid")
+  modalityCode      String?  @map("modality_code")
+  description       String?
+  seriesNumber      Int?     @map("series_number")
+  sandbox           Boolean  @default(true)
+  metadata          Json?
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  study     ImagingStudy           @relation(fields: [imagingStudyId], references: [id], onDelete: Cascade)
+  instances ImagingStudyInstance[]
+
+  @@index([imagingStudyId])
+  @@map("imaging_study_series")
+}
+
+enum ImagingStudyInstanceStatus {
+  PENDING
+  STORED
+  FAILED
+}
+
+/// S24: DICOM instance (SOP) with private object reference.
+model ImagingStudyInstance {
+  id              String                     @id @db.Uuid
+  imagingSeriesId String                     @map("imaging_series_id") @db.Uuid
+  sopInstanceUid  String                     @unique @map("sop_instance_uid")
+  objectKey       String?                    @map("object_key")
+  contentType     String?                    @map("content_type")
+  byteSize        BigInt?                    @map("byte_size")
+  checksumSha256  String?                    @map("checksum_sha256")
+  status          ImagingStudyInstanceStatus @default(PENDING)
+  idempotencyKey  String?                    @unique @map("idempotency_key")
+  metadata        Json?
+  sandbox         Boolean                    @default(true)
+  createdAt       DateTime                   @default(now()) @map("created_at") @db.Timestamptz
+
+  series ImagingStudySeries @relation(fields: [imagingSeriesId], references: [id], onDelete: Cascade)
+
+  @@index([imagingSeriesId])
+  @@map("imaging_study_instances")
 }
 
 /// R8-D: radiologist interpretation (stops before R8-E customer publication).
@@ -5407,6 +6222,8 @@ model CmsContentAsset {
   contentType       String   @map("content_type")
   byteSize          Int      @map("byte_size")
   checksumSha256    String   @map("checksum_sha256")
+  altText           String?  @map("alt_text")
+  folder            String?  @map("folder")
   createdByPersonId String   @map("created_by_person_id") @db.Uuid
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
 
@@ -5879,6 +6696,350 @@ model WishlistItem {
   @@unique([personId, countryId, catalogOfferId])
   @@index([personId, countryId, createdAt])
   @@map("wishlist_items")
+}
+
+model MedicationReminder {
+  id                    String    @id @db.Uuid
+  personId              String    @map("person_id") @db.Uuid
+  subjectFamilyMemberId String?   @map("subject_family_member_id") @db.Uuid
+  countryId             String    @map("country_id") @db.Uuid
+  medicineLabel      String    @map("medicine_label")
+  prescriptionId     String?   @map("prescription_id") @db.Uuid
+  scheduleTimes      String[]  @map("schedule_times")
+  daysOfWeek         Int[]     @default([]) @map("days_of_week")
+  enabled            Boolean   @default(true)
+  notes              String?
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz
+
+  person              Person                @relation(fields: [personId], references: [id], onDelete: Cascade)
+  subjectFamilyMember CustomerFamilyMember? @relation(fields: [subjectFamilyMemberId], references: [id], onDelete: SetNull)
+  country             Country               @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  prescription        Prescription?         @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
+
+  @@index([personId, countryId, enabled])
+  @@index([subjectFamilyMemberId])
+  @@index([personId, countryId, deletedAt])
+  @@map("medication_reminders")
+}
+
+/// Saved family / ordering-for profiles — not separate clinical Person records (OD-CUS-04).
+model CustomerFamilyMember {
+  id                  String    @id @db.Uuid
+  customerPersonId    String    @map("customer_person_id") @db.Uuid
+  countryId           String    @map("country_id") @db.Uuid
+  displayName         String    @map("display_name")
+  relationshipCode    String    @default("OTHER") @map("relationship_code")
+  ageYears            Int?      @map("age_years")
+  phone               String?
+  notes               String?
+  healthAccessEnabled Boolean   @default(true) @map("health_access_enabled")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz
+
+  customer            Person                  @relation(fields: [customerPersonId], references: [id], onDelete: Cascade)
+  country             Country                 @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  healthProfile       CustomerHealthProfile?
+  appointments        Appointment[]
+  prescriptions       Prescription[]
+  labBookings         LabBooking[]
+  imagingBookings     ImagingBooking[]
+  healthArtifacts     HealthArtifact[]
+  healthTimelineEvents HealthTimelineEvent[]
+  medicationReminders MedicationReminder[]
+
+  @@index([customerPersonId, countryId, deletedAt])
+  @@map("customer_family_members")
+}
+
+enum HealthAllergySeverity {
+  MILD
+  MODERATE
+  SEVERE
+  UNKNOWN
+}
+
+enum HealthConditionStatus {
+  ACTIVE
+  INACTIVE
+  RESOLVED
+}
+
+/// Patient-attested health profile for account holder or saved family member.
+model CustomerHealthProfile {
+  id             String    @id @db.Uuid
+  ownerPersonId  String    @map("owner_person_id") @db.Uuid
+  countryId      String    @map("country_id") @db.Uuid
+  familyMemberId String?   @unique @map("family_member_id") @db.Uuid
+  bloodType      String?   @map("blood_type")
+  notes          String?
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  owner            Person                         @relation("HealthProfileOwner", fields: [ownerPersonId], references: [id], onDelete: Cascade)
+  country          Country                        @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  familyMember     CustomerFamilyMember?          @relation(fields: [familyMemberId], references: [id], onDelete: Cascade)
+  allergies        CustomerHealthAllergy[]
+  conditions       CustomerHealthCondition[]
+  vitals           CustomerHealthVital[]
+  emergencyContact CustomerHealthEmergencyContact?
+
+  @@index([ownerPersonId, countryId])
+  @@map("customer_health_profiles")
+}
+
+model CustomerHealthAllergy {
+  id         String                 @id @db.Uuid
+  profileId  String                 @map("profile_id") @db.Uuid
+  allergen   String
+  reaction   String?
+  severity   HealthAllergySeverity  @default(UNKNOWN)
+  active     Boolean                @default(true)
+  notes      String?
+  createdAt  DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+
+  profile CustomerHealthProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, active])
+  @@map("customer_health_allergies")
+}
+
+model CustomerHealthCondition {
+  id           String                @id @db.Uuid
+  profileId    String                @map("profile_id") @db.Uuid
+  condition    String
+  status       HealthConditionStatus @default(ACTIVE)
+  diagnosedAt  DateTime?             @map("diagnosed_at") @db.Date
+  notes        String?
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime              @updatedAt @map("updated_at") @db.Timestamptz
+
+  profile CustomerHealthProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, status])
+  @@map("customer_health_conditions")
+}
+
+model CustomerHealthVital {
+  id                     String   @id @db.Uuid
+  profileId              String   @map("profile_id") @db.Uuid
+  heightCm               Float?   @map("height_cm")
+  weightKg               Float?   @map("weight_kg")
+  bloodPressureSystolic  Int?     @map("blood_pressure_systolic")
+  bloodPressureDiastolic Int?     @map("blood_pressure_diastolic")
+  pulseBpm               Int?     @map("pulse_bpm")
+  temperatureCelsius     Float?   @map("temperature_celsius")
+  recordedAt             DateTime @map("recorded_at") @db.Timestamptz
+  notes                  String?
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  profile CustomerHealthProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, recordedAt(sort: Desc)])
+  @@map("customer_health_vitals")
+}
+
+model CustomerHealthEmergencyContact {
+  id           String   @id @db.Uuid
+  profileId    String   @unique @map("profile_id") @db.Uuid
+  name         String
+  relationship String
+  phone        String
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  profile CustomerHealthProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@map("customer_health_emergency_contacts")
+}
+
+/// Sandbox Care Plan membership (1mg-style). Billing is waived until live PSP is gated on.
+enum HealthPackageStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CarePlanCatalogStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+model HealthPackage {
+  id                 String              @id @db.Uuid
+  countryId          String              @map("country_id") @db.Uuid
+  code               String
+  name               String
+  description        String              @default("")
+  category           String
+  priceMinor         Int                 @map("price_minor")
+  originalPriceMinor Int?                @map("original_price_minor")
+  currency           String              @db.Char(3)
+  testsCount         Int                 @default(0) @map("tests_count")
+  requiresFasting    Boolean             @default(true) @map("requires_fasting")
+  reportTurnaround   String?             @map("report_turnaround")
+  isPopular          Boolean             @default(false) @map("is_popular")
+  suitableFor        String[]            @default([]) @map("suitable_for")
+  ageGroups          String[]            @default([]) @map("age_groups")
+  includedServices   Json                @default("[]") @map("included_services")
+  eligibilityNotes   String?             @map("eligibility_notes")
+  validityDays       Int?                @map("validity_days")
+  status             HealthPackageStatus @default(DRAFT)
+  version            Int                 @default(1)
+  archivedAt         DateTime?           @map("archived_at") @db.Timestamptz
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([countryId, code])
+  @@index([countryId, status, category])
+  @@map("health_packages")
+}
+
+model CarePlanDefinition {
+  id               String                @id @db.Uuid
+  countryId        String                @map("country_id") @db.Uuid
+  planCode         String                @map("plan_code")
+  name             String
+  description      String                @default("")
+  priceMinor       Int                   @map("price_minor")
+  currency         String                @db.Char(3)
+  period           String                @default("year")
+  discountBps      Int                   @default(0) @map("discount_bps")
+  freeDelivery     Boolean               @default(false) @map("free_delivery")
+  featured         Boolean               @default(false)
+  perks            Json                  @default("[]")
+  eligibilityNotes String?               @map("eligibility_notes")
+  effectiveFrom    DateTime?             @map("effective_from") @db.Timestamptz
+  effectiveTo      DateTime?             @map("effective_to") @db.Timestamptz
+  status           CarePlanCatalogStatus @default(DRAFT)
+  version          Int                   @default(1)
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([countryId, planCode])
+  @@index([countryId, status])
+  @@map("care_plan_definitions")
+}
+
+model ServiceabilityZone {
+  id                String   @id @db.Uuid
+  countryId         String   @map("country_id") @db.Uuid
+  name              String
+  postalPrefix      String?  @map("postal_prefix")
+  postalFrom        String?  @map("postal_from")
+  postalTo          String?  @map("postal_to")
+  city              String?
+  region            String?
+  medicineDelivery  Boolean  @default(true) @map("medicine_delivery")
+  labHomeCollection Boolean  @default(false) @map("lab_home_collection")
+  expressDelivery   Boolean  @default(false) @map("express_delivery")
+  codAvailable      Boolean  @default(false) @map("cod_available")
+  carrierCode       String?  @map("carrier_code")
+  priority          Int      @default(100)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@index([countryId, active, priority])
+  @@map("serviceability_zones")
+}
+
+model MedicineSubstituteEdge {
+  id               String    @id @db.Uuid
+  countryId        String    @map("country_id") @db.Uuid
+  fromItemId       String    @map("from_item_id") @db.Uuid
+  toItemId         String    @map("to_item_id") @db.Uuid
+  relationshipType String    @map("relationship_type")
+  strength         Int       @default(100)
+  active           Boolean   @default(true)
+  reason           String?
+  effectiveFrom    DateTime? @map("effective_from") @db.Timestamptz
+  effectiveTo      DateTime? @map("effective_to") @db.Timestamptz
+  createdById      String?   @map("created_by_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  country  Country     @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  fromItem CatalogItem @relation("SubstituteFrom", fields: [fromItemId], references: [id], onDelete: Cascade)
+  toItem   CatalogItem @relation("SubstituteTo", fields: [toItemId], references: [id], onDelete: Cascade)
+
+  @@unique([countryId, fromItemId, toItemId, relationshipType])
+  @@index([countryId, fromItemId, active])
+  @@map("medicine_substitute_edges")
+}
+
+enum NotificationChannel {
+  SMS
+  EMAIL
+  PUSH
+  IN_APP
+  WHATSAPP
+}
+
+enum NotificationProviderRole {
+  PRIMARY
+  FALLBACK
+}
+
+enum NotificationConfigStatus {
+  UNCONFIGURED
+  SANDBOX
+  VERIFIED
+}
+
+model NotificationCountryProvider {
+  id             String                   @id @db.Uuid
+  countryId      String                   @map("country_id") @db.Uuid
+  channel        NotificationChannel
+  providerCode   String                   @map("provider_code")
+  providerName   String                   @map("provider_name")
+  role           NotificationProviderRole @default(PRIMARY)
+  environment    String                   @default("sandbox")
+  active         Boolean                  @default(false)
+  configStatus   NotificationConfigStatus @default(UNCONFIGURED) @map("config_status")
+  secretRef      String?                  @map("secret_ref")
+  priority       Int                      @default(100)
+  lastVerifiedAt DateTime?                @map("last_verified_at") @db.Timestamptz
+  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([countryId, channel, providerCode, role])
+  @@index([countryId, channel, active])
+  @@map("notification_country_providers")
+}
+
+model CustomerCarePlanMembership {
+  id               String    @id @db.Uuid
+  customerPersonId String    @map("customer_person_id") @db.Uuid
+  countryId        String    @map("country_id") @db.Uuid
+  planCode         String    @map("plan_code")
+  status           String    @default("ACTIVE")
+  sandbox          Boolean   @default(true)
+  startedAt        DateTime  @default(now()) @map("started_at") @db.Timestamptz
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz
+  cancelledAt      DateTime? @map("cancelled_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  customer Person  @relation(fields: [customerPersonId], references: [id], onDelete: Cascade)
+  country  Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([customerPersonId, countryId])
+  @@index([countryId, status])
+  @@map("customer_care_plan_memberships")
 }
 
 model LoyaltyProgram {

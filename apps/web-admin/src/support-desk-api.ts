@@ -1,4 +1,4 @@
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { adminJson, AdminHttpError } from './admin-http';
 
 export class SupportDeskApiError extends Error {
   status: number;
@@ -82,26 +82,14 @@ export async function supportDeskCall<T = unknown>(
   token: string,
   init?: RequestInit,
 ): Promise<T> {
-  const base = apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
-  let res: Response;
   try {
-    res = await fetch(`${base}${path}`, {
-      ...init,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`,
-        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...init?.headers,
-      },
-    });
-  } catch {
+    return await adminJson<T>(token, path, init);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new SupportDeskApiError(err.message, err.status);
+    }
     throw new SupportDeskApiError('network_error', 0);
   }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new SupportDeskApiError((body as { detail?: string }).detail ?? 'request_failed', res.status);
-  }
-  return body as T;
 }
 
 export function listSupportQueues(token: string, countryCode: string) {

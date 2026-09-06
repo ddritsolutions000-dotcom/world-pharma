@@ -5,11 +5,17 @@ type Labels = Record<string, string>;
 @Injectable()
 export class MetricsService {
   private readonly counters = new Map<string, number>();
+  private readonly gauges = new Map<string, number>();
   private readonly durations: number[] = [];
 
   increment(name: string, labels: Labels = {}, by = 1): void {
     const key = this.key(name, labels);
     this.counters.set(key, (this.counters.get(key) ?? 0) + by);
+  }
+
+  setGauge(name: string, value: number, labels: Labels = {}): void {
+    const key = this.key(name, labels);
+    this.gauges.set(key, value);
   }
 
   observeHttp(durationMs: number): void {
@@ -22,6 +28,9 @@ export class MetricsService {
   snapshot(): Record<string, number | string> {
     const out: Record<string, number | string> = {};
     for (const [key, value] of this.counters) {
+      out[key] = value;
+    }
+    for (const [key, value] of this.gauges) {
       out[key] = value;
     }
     if (this.durations.length) {

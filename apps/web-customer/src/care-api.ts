@@ -27,6 +27,33 @@ export function fetchCareDoctors(token: string, country: string) {
   return call(`/api/v1/care/doctors?country_code=${encodeURIComponent(country)}`, { token });
 }
 
+export function fetchPublicCareDoctors(country: string) {
+  return call(`/api/v1/public/care/doctors?country_code=${encodeURIComponent(country)}`);
+}
+
+export function fetchPublicDoctorProfile(profileId: string, country: string) {
+  return call(
+    `/api/v1/public/care/doctors/${encodeURIComponent(profileId)}?country_code=${encodeURIComponent(country)}`,
+  ) as Promise<DoctorPublicProfile>;
+}
+
+export type DoctorPublicProfile = {
+  profile_id: string;
+  display_name: string;
+  specialties?: string[];
+  languages?: string[];
+  timezone?: string;
+  online_capable?: boolean;
+  bio?: string | null;
+};
+
+export function fetchDoctorProfile(token: string, profileId: string, country: string) {
+  return call(
+    `/api/v1/care/doctors/${encodeURIComponent(profileId)}?country_code=${encodeURIComponent(country)}`,
+    { token },
+  ) as Promise<DoctorPublicProfile>;
+}
+
 export function fetchDoctorSlots(token: string, profileId: string, country: string, from: string, to: string) {
   return call(
     `/api/v1/care/doctors/${profileId}/slots?country_code=${encodeURIComponent(country)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
@@ -154,6 +181,13 @@ export type RxSubscriptionView = {
   message?: string;
 };
 
+export type RxSubscriptionListItem = RxSubscriptionView & {
+  prescription_id: string;
+  prescription_status: string;
+  prescription_version_number: number | null;
+  medicine_label: string | null;
+};
+
 export type RefillEligibility = {
   eligible: boolean;
   reason: string;
@@ -244,6 +278,18 @@ export function cancelRefillRequest(token: string, requestId: string, idempotenc
 export function fetchRxSubscription(token: string, prescriptionId: string) {
   return call(`/api/v1/customer/prescriptions/${prescriptionId}/subscription`, {
     token,
+  }) as Promise<RxSubscriptionView>;
+}
+
+export function fetchCustomerSubscriptions(token: string) {
+  return call('/api/v1/customer/subscriptions', { token }) as Promise<{ subscriptions: RxSubscriptionListItem[] }>;
+}
+
+export function enableRxSubscription(token: string, prescriptionId: string) {
+  return call(`/api/v1/customer/prescriptions/${prescriptionId}/subscription/enable`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify({}),
   }) as Promise<RxSubscriptionView>;
 }
 

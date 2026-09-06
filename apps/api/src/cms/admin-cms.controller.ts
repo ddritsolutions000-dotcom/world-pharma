@@ -24,8 +24,9 @@ export class AdminCmsController {
     @Query('country_code') countryCode?: string,
     @Query('status') status?: string,
     @Query('content_type') contentType?: string,
+    @Query('slug') slug?: string,
   ) {
-    return this.cms.listContent(principal, { country_code: countryCode, status, content_type: contentType });
+    return this.cms.listContent(principal, { country_code: countryCode, status, content_type: contentType, slug });
   }
 
   @Post('content')
@@ -109,6 +110,17 @@ export class AdminCmsController {
     });
   }
 
+  @Post('content/:id/revise')
+  @RequireAudiences('admin')
+  @RequirePermissions('cms:write')
+  revise(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body: { country_code?: string },
+  ) {
+    return this.cms.revise(principal, id, body.country_code);
+  }
+
   @Post('content/:id/archive')
   @RequireAudiences('admin')
   @RequirePermissions('cms:publish')
@@ -131,6 +143,13 @@ export class AdminCmsController {
     return this.cms.listVersions(principal, id, countryCode);
   }
 
+  @Get('assets')
+  @RequireAudiences('admin')
+  @RequirePermissions('cms:read')
+  listAssets(@CurrentPrincipal() principal: Principal, @Query('country_code') countryCode?: string, @Query('folder') folder?: string) {
+    return this.assets.listAssets(principal, countryCode, folder);
+  }
+
   @Post('assets')
   @RequireAudiences('admin')
   @RequirePermissions('cms:write')
@@ -143,6 +162,8 @@ export class AdminCmsController {
       content_base64?: string;
       content_type?: string;
       original_name?: string;
+      alt_text?: string;
+      folder?: string;
       idempotency_key?: string;
     },
     @Headers('idempotency-key') idempotencyHeader?: string,
@@ -151,5 +172,16 @@ export class AdminCmsController {
       ...body,
       idempotency_key: body.idempotency_key ?? idempotencyHeader,
     });
+  }
+
+  @Patch('assets/:id')
+  @RequireAudiences('admin')
+  @RequirePermissions('cms:write')
+  updateAsset(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body: { country_code?: string; alt_text?: string; folder?: string },
+  ) {
+    return this.assets.updateAsset(principal, id, body);
   }
 }

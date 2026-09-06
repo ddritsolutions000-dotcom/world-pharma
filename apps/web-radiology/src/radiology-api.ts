@@ -209,14 +209,30 @@ export type ImagingStudyRow = {
   imaging_booking_id: string;
   status: string;
   accession_number: string;
+  study_instance_uid?: string;
+  study_description?: string | null;
+  study_date_time?: string | null;
+  modality_code?: string | null;
+  series_count?: number;
+  instance_count?: number;
   study_title: string;
   assignee_person_id: string | null;
+  dicom?: {
+    study_instance_uid: string;
+    series: Array<{
+      series_instance_uid: string;
+      instances: Array<{ sop_instance_uid: string; status: string; object_stored: boolean }>;
+    }>;
+    sandbox: boolean;
+    production_pacs: boolean;
+    viewer: boolean;
+  };
   acquisition: {
     status: string;
     sandbox_object_ref: string | null;
     failure_code: string | null;
   } | null;
-  boundary: { pacs: boolean; dicom: boolean; interpretation: boolean; report: boolean; publication?: boolean };
+  boundary: { pacs: boolean; dicom: boolean; interpretation: boolean; report: boolean; publication?: boolean; viewer?: boolean };
   interpretation_status?: string | null;
   interpretation_version?: number | null;
   assigned_radiologist_id?: string | null;

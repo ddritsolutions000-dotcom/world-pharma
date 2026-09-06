@@ -15,14 +15,21 @@ import {
   ShipmentStatus,
   VendorPayableStatus,
 } from '@prisma/client';
+import {
+  assertAffiliateLiabilityTransition,
+  isAffiliateOrderIneligible,
+} from '../affiliate/affiliate-liability-status';
 import { uuidv7 } from '@world-pharma/shared';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
+import { SecurityEventsService } from '../identity/security-events.service';
 import { assertMakerChecker } from '../identity/dual-control';
 import { assertVendorSellerAccess } from '../catalog/access';
 import { CHART } from './chart';
+import { readPaymentEnvironment, isLivePaymentEnabled } from '../payment/payment.config';
+import { evaluateR14AGates, R14A_GATE_CODES, type R14AGateSnapshot } from '../payment/r14a-gate';
 import { MockPayoutAdapter } from './mock-payout.adapter';
 import type { MockPayoutScenario } from './payout.port';
 import { ReconBreakService } from './recon-break.service';
@@ -44,6 +51,7 @@ export class FinanceService implements OnModuleInit {
     private readonly outbox: OutboxService,
     private readonly payoutRail: MockPayoutAdapter,
     private readonly reconBreaks: ReconBreakService,
+    private readonly securityEvents: SecurityEventsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -324,7 +332,8 @@ export class FinanceService implements OnModuleInit {
         currency: order.currency,
         sourceKey: `affiliate:${orderId}`,
       });
-      await this.prisma.affiliateLiability.upsert({
+      const existingLiability = await this.prisma.affiliateLiability.findUnique({ where: { orderId } });
+      const liability = await this.prisma.affiliateLiability.upsert({
         where: { orderId },
         update: {},
         create: {
@@ -337,14 +346,93 @@ export class FinanceService implements OnModuleInit {
           affiliateCode: order.affiliate.affiliateCode,
         },
       });
+      if (!existingLiability) {
+        await this.emitAffiliateLifecycleEvent({
+          type: 'AFFILIATE_LIABILITY_CREATED',
+          orderId,
+          liabilityId: liability.id,
+          status: AffiliateLiabilityStatus.PENDING,
+          affiliateCode: liability.affiliateCode,
+          countryId: order.countryId,
+          amountMinor: liability.amountMinor,
+          currency: liability.currency,
+        });
+      }
     }
     for (const shipment of order.shipments) {
       await this.syncCarrier(shipment.id);
     }
     await this.maybeEligible(orderId);
+    await this.maybeAffiliatePayable(orderId);
     await this.postOrderJournals(orderId);
     await this.applyVendorPayableRefundAdjustments(orderId);
+    await this.applyAffiliateRefundAdjustments(orderId);
     await this.rebuildContribution(orderId);
+  }
+
+  private async applyAffiliateRefundAdjustments(orderId: string): Promise<void> {
+    const liability = await this.prisma.affiliateLiability.findUnique({ where: { orderId } });
+    if (!liability || liability.status === AffiliateLiabilityStatus.REVERSED) {
+      return;
+    }
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      return;
+    }
+    if (isAffiliateOrderIneligible(order.status)) {
+      await this.prisma.affiliateLiability.update({
+        where: { orderId },
+        data: { status: AffiliateLiabilityStatus.REVERSED },
+      });
+      await this.emitAffiliateLifecycleEvent({
+        type: 'AFFILIATE_REVERSED',
+        orderId,
+        liabilityId: liability.id,
+        status: AffiliateLiabilityStatus.REVERSED,
+        affiliateCode: liability.affiliateCode,
+        countryId: order.countryId,
+        amountMinor: liability.amountMinor,
+        currency: liability.currency,
+        reason: 'order_ineligible',
+      });
+      return;
+    }
+    const refundTotal = await this.refundTotalForOrder(orderId);
+    if (refundTotal <= 0n) {
+      return;
+    }
+    if (refundTotal >= order.totalMinor) {
+      await this.prisma.affiliateLiability.update({
+        where: { orderId },
+        data: { status: AffiliateLiabilityStatus.REVERSED },
+      });
+      await this.emitAffiliateLifecycleEvent({
+        type: 'AFFILIATE_REVERSED',
+        orderId,
+        liabilityId: liability.id,
+        status: AffiliateLiabilityStatus.REVERSED,
+        affiliateCode: liability.affiliateCode,
+        countryId: order.countryId,
+        amountMinor: liability.amountMinor,
+        currency: liability.currency,
+        reason: 'full_refund',
+      });
+      return;
+    }
+    const originalCommission =
+      (await this.findAmount(orderId, FinancialFactKind.AFFILIATE)) ?? liability.amountMinor;
+    if (originalCommission <= 0n || order.totalMinor <= 0n) {
+      return;
+    }
+    const netOrderMinor = order.totalMinor - refundTotal;
+    const adjusted = (originalCommission * netOrderMinor) / order.totalMinor;
+    if (adjusted !== liability.amountMinor) {
+      await this.prisma.affiliateLiability.update({
+        where: { orderId },
+        data: { amountMinor: adjusted },
+      });
+      // Partial amount adjust is not a reverse — do not emit AFFILIATE_REVERSED.
+    }
   }
 
   async syncCarrier(shipmentId: string): Promise<void> {
@@ -392,6 +480,7 @@ export class FinanceService implements OnModuleInit {
       }
     }
     await this.maybeEligible(shipment.orderId);
+    await this.maybeAffiliatePayable(shipment.orderId);
     await this.rebuildContribution(shipment.orderId);
   }
 
@@ -439,14 +528,47 @@ export class FinanceService implements OnModuleInit {
     if (!row) {
       throw Errors.notFound('Affiliate liability not found.');
     }
+    if (row.status === AffiliateLiabilityStatus.REVERSED) {
+      throw Errors.problem(
+        409,
+        'AFFILIATE_REVERSED',
+        'Affiliate reversed',
+        'Reversed affiliate commissions cannot be approved or become payable.',
+      );
+    }
     if (row.clinicalBlocked) {
       throw Errors.problem(409, 'AFFILIATE_CLINICAL_BLOCKED', 'Clinical blocked', 'Clinical affiliate payout is not enabled.');
     }
     if (row.status === AffiliateLiabilityStatus.PENDING) {
+      assertAffiliateLiabilityTransition(row.status, AffiliateLiabilityStatus.APPROVED);
       await this.prisma.affiliateLiability.update({
         where: { orderId },
         data: { status: AffiliateLiabilityStatus.APPROVED },
       });
+      const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { countryId: true } });
+      if (order) {
+        await this.emitAffiliateLifecycleEvent({
+          type: 'AFFILIATE_APPROVED',
+          orderId,
+          liabilityId: row.id,
+          status: AffiliateLiabilityStatus.APPROVED,
+          affiliateCode: row.affiliateCode,
+          countryId: order.countryId,
+          amountMinor: row.amountMinor,
+          currency: row.currency,
+        });
+      }
+      await this.securityEvents.emit({
+        type: 'AFFILIATE_LIABILITY_APPROVED',
+        outcome: 'success',
+        metadata: {
+          order_id: orderId,
+          liability_id: row.id,
+          status: AffiliateLiabilityStatus.APPROVED,
+          sandbox: true,
+        },
+      });
+      await this.maybeAffiliatePayable(orderId);
     }
     return this.prisma.affiliateLiability.findUniqueOrThrow({ where: { orderId } });
   }
@@ -456,20 +578,175 @@ export class FinanceService implements OnModuleInit {
     if (!row) {
       throw Errors.notFound('Affiliate liability not found.');
     }
+    if (row.status === AffiliateLiabilityStatus.REVERSED) {
+      return { reversed: true, idempotent: true };
+    }
+    assertAffiliateLiabilityTransition(row.status, AffiliateLiabilityStatus.REVERSED);
     await this.prisma.affiliateLiability.update({
       where: { orderId },
       data: { status: AffiliateLiabilityStatus.REVERSED },
     });
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { countryId: true } });
+    if (order) {
+      await this.emitAffiliateLifecycleEvent({
+        type: 'AFFILIATE_REVERSED',
+        orderId,
+        liabilityId: row.id,
+        status: AffiliateLiabilityStatus.REVERSED,
+        affiliateCode: row.affiliateCode,
+        countryId: order.countryId,
+        amountMinor: row.amountMinor,
+        currency: row.currency,
+        reason: 'admin_reverse',
+      });
+    }
+    await this.securityEvents.emit({
+      type: 'AFFILIATE_LIABILITY_REVERSED',
+      outcome: 'success',
+      metadata: {
+        order_id: orderId,
+        liability_id: row.id,
+        status: AffiliateLiabilityStatus.REVERSED,
+        sandbox: true,
+      },
+    });
     return { reversed: true };
   }
 
+  /**
+   * Validates whether a vendor payable may join a settlement batch.
+   * Used by openSettlement and admin eligibility checks — no parallel ledger.
+   */
+  async evaluateSettlementMembership(input: {
+    vendorPayableId: string;
+    countryId: string;
+    currency: string;
+  }): Promise<{
+    eligible: boolean;
+    reason: string | null;
+    vendor_payable_id: string;
+    status?: string;
+    net_minor?: string;
+  }> {
+    const currency = input.currency.trim().toUpperCase();
+    const payable = await this.prisma.vendorPayable.findUnique({
+      where: { id: input.vendorPayableId },
+      include: {
+        settlementLines: { take: 1, orderBy: { id: 'desc' }, include: { batch: true } },
+      },
+    });
+    if (!payable) {
+      return {
+        eligible: false,
+        reason: 'INVALID_SOURCE',
+        vendor_payable_id: input.vendorPayableId,
+      };
+    }
+    if (payable.countryId !== input.countryId) {
+      return {
+        eligible: false,
+        reason: 'COUNTRY_MISMATCH',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+      };
+    }
+    if (payable.currency !== currency) {
+      return {
+        eligible: false,
+        reason: 'CURRENCY_MISMATCH',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+      };
+    }
+    if (
+      payable.status === VendorPayableStatus.SCHEDULED ||
+      payable.status === VendorPayableStatus.PAID
+    ) {
+      return {
+        eligible: false,
+        reason: 'ALREADY_SETTLED_OR_SCHEDULED',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+      };
+    }
+    if (payable.status === VendorPayableStatus.REVERSED) {
+      return {
+        eligible: false,
+        reason: 'REVERSED',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+      };
+    }
+    if (payable.status !== VendorPayableStatus.APPROVED) {
+      return {
+        eligible: false,
+        reason: 'NOT_APPROVED',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+      };
+    }
+    const suspended = await this.prisma.partner.findFirst({
+      where: {
+        organizationId: payable.sellerOrgId,
+        partnerTypeCode: { in: ['VENDOR', 'PHARMACY'] },
+        status: 'SUSPENDED',
+      },
+      select: { id: true },
+    });
+    if (suspended) {
+      return {
+        eligible: false,
+        reason: 'VENDOR_SUSPENDED',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+      };
+    }
+    const originalGross =
+      (await this.findAmount(payable.orderId, FinancialFactKind.VENDOR_PAYABLE)) ?? payable.amountMinor;
+    const refunds = await this.refundTotalForOrder(payable.orderId);
+    const netMinor = originalGross > refunds ? originalGross - refunds : 0n;
+    if (netMinor <= 0n) {
+      return {
+        eligible: false,
+        reason: 'ZERO_NET',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+        net_minor: '0',
+      };
+    }
+    if (payable.settlementLines.some((line) => line.batch.status !== SettlementBatchStatus.CANCELLED)) {
+      return {
+        eligible: false,
+        reason: 'DUPLICATE_MEMBERSHIP',
+        vendor_payable_id: payable.id,
+        status: payable.status,
+        net_minor: netMinor.toString(),
+      };
+    }
+    return {
+      eligible: true,
+      reason: null,
+      vendor_payable_id: payable.id,
+      status: payable.status,
+      net_minor: netMinor.toString(),
+    };
+  }
+
   async openSettlement(principal: Principal, countryId: string, currency: string) {
+    const country = await this.prisma.country.findUnique({ where: { id: countryId } });
+    if (!country) {
+      throw Errors.notFound('Country not found.');
+    }
+    const normalizedCurrency = currency.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(normalizedCurrency)) {
+      throw Errors.validation('currency must be a 3-letter ISO code');
+    }
     await this.ensureChart(countryId);
     const period = await this.prisma.settlementPeriod.create({
       data: {
         id: uuidv7(),
         countryId,
-        currency,
+        currency: normalizedCurrency,
         startsAt: new Date(Date.now() - 86400000),
         endsAt: new Date(),
       },
@@ -479,14 +756,28 @@ export class FinanceService implements OnModuleInit {
         id: uuidv7(),
         periodId: period.id,
         status: SettlementBatchStatus.OPEN,
-        currency,
+        currency: normalizedCurrency,
         createdBy: principal.personId,
       },
     });
     const payables = await this.prisma.vendorPayable.findMany({
-      where: { countryId, currency, status: VendorPayableStatus.APPROVED },
+      where: { countryId, currency: normalizedCurrency, status: VendorPayableStatus.APPROVED },
     });
+    const linesBySeller = new Map<string, string>();
+    const skipped: Array<{ vendor_payable_id: string; reason: string }> = [];
     for (const payable of payables) {
+      const membership = await this.evaluateSettlementMembership({
+        vendorPayableId: payable.id,
+        countryId,
+        currency: normalizedCurrency,
+      });
+      if (!membership.eligible) {
+        skipped.push({
+          vendor_payable_id: payable.id,
+          reason: membership.reason ?? 'INELIGIBLE',
+        });
+        continue;
+      }
       const originalGross =
         (await this.findAmount(payable.orderId, FinancialFactKind.VENDOR_PAYABLE)) ?? payable.amountMinor;
       const refunds = await this.refundTotalForOrder(payable.orderId);
@@ -497,7 +788,7 @@ export class FinanceService implements OnModuleInit {
           data: { amountMinor: netMinor },
         });
       }
-      await this.prisma.settlementLine.create({
+      const line = await this.prisma.settlementLine.create({
         data: {
           id: uuidv7(),
           batchId: batch.id,
@@ -507,15 +798,41 @@ export class FinanceService implements OnModuleInit {
           refundMinor: refunds,
           feeMinor: 0n,
           netMinor,
-          currency,
+          currency: normalizedCurrency,
         },
       });
+      linesBySeller.set(payable.sellerOrgId, line.id);
       await this.prisma.vendorPayable.update({
         where: { id: payable.id },
         data: { status: VendorPayableStatus.SCHEDULED },
       });
     }
-    return this.getBatch(batch.id);
+    await this.prisma.$transaction(async (tx) => {
+      for (const [sellerOrgId, lineId] of linesBySeller) {
+        const personIds = await this.resolveSellerOrgPersonIds(sellerOrgId);
+        await this.outbox.enqueue(tx, {
+          type: 'SETTLEMENT_CREATED',
+          aggregateType: 'SettlementBatch',
+          aggregateId: batch.id,
+          producer: 'finance',
+          payload: {
+            sandbox: true,
+            seller_org_id: sellerOrgId,
+            settlement_line_id: lineId,
+            person_ids: personIds,
+          },
+          occurrenceKey: `settlement:${batch.id}:${sellerOrgId}:created`,
+        });
+      }
+    });
+    const presented = await this.getBatch(batch.id);
+    return {
+      ...presented,
+      skipped_membership: skipped,
+      settlement_capability: 'sandbox_only',
+      external_payout: 'EXTERNAL_PAYOUT_GATED',
+      country_code: country.isoAlpha2,
+    };
   }
 
   async approveSettlement(principal: Principal, batchId: string) {
@@ -547,6 +864,29 @@ export class FinanceService implements OnModuleInit {
         status: 'APPROVED',
         decidedAt: new Date(),
       },
+    });
+    const lines = await this.prisma.settlementLine.findMany({ where: { batchId } });
+    const linesBySeller = new Map<string, string>();
+    for (const line of lines) {
+      linesBySeller.set(line.sellerOrgId, line.id);
+    }
+    await this.prisma.$transaction(async (tx) => {
+      for (const [sellerOrgId, lineId] of linesBySeller) {
+        const personIds = await this.resolveSellerOrgPersonIds(sellerOrgId);
+        await this.outbox.enqueue(tx, {
+          type: 'SETTLEMENT_APPROVED',
+          aggregateType: 'SettlementBatch',
+          aggregateId: batchId,
+          producer: 'finance',
+          payload: {
+            sandbox: true,
+            seller_org_id: sellerOrgId,
+            settlement_line_id: lineId,
+            person_ids: personIds,
+          },
+          occurrenceKey: `settlement:${batchId}:${sellerOrgId}:approved`,
+        });
+      }
     });
     return this.getBatch(batchId);
   }
@@ -707,6 +1047,7 @@ export class FinanceService implements OnModuleInit {
       });
     }
     await this.prisma.$transaction(async (tx) => {
+      const personIds = await this.resolveBatchSellerPersonIds(payout.batch?.lines ?? []);
       await this.outbox.enqueue(tx, {
         type: status === PayoutStatus.PAID ? 'PAYOUT_PAID' : result.unknown ? 'PAYOUT_UNKNOWN' : 'PAYOUT_FAILED',
         aggregateType: 'Payout',
@@ -718,6 +1059,8 @@ export class FinanceService implements OnModuleInit {
           status,
           journal_id: ledgerResult?.journalId ?? null,
           ledger_duplicate: ledgerResult?.duplicate ?? false,
+          person_ids: personIds,
+          batch_id: payout.batchId,
         },
         occurrenceKey: `payout:${payout.id}:${status}`,
       });
@@ -837,7 +1180,7 @@ export class FinanceService implements OnModuleInit {
     const { loadAccessScope, countryFilter } = await import('../identity/scope');
     const scope = principal ? await loadAccessScope(this.prisma, principal) : undefined;
     const countryId = scope ? countryFilter(scope) : undefined;
-    const [facts, payables, payouts, contributions] = await Promise.all([
+    const [facts, payables, payouts, contributions, gateRows] = await Promise.all([
       this.prisma.financialFact.count({ where: countryId ? { countryId } : undefined }),
       this.prisma.vendorPayable.count({ where: countryId ? { countryId } : undefined }),
       this.prisma.payout.count({
@@ -846,15 +1189,51 @@ export class FinanceService implements OnModuleInit {
       this.prisma.contributionSnapshot.count({
         where: countryId ? { order: { countryId } } : undefined,
       }),
+      this.prisma.r14AHumanGate.findMany(),
     ]);
+    const byCode = new Map(gateRows.map((row) => [row.gateCode, row]));
+    const snapshots: R14AGateSnapshot[] = R14A_GATE_CODES.map((code) => {
+      const row = byCode.get(code);
+      if (!row) {
+        return null;
+      }
+      return {
+        gateCode: row.gateCode,
+        valueText: row.valueText,
+        evidenceClass: row.evidenceClass,
+        evidenceRef: row.evidenceRef,
+        updatedByPersonId: row.updatedByPersonId,
+        verifiedByPersonId: row.verifiedByPersonId,
+        verifiedAt: row.verifiedAt,
+        updatedAt: row.updatedAt,
+      };
+    }).filter((row): row is R14AGateSnapshot => Boolean(row));
+    const gateEval = evaluateR14AGates(snapshots, { livePaymentEnabled: isLivePaymentEnabled() });
+    const paymentEnv = readPaymentEnvironment();
+    const liveEnabled = isLivePaymentEnabled();
+    const livePayout =
+      paymentEnv === 'production'
+      && liveEnabled
+      && gateEval.live_production_status === 'R14_A_LIVE_PRODUCTION_READY';
     return {
-      sandbox: true,
-      live_payout: false,
+      environment: paymentEnv,
+      sandbox: paymentEnv !== 'production',
+      live_psp: livePayout,
+      live_payout: livePayout,
+      payout_capability: livePayout ? 'enabled' : 'disabled',
+      settlement_capability: paymentEnv === 'production' && liveEnabled ? 'gated' : 'sandbox_only',
+      r14a_readiness: gateEval.readiness_status,
+      r14a_live_status: gateEval.live_production_status,
+      r14a_blocked_reason: gateEval.live_unlock_blocked_reason,
+      r14a_owner_evidenced: gateEval.owner_evidenced_count,
+      r14a_placeholder_count: gateEval.placeholder_count,
       facts,
       vendor_payables: payables,
       payouts,
       contributions,
-      note: 'Contribution is not net profit. Mock payout only.',
+      note: livePayout
+        ? 'Live payout gates satisfied.'
+        : 'Sandbox/mock only until PAYMENT_LIVE_ENABLED and R14-A human gates are satisfied.',
     };
   }
 
@@ -887,10 +1266,479 @@ export class FinanceService implements OnModuleInit {
   async listPayables(sellerOrgId?: string) {
     const rows = await this.prisma.vendorPayable.findMany({
       where: sellerOrgId ? { sellerOrgId } : undefined,
+      include: {
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            createdAt: true,
+            goodsMinor: true,
+            discountMinor: true,
+            totalMinor: true,
+            status: true,
+          },
+        },
+        settlementLines: { include: { batch: true }, take: 1, orderBy: { id: 'desc' } },
+        country: { select: { isoAlpha2: true } },
+      },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: 100,
     });
-    return { data: rows.map((row) => this.presentPayable(row)) };
+    return {
+      data: rows.map((row) => ({
+        ...this.presentVendorPayable(row),
+        country_code: row.country.isoAlpha2,
+        eligibility:
+          row.status === VendorPayableStatus.ELIGIBLE || row.status === VendorPayableStatus.APPROVED
+            ? 'ELIGIBLE_FOR_SETTLEMENT'
+            : row.status === VendorPayableStatus.SCHEDULED
+              ? 'BATCHED'
+              : row.status === VendorPayableStatus.PAID
+                ? 'SANDBOX_SETTLED'
+                : row.status,
+        settlement_capability: 'sandbox_only',
+        external_payout: 'EXTERNAL_PAYOUT_GATED',
+      })),
+      sandbox: true,
+      live_payout: false,
+    };
+  }
+
+  async listAffiliateLiabilities(filters?: {
+    status?: AffiliateLiabilityStatus;
+    countryCode?: string;
+    limit?: number;
+  }) {
+    const country = filters?.countryCode
+      ? await this.prisma.country.findUnique({ where: { isoAlpha2: filters.countryCode.toUpperCase() } })
+      : null;
+    if (filters?.countryCode && !country) {
+      throw Errors.notFound('Country not found.');
+    }
+    const rows = await this.prisma.affiliateLiability.findMany({
+      where: {
+        ...(filters?.status ? { status: filters.status } : {}),
+        ...(country ? { order: { countryId: country.id } } : {}),
+      },
+      include: {
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            countryId: true,
+            currency: true,
+            status: true,
+            country: { select: { isoAlpha2: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(filters?.limit ?? 100, 200),
+    });
+    return {
+      data: rows.map((row) => ({
+        id: row.id,
+        order_id: row.orderId,
+        order_number: row.order.orderNumber,
+        order_status: row.order.status,
+        amount_minor: row.amountMinor.toString(),
+        currency: row.currency,
+        status: row.status,
+        clinical_blocked: row.clinicalBlocked,
+        affiliate_code: row.affiliateCode,
+        country_code: row.order.country.isoAlpha2,
+        settlement_enabled: false,
+        settlement_status:
+          row.status === AffiliateLiabilityStatus.PAYABLE
+            ? 'READY_FOR_SETTLEMENT'
+            : row.status === AffiliateLiabilityStatus.REVERSED
+              ? 'REVERSED'
+              : row.status === AffiliateLiabilityStatus.PAID
+                ? 'EXTERNAL_PAYOUT_GATED'
+                : row.status,
+        sandbox: true,
+        live_payout: false,
+        external_payout: 'EXTERNAL_PAYOUT_GATED',
+      })),
+      sandbox: true,
+      live_payout: false,
+      message:
+        'Affiliate liabilities are authoritative. Live affiliate bank payout and settlement-batch membership remain EXTERNAL_PAYOUT_GATED.',
+    };
+  }
+
+  async listSettlementBatches(filters?: { countryCode?: string; limit?: number }) {
+    const country = filters?.countryCode
+      ? await this.prisma.country.findUnique({ where: { isoAlpha2: filters.countryCode.toUpperCase() } })
+      : null;
+    if (filters?.countryCode && !country) {
+      throw Errors.notFound('Country not found.');
+    }
+    const rows = await this.prisma.settlementBatch.findMany({
+      where: country ? { period: { countryId: country.id } } : undefined,
+      include: {
+        period: { include: { country: { select: { isoAlpha2: true } } } },
+        lines: { select: { id: true, netMinor: true } },
+        payouts: { select: { id: true, status: true, sandbox: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(filters?.limit ?? 50, 100),
+    });
+    return {
+      data: rows.map((row) => {
+        const net = row.lines.reduce((sum, line) => sum + line.netMinor, 0n);
+        const anyLivePaid = row.payouts.some((p) => p.status === PayoutStatus.PAID && !p.sandbox);
+        return {
+          id: row.id,
+          status: row.status,
+          currency: row.currency,
+          country_code: row.period.country.isoAlpha2,
+          line_count: row.lines.length,
+          net_minor: net.toString(),
+          created_at: row.createdAt.toISOString(),
+          sandbox: true,
+          live_payout: false,
+          settlement_status: anyLivePaid
+            ? 'SETTLED'
+            : row.status === SettlementBatchStatus.EXECUTED
+              ? 'SANDBOX_SETTLED'
+              : row.status === SettlementBatchStatus.APPROVED
+                ? 'READY_FOR_SETTLEMENT'
+                : row.status,
+          external_payout: 'EXTERNAL_PAYOUT_GATED',
+        };
+      }),
+      sandbox: true,
+      live_payout: false,
+    };
+  }
+
+  async adminDoctorEarningsOverview(countryCode?: string) {
+    const country = countryCode
+      ? await this.prisma.country.findUnique({ where: { isoAlpha2: countryCode.toUpperCase() } })
+      : null;
+    if (countryCode && !country) {
+      throw Errors.notFound('Country not found.');
+    }
+    const profiles = await this.prisma.doctorProfile.findMany({
+      where: {
+        partner: { status: 'ACTIVE', ...(country ? { countryId: country.id } : {}) },
+      },
+      include: {
+        country: { select: { isoAlpha2: true, defaultCurrency: true } },
+        partner: { select: { id: true, organizationId: true } },
+      },
+      take: 100,
+    });
+    const data = [];
+    for (const profile of profiles) {
+      const config = (profile.consultationConfig ?? {}) as {
+        fee_minor?: string | number;
+        currency?: string;
+        platform_fee_bps?: number;
+      };
+      const feeMinor = BigInt(String(config.fee_minor ?? '0'));
+      const currency = String(config.currency ?? profile.country.defaultCurrency ?? 'XXX').toUpperCase();
+      const platformFeeBps = Math.max(0, Number(config.platform_fee_bps ?? 0));
+      const platformFeeMinor = feeMinor > 0n ? (feeMinor * BigInt(platformFeeBps)) / 10_000n : 0n;
+      const unitPayable = feeMinor - platformFeeMinor;
+      const completedCount = await this.prisma.appointment.count({
+        where: { doctorProfileId: profile.id, status: 'COMPLETED' },
+      });
+      const doctorPayableMinor = unitPayable * BigInt(completedCount);
+      data.push({
+        doctor_profile_id: profile.id,
+        partner_id: profile.partner.id,
+        organization_id: profile.partner.organizationId,
+        country_code: profile.country.isoAlpha2,
+        currency,
+        completed_consult_count: completedCount,
+        gross_minor: (feeMinor * BigInt(completedCount)).toString(),
+        doctor_payable_minor: doctorPayableMinor.toString(),
+        earned_status: 'EARNED',
+        payable_status: doctorPayableMinor > 0n ? 'PAYABLE_COMPUTED' : 'NONE',
+        settlement_status: 'SANDBOX_NOT_SETTLED',
+        settlement_enabled: false,
+        sandbox: true,
+        live_payout: false,
+        external_payout: 'EXTERNAL_PAYOUT_GATED',
+        source: 'doctor_earnings_service_semantics',
+      });
+    }
+    return {
+      data,
+      sandbox: true,
+      live_payout: false,
+      settlement_enabled: false,
+      message:
+        'Read-only doctor earnings derived from completed appointments and consultation_config. No FinancialFact doctor payable path and no settlement batch membership.',
+    };
+  }
+
+  async adminLabEarningsOverview(countryCode?: string) {
+    const country = countryCode
+      ? await this.prisma.country.findUnique({ where: { isoAlpha2: countryCode.toUpperCase() } })
+      : null;
+    if (countryCode && !country) {
+      throw Errors.notFound('Country not found.');
+    }
+    const facts = await this.prisma.financialFact.findMany({
+      where: {
+        kind: FinancialFactKind.LAB_PAYABLE,
+        ...(country ? { countryId: country.id } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      include: { country: { select: { isoAlpha2: true } } },
+    });
+    const byCurrency = new Map<string, bigint>();
+    for (const fact of facts) {
+      const amount = fact.amountMinor ?? 0n;
+      byCurrency.set(fact.currency, (byCurrency.get(fact.currency) ?? 0n) + amount);
+    }
+    return {
+      data: facts.map((fact) => ({
+        source_key: fact.sourceKey,
+        amount_minor: (fact.amountMinor ?? 0n).toString(),
+        currency: fact.currency,
+        country_code: fact.country.isoAlpha2,
+        note: fact.note,
+        earned_status: 'EARNED',
+        payable_status: 'LAB_PAYABLE_FACT',
+        settlement_status: 'SANDBOX_NOT_SETTLED',
+        settlement_enabled: false,
+        settlement_batch_id: null,
+        sandbox: true,
+        live_payout: false,
+        external_payout: 'EXTERNAL_PAYOUT_GATED',
+        source: 'LAB_PAYABLE_financial_fact',
+      })),
+      totals_by_currency: Array.from(byCurrency.entries()).map(([currency, amount]) => ({
+        currency,
+        lab_payable_minor: amount.toString(),
+      })),
+      sandbox: true,
+      live_payout: false,
+      settlement_enabled: false,
+      message:
+        'Read-only lab earnings from LAB_PAYABLE financial facts. Live lab settlement batches remain EXTERNAL_PAYOUT_GATED.',
+    };
+  }
+
+  async reconciliationOverview(countryCode?: string) {
+    const country = countryCode
+      ? await this.prisma.country.findUnique({ where: { isoAlpha2: countryCode.toUpperCase() } })
+      : null;
+    if (countryCode && !country) {
+      throw Errors.notFound('Country not found.');
+    }
+    const countryWhere = country ? { countryId: country.id } : {};
+    const orderCountryWhere = country ? { order: { countryId: country.id } } : {};
+
+    const [
+      captureFacts,
+      refundFacts,
+      vendorPayables,
+      affiliateLiabilities,
+      labPayableFacts,
+      doctorCompleted,
+      batches,
+      orphanVendorFacts,
+      reversedButOpen,
+      currencyMismatches,
+    ] = await Promise.all([
+      this.prisma.financialFact.aggregate({
+        where: { kind: FinancialFactKind.CAPTURE, ...countryWhere },
+        _sum: { amountMinor: true },
+        _count: true,
+      }),
+      this.prisma.financialFact.aggregate({
+        where: { kind: FinancialFactKind.REFUND, ...countryWhere },
+        _sum: { amountMinor: true },
+        _count: true,
+      }),
+      this.prisma.vendorPayable.findMany({
+        where: countryWhere,
+        select: { id: true, amountMinor: true, currency: true, status: true, orderId: true, countryId: true },
+        take: 500,
+      }),
+      this.prisma.affiliateLiability.findMany({
+        where: orderCountryWhere,
+        select: { id: true, amountMinor: true, currency: true, status: true, orderId: true },
+        take: 500,
+      }),
+      this.prisma.financialFact.aggregate({
+        where: { kind: FinancialFactKind.LAB_PAYABLE, ...countryWhere },
+        _sum: { amountMinor: true },
+        _count: true,
+      }),
+      this.prisma.appointment.count({
+        where: {
+          status: 'COMPLETED',
+          ...(country ? { countryId: country.id } : {}),
+        },
+      }),
+      this.prisma.settlementBatch.findMany({
+        where: country ? { period: { countryId: country.id } } : undefined,
+        include: { lines: { select: { netMinor: true } }, payouts: { select: { status: true, sandbox: true } } },
+        take: 100,
+      }),
+      this.prisma.financialFact.findMany({
+        where: {
+          kind: FinancialFactKind.VENDOR_PAYABLE,
+          ...countryWhere,
+          orderId: { not: null },
+        },
+        select: { sourceKey: true, orderId: true, amountMinor: true, currency: true },
+        take: 200,
+      }),
+      this.prisma.affiliateLiability.count({
+        where: {
+          status: { in: [AffiliateLiabilityStatus.PENDING, AffiliateLiabilityStatus.APPROVED, AffiliateLiabilityStatus.PAYABLE] },
+          amountMinor: { lte: 0 },
+          ...orderCountryWhere,
+        },
+      }),
+      this.prisma.vendorPayable.findMany({
+        where: countryWhere,
+        include: { order: { select: { currency: true, countryId: true } } },
+        take: 200,
+      }),
+    ]);
+
+    const payableOrderIds = new Set(vendorPayables.map((row) => row.orderId));
+    const orphanFacts = orphanVendorFacts.filter(
+      (fact) => fact.orderId && !payableOrderIds.has(fact.orderId),
+    );
+
+    const vendorByStatus = {
+      pending: 0n,
+      eligible: 0n,
+      approved: 0n,
+      scheduled: 0n,
+      paid_sandbox: 0n,
+      reversed: 0n,
+    };
+    for (const row of vendorPayables) {
+      if (row.status === VendorPayableStatus.PENDING) vendorByStatus.pending += row.amountMinor;
+      else if (row.status === VendorPayableStatus.ELIGIBLE) vendorByStatus.eligible += row.amountMinor;
+      else if (row.status === VendorPayableStatus.APPROVED) vendorByStatus.approved += row.amountMinor;
+      else if (row.status === VendorPayableStatus.SCHEDULED) vendorByStatus.scheduled += row.amountMinor;
+      else if (row.status === VendorPayableStatus.PAID) vendorByStatus.paid_sandbox += row.amountMinor;
+      else if (row.status === VendorPayableStatus.REVERSED) vendorByStatus.reversed += row.amountMinor;
+    }
+
+    const affiliateByStatus = {
+      pending: 0n,
+      approved: 0n,
+      payable: 0n,
+      reversed: 0n,
+    };
+    for (const row of affiliateLiabilities) {
+      if (row.status === AffiliateLiabilityStatus.PENDING) affiliateByStatus.pending += row.amountMinor;
+      else if (row.status === AffiliateLiabilityStatus.APPROVED) affiliateByStatus.approved += row.amountMinor;
+      else if (row.status === AffiliateLiabilityStatus.PAYABLE) affiliateByStatus.payable += row.amountMinor;
+      else if (row.status === AffiliateLiabilityStatus.REVERSED) affiliateByStatus.reversed += row.amountMinor;
+    }
+
+    let batchedNet = 0n;
+    let sandboxSettledNet = 0n;
+    let openBatches = 0;
+    let approvedBatches = 0;
+    for (const batch of batches) {
+      const net = batch.lines.reduce((sum, line) => sum + line.netMinor, 0n);
+      if (batch.status === SettlementBatchStatus.OPEN || batch.status === SettlementBatchStatus.PREVIEW) {
+        openBatches += 1;
+        batchedNet += net;
+      } else if (batch.status === SettlementBatchStatus.APPROVED) {
+        approvedBatches += 1;
+        batchedNet += net;
+      } else if (batch.status === SettlementBatchStatus.EXECUTED) {
+        sandboxSettledNet += net;
+      }
+    }
+
+    const currencyMismatchPayables = currencyMismatches.filter(
+      (row) => row.currency !== row.order.currency || row.countryId !== row.order.countryId,
+    );
+
+    const captureTotal = captureFacts._sum.amountMinor ?? 0n;
+    const refundTotal = refundFacts._sum.amountMinor ?? 0n;
+
+    return {
+      scope: country?.isoAlpha2 ?? 'GLOBAL',
+      currency: country?.defaultCurrency ?? null,
+      sandbox: true,
+      live_payout: false,
+      external_payout: 'EXTERNAL_PAYOUT_GATED',
+      revenue: {
+        captured_count: captureFacts._count,
+        captured_minor: captureTotal.toString(),
+        refund_count: refundFacts._count,
+        refund_minor: refundTotal.toString(),
+        net_customer_payment_minor: (captureTotal - refundTotal).toString(),
+      },
+      payables: {
+        vendor: {
+          count: vendorPayables.length,
+          pending_minor: vendorByStatus.pending.toString(),
+          eligible_minor: vendorByStatus.eligible.toString(),
+          approved_minor: vendorByStatus.approved.toString(),
+          scheduled_minor: vendorByStatus.scheduled.toString(),
+          sandbox_paid_minor: vendorByStatus.paid_sandbox.toString(),
+          reversed_minor: vendorByStatus.reversed.toString(),
+        },
+        affiliate: {
+          count: affiliateLiabilities.length,
+          pending_minor: affiliateByStatus.pending.toString(),
+          approved_minor: affiliateByStatus.approved.toString(),
+          payable_minor: affiliateByStatus.payable.toString(),
+          reversed_minor: affiliateByStatus.reversed.toString(),
+          settlement_batch_membership: false,
+        },
+        doctor: {
+          completed_consult_count: doctorCompleted,
+          settlement_enabled: false,
+          settlement_status: 'SANDBOX_NOT_SETTLED',
+          note: 'Computed earnings only — no FinancialFact payable path.',
+        },
+        lab: {
+          fact_count: labPayableFacts._count,
+          lab_payable_minor: (labPayableFacts._sum.amountMinor ?? 0n).toString(),
+          settlement_enabled: false,
+          settlement_status: 'SANDBOX_NOT_SETTLED',
+        },
+      },
+      settlement: {
+        open_batches: openBatches,
+        approved_batches: approvedBatches,
+        eligible_or_batched_net_minor: batchedNet.toString(),
+        sandbox_settled_net_minor: sandboxSettledNet.toString(),
+        status: 'EXTERNAL_PAYOUT_GATED',
+      },
+      exceptions: {
+        orphan_vendor_payable_facts: orphanFacts.map((row) => ({
+          source_key: row.sourceKey,
+          order_id: row.orderId,
+          amount_minor: (row.amountMinor ?? 0n).toString(),
+          currency: row.currency,
+        })),
+        reversed_or_zero_affiliate_still_open: reversedButOpen,
+        currency_or_country_mismatched_payables: currencyMismatchPayables.map((row) => ({
+          id: row.id,
+          payable_currency: row.currency,
+          order_currency: row.order.currency,
+          payable_country_id: row.countryId,
+          order_country_id: row.order.countryId,
+        })),
+      },
+      consistency: {
+        revenue_net_defined: true,
+        vendor_payable_count: vendorPayables.length,
+        orphan_fact_count: orphanFacts.length,
+        mismatch_count: currencyMismatchPayables.length,
+      },
+    };
   }
 
   /** Admin oversight — finance:read. Not a vendor seller-scoped path. */
@@ -924,6 +1772,69 @@ export class FinanceService implements OnModuleInit {
       take: 50,
     });
     return { data: rows.map((row) => this.presentVendorSettlementLine(row)) };
+  }
+
+  async listVendorPayables(principal: Principal, sellerOrgId: string) {
+    await assertVendorSellerAccess(this.prisma, principal, sellerOrgId);
+    const rows = await this.prisma.vendorPayable.findMany({
+      where: { sellerOrgId },
+      include: {
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            createdAt: true,
+            goodsMinor: true,
+            discountMinor: true,
+            totalMinor: true,
+            status: true,
+          },
+        },
+        settlementLines: { include: { batch: true }, take: 1, orderBy: { id: 'desc' } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    return { data: rows.map((row) => this.presentVendorPayable(row)) };
+  }
+
+  async getVendorFinanceSummary(principal: Principal, sellerOrgId: string) {
+    await assertVendorSellerAccess(this.prisma, principal, sellerOrgId);
+    const payables = await this.prisma.vendorPayable.findMany({
+      where: { sellerOrgId },
+      select: { amountMinor: true, currency: true, status: true },
+    });
+    const settlementLines = await this.prisma.settlementLine.findMany({
+      where: { sellerOrgId },
+      include: { batch: true },
+    });
+    const currency = payables[0]?.currency ?? settlementLines[0]?.currency ?? 'XXX';
+    let totalPayableMinor = 0n;
+    let pendingPayableMinor = 0n;
+    let settledMinor = 0n;
+    for (const row of payables) {
+      totalPayableMinor += row.amountMinor;
+      if (row.status === 'PAID' || row.status === 'SCHEDULED') {
+        settledMinor += row.amountMinor;
+      } else {
+        pendingPayableMinor += row.amountMinor;
+      }
+    }
+    const batchedMinor = settlementLines.reduce((sum, line) => sum + line.netMinor, 0n);
+    return {
+      currency,
+      total_payable_minor: totalPayableMinor.toString(),
+      pending_payable_minor: pendingPayableMinor.toString(),
+      settled_payable_minor: settledMinor.toString(),
+      settlement_line_count: settlementLines.length,
+      settlement_batched_minor: batchedMinor.toString(),
+      sandbox: true,
+      live_payout: false,
+      message:
+        settlementLines.length > 0
+          ? 'Sandbox finance summary from persisted payables and settlement lines.'
+          : 'Payables exist per order. Settlement lines appear after company finance batches them.',
+    };
   }
 
   async getVendorSettlementLine(principal: Principal, lineId: string) {
@@ -1015,19 +1926,35 @@ export class FinanceService implements OnModuleInit {
   async getBatch(id: string) {
     const batch = await this.prisma.settlementBatch.findUniqueOrThrow({
       where: { id },
-      include: { lines: true, payouts: true },
+      include: {
+        lines: true,
+        payouts: true,
+        period: { include: { country: { select: { isoAlpha2: true } } } },
+      },
     });
     return {
       id: batch.id,
       status: batch.status,
       currency: batch.currency,
+      country_code: batch.period.country.isoAlpha2,
       sandbox: true,
+      live_payout: false,
+      settlement_capability: 'sandbox_only',
+      external_payout: 'EXTERNAL_PAYOUT_GATED',
+      settlement_status:
+        batch.status === SettlementBatchStatus.EXECUTED
+          ? 'SANDBOX_SETTLED'
+          : batch.status === SettlementBatchStatus.APPROVED
+            ? 'READY_FOR_SETTLEMENT'
+            : batch.status,
       lines: batch.lines.map((line) => ({
         id: line.id,
         seller_org_id: line.sellerOrgId,
+        vendor_payable_id: line.vendorPayableId,
         gross_minor: line.grossMinor.toString(),
         refund_minor: line.refundMinor.toString(),
         net_minor: line.netMinor.toString(),
+        currency: line.currency,
       })),
       payouts: batch.payouts.map((row) => this.presentPayout(row)),
     };
@@ -1162,6 +2089,49 @@ export class FinanceService implements OnModuleInit {
     await this.prisma.vendorPayable.update({
       where: { id: payable.id },
       data: { status: VendorPayableStatus.ELIGIBLE },
+    });
+  }
+
+  private async maybeAffiliatePayable(orderId: string): Promise<void> {
+    const liability = await this.prisma.affiliateLiability.findUnique({ where: { orderId } });
+    if (!liability || liability.status !== AffiliateLiabilityStatus.APPROVED) {
+      return;
+    }
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order || isAffiliateOrderIneligible(order.status)) {
+      return;
+    }
+    const shipment = await this.prisma.shipment.findFirst({ where: { orderId } });
+    const shipped =
+      shipment &&
+      (shipment.status === ShipmentStatus.DELIVERED
+        || shipment.status === ShipmentStatus.LABEL_CREATED
+        || shipment.status === ShipmentStatus.IN_TRANSIT
+        || shipment.status === ShipmentStatus.OUT_FOR_DELIVERY);
+    if (!shipped) {
+      return;
+    }
+    const policy = await this.prisma.settlementPolicy.findUnique({ where: { countryId: order.countryId } });
+    if (policy && policy.holdDays > 0) {
+      const eligibleAt = new Date(liability.createdAt.getTime() + policy.holdDays * 86400000);
+      if (eligibleAt > new Date()) {
+        return;
+      }
+    }
+    assertAffiliateLiabilityTransition(liability.status, AffiliateLiabilityStatus.PAYABLE);
+    await this.prisma.affiliateLiability.update({
+      where: { orderId },
+      data: { status: AffiliateLiabilityStatus.PAYABLE },
+    });
+    await this.emitAffiliateLifecycleEvent({
+      type: 'AFFILIATE_PAYABLE',
+      orderId,
+      liabilityId: liability.id,
+      status: AffiliateLiabilityStatus.PAYABLE,
+      affiliateCode: liability.affiliateCode,
+      countryId: order.countryId,
+      amountMinor: liability.amountMinor,
+      currency: liability.currency,
     });
   }
 
@@ -1636,6 +2606,56 @@ export class FinanceService implements OnModuleInit {
     };
   }
 
+  private presentVendorPayable(row: {
+    id: string;
+    orderId: string;
+    sellerOrgId: string;
+    amountMinor: bigint;
+    currency: string;
+    status: VendorPayableStatus;
+    takeBpsFrozen: number;
+    takeFlatFrozen: bigint;
+    holdUntil: Date | null;
+    createdAt: Date;
+    order: {
+      id: string;
+      orderNumber: string;
+      createdAt: Date;
+      goodsMinor: bigint;
+      discountMinor: bigint;
+      totalMinor: bigint;
+      status: string;
+    };
+    settlementLines: Array<{ id: string; batchId: string; netMinor: bigint; batch: { status: string; createdAt: Date } }>;
+  }) {
+    const goods = row.order.goodsMinor - row.order.discountMinor;
+    const fee =
+      goods > row.amountMinor ? goods - row.amountMinor : (goods * BigInt(row.takeBpsFrozen)) / 10000n + row.takeFlatFrozen;
+    const line = row.settlementLines[0];
+    return {
+      id: row.id,
+      order_id: row.orderId,
+      order_number: row.order.orderNumber,
+      order_date: row.order.createdAt.toISOString(),
+      order_status: row.order.status,
+      gross_minor: goods.toString(),
+      fee_minor: fee.toString(),
+      refund_minor: '0',
+      payable_minor: row.amountMinor.toString(),
+      currency: row.currency,
+      status: row.status,
+      take_bps_frozen: row.takeBpsFrozen,
+      take_flat_frozen: row.takeFlatFrozen.toString(),
+      hold_until: row.holdUntil,
+      settlement_line_id: line?.id ?? null,
+      settlement_batch_id: line?.batchId ?? null,
+      settlement_status: line?.batch.status ?? null,
+      settlement_net_minor: line?.netMinor.toString() ?? null,
+      sandbox: true,
+      live_payout: false,
+    };
+  }
+
   private assertPayoutCountryScope(payout: {
     batch: {
       period: { countryId: string };
@@ -1779,5 +2799,127 @@ export class FinanceService implements OnModuleInit {
       label: 'contribution',
       not_net_profit: true,
     };
+  }
+
+  private async resolveSellerOrgPersonIds(sellerOrgId: string): Promise<string[]> {
+    const partner = await this.prisma.partner.findFirst({
+      where: { organizationId: sellerOrgId },
+      select: { personId: true },
+    });
+    const memberships = await this.prisma.membership.findMany({
+      where: { organizationId: sellerOrgId, status: 'ACTIVE', deletedAt: null },
+      select: { personId: true },
+    });
+    const ids = new Set<string>();
+    if (partner?.personId) {
+      ids.add(partner.personId);
+    }
+    for (const row of memberships) {
+      ids.add(row.personId);
+    }
+    return [...ids];
+  }
+
+  private async resolveAffiliatePersonIds(input: {
+    countryId: string;
+    affiliateCode: string | null;
+  }): Promise<{ personIds: string[]; countryCode: string }> {
+    const country = await this.prisma.country.findUnique({
+      where: { id: input.countryId },
+      select: { isoAlpha2: true },
+    });
+    const countryCode = country?.isoAlpha2 ?? 'XX';
+    const ids = new Set<string>();
+    if (!input.affiliateCode?.trim()) {
+      return { personIds: [], countryCode };
+    }
+    const code = await this.prisma.affiliateReferralCode.findUnique({
+      where: {
+        countryId_code: { countryId: input.countryId, code: input.affiliateCode },
+      },
+      select: {
+        createdByPersonId: true,
+        organizationId: true,
+        partner: { select: { personId: true } },
+      },
+    });
+    if (!code) {
+      return { personIds: [], countryCode };
+    }
+    if (code.createdByPersonId) {
+      ids.add(code.createdByPersonId);
+    }
+    if (code.partner?.personId) {
+      ids.add(code.partner.personId);
+    }
+    for (const personId of await this.resolveSellerOrgPersonIds(code.organizationId)) {
+      ids.add(personId);
+    }
+    return { personIds: [...ids], countryCode };
+  }
+
+  private async emitAffiliateLifecycleEvent(input: {
+    type: 'AFFILIATE_LIABILITY_CREATED' | 'AFFILIATE_APPROVED' | 'AFFILIATE_PAYABLE' | 'AFFILIATE_REVERSED';
+    orderId: string;
+    liabilityId: string;
+    status: string;
+    affiliateCode: string | null;
+    countryId: string;
+    amountMinor: bigint;
+    currency: string;
+    reason?: string;
+  }): Promise<void> {
+    const occurrenceKey = `${input.type}:${input.status}`;
+    const existing = await this.prisma.outboxEvent.findFirst({
+      where: {
+        aggregateId: input.liabilityId,
+        type: input.type,
+        occurrenceKey,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return;
+    }
+    const resolved = await this.resolveAffiliatePersonIds({
+      countryId: input.countryId,
+      affiliateCode: input.affiliateCode,
+    });
+    await this.prisma.$transaction(async (tx) => {
+      await this.outbox.enqueue(tx, {
+        type: input.type,
+        aggregateType: 'AffiliateLiability',
+        aggregateId: input.liabilityId,
+        producer: 'finance',
+        countryId: input.countryId,
+        payload: {
+          order_id: input.orderId,
+          liability_id: input.liabilityId,
+          status: input.status,
+          affiliate_code: input.affiliateCode,
+          affiliate_person_id: resolved.personIds[0] ?? null,
+          person_ids: resolved.personIds,
+          country_code: resolved.countryCode,
+          amount_minor: input.amountMinor.toString(),
+          currency: input.currency,
+          sandbox: true,
+          reason: input.reason ?? null,
+        },
+        occurrenceKey,
+      });
+    });
+  }
+
+  private async resolveBatchSellerPersonIds(
+    lines: Array<{ sellerOrgId: string }>,
+  ): Promise<string[]> {
+    const sellerOrgIds = [...new Set(lines.map((line) => line.sellerOrgId))];
+    const ids = new Set<string>();
+    for (const sellerOrgId of sellerOrgIds) {
+      for (const personId of await this.resolveSellerOrgPersonIds(sellerOrgId)) {
+        ids.add(personId);
+      }
+    }
+    return [...ids];
   }
 }

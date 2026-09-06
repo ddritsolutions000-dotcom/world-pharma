@@ -12,6 +12,7 @@ import { assertImagingOrgAccess } from '../catalog/access';
 import { Errors } from '../common/problem';
 import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
+import { assertSamePerson } from '../identity/object-authorization';
 import { SecurityEventsService } from '../identity/security-events.service';
 import { FinanceService } from '../finance/finance.service';
 import { PolicyResolver } from '../policy/resolver';
@@ -83,6 +84,14 @@ export class ImagingPhysicalReportService {
       include: { logisticsJobs: true, imagingReportVersion: true },
     });
     if (existingByKey) {
+      assertSamePerson(
+        principal.personId,
+        existingByKey.customerPersonId,
+        'You cannot reuse another customer’s physical report request.',
+      );
+      if (existingByKey.imagingBookingId !== booking.id) {
+        throw Errors.forbidden('Idempotency key is bound to a different booking.');
+      }
       return this.presentCustomerRequest(existingByKey);
     }
     const existing = await this.prisma.imagingPhysicalReportRequest.findUnique({

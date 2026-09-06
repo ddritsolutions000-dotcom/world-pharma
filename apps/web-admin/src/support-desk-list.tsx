@@ -1,20 +1,18 @@
 'use client';
 
 import Link from 'next/link';
+import { classifyAdminViewState } from './admin-http';
+import { AdminViewLoadError } from './admin-request-error';
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
-  Card,
   EmptyState,
   FormField,
   Heading,
-  Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Select,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import {
   listSupportQueues,
@@ -24,15 +22,17 @@ import {
   type SupportQueue,
   type SupportTicketSummary,
 } from './support-desk-api';
+import { supportTicketStatusLabel } from './support-ticket-status-labels';
+import { workingCountry, MARKET_COUNTRY_CODES } from './working-country';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
 
 export function SupportDeskList() {
-  const { getAccessToken } = useSession();
+  const { getAccessToken, session } = useSession();
   const [rows, setRows] = useState<SupportTicketSummary[]>([]);
   const [queues, setQueues] = useState<SupportQueue[]>([]);
   const [viewState, setViewState] = useState<ViewState>('idle');
-  const [countryCode, setCountryCode] = useState('XX');
+  const [countryCode, setCountryCode] = useState(() => workingCountry(session.countryCode));
   const [statusFilter, setStatusFilter] = useState('');
   const [queueFilter, setQueueFilter] = useState('');
 
@@ -59,7 +59,7 @@ export function SupportDeskList() {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [countryCode, getAccessToken, queueFilter, statusFilter]);
 
@@ -73,87 +73,88 @@ export function SupportDeskList() {
   if (viewState === 'forbidden') {
     return <PermissionDeniedState />;
   }
-  if (viewState === 'network' && rows.length === 0) {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
-  }
 
   return (
     <div className="wp-stack">
-      <Heading level={1}>Support Desk</Heading>
-      <Text tone="secondary">
-        Operational ticket queue for support agents. Shows metadata and structured references only — no clinical
-        payloads, health timelines, or lab/imaging values. Internal notes are agent-only (server-enforced).
-        <code> reveal-pii</code> is not implemented (deferred — no R11-A API).
-      </Text>
+      <header className="wp-page-header">
+        <Heading level={1}>Support Desk</Heading>
+        <p className="wp-page-intro">
+          Customer tickets only — no clinical payloads. Open a ticket to reply or change status.
+        </p>
+      </header>
 
-      <Card>
-        <div className="wp-stack">
-          <FormField label="Country code">
-            {({ id }) => (
-              <Input
-                id={id}
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
-                placeholder="XX"
-              />
-            )}
-          </FormField>
-          <FormField label="Status filter">
-            {({ id }) => (
-              <Select id={id} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="">All statuses</option>
-                {SUPPORT_TICKET_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </FormField>
-          <FormField label="Queue filter">
-            {({ id }) => (
-              <Select id={id} value={queueFilter} onChange={(e) => setQueueFilter(e.target.value)}>
-                <option value="">All queues</option>
-                {queues.map((q) => (
-                  <option key={q.id} value={q.id}>
-                    {q.code} — {q.name}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </FormField>
-          <Button variant="secondary" onClick={() => void load()}>
-            Refresh
-          </Button>
-        </div>
-      </Card>
+      <div className="wp-toolbar">
+        <FormField label="Country">
+          {({ id }) => (
+            <Select id={id} value={countryCode} onChange={(e) => setCountryCode(workingCountry(e.target.value))}>
+              {MARKET_COUNTRY_CODES.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Status filter">
+          {({ id }) => (
+            <Select id={id} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              {SUPPORT_TICKET_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Queue filter">
+          {({ id }) => (
+            <Select id={id} value={queueFilter} onChange={(e) => setQueueFilter(e.target.value)}>
+              <option value="">All queues</option>
+              {queues.map((q) => (
+                <option key={q.id} value={q.id}>
+                  {q.code} — {q.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <Button variant="secondary" onClick={() => void load()}>
+          Refresh
+        </Button>
+      </div>
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
 
       {rows.length === 0 ? (
         <EmptyState title="No tickets" description="Adjust filters or wait for new customer tickets." />
       ) : (
-        <div className="wp-stack">
-          {rows.map((row) => (
-            <Card key={row.id}>
-              <Heading level={3}>{row.subject}</Heading>
-              <Text tone="secondary">
-                {row.status} · {row.queue_code} · ticket {row.id.slice(0, 8)}…
-              </Text>
-              {row.reference_type ? (
-                <Text tone="secondary">
-                  Ref: {row.reference_type} {row.reference_id?.slice(0, 8)}…
-                </Text>
-              ) : null}
-              {row.assignee_person_id ? (
-                <Text tone="secondary">Assignee: {row.assignee_person_id.slice(0, 8)}…</Text>
-              ) : (
-                <Text tone="secondary">Unassigned</Text>
-              )}
-              <Text tone="secondary">Updated {new Date(row.updated_at).toLocaleString()}</Text>
-              <Link href={`/support/${row.id}?country=${countryCode}`}>
-                <Button variant="secondary">Open ticket</Button>
-              </Link>
-            </Card>
-          ))}
+        <div className="wp-admin-table-wrap">
+          <table className="wp-table">
+            <thead>
+              <tr>
+                <th>Subject</th>
+                <th>Status</th>
+                <th>Queue</th>
+                <th>Updated</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  <td>{row.subject}</td>
+                  <td>
+                    <span className="wp-status">{supportTicketStatusLabel(row.status)}</span>
+                  </td>
+                  <td>{row.queue_code}</td>
+                  <td>{new Date(row.updated_at).toLocaleString()}</td>
+                  <td>
+                    <Link href={`/support/${row.id}?country=${countryCode}`}>Open</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

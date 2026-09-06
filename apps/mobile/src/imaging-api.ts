@@ -138,15 +138,65 @@ export function cancelImagingBooking(opts: TokenOpts & { id: string }) {
   });
 }
 
+export type ImagingProgress = {
+  imaging_booking_id?: string;
+  booking_status?: string;
+  progress: string;
+  note: string;
+  study_status: string | null;
+  accession_number: string | null;
+  study_instance_uid?: string | null;
+  modality_code?: string | null;
+  study_description?: string | null;
+  study_date_time?: string | null;
+  series_count?: number;
+  instance_count?: number;
+  viewer_note?: string;
+  interpretation_status?: string | null;
+  slot_starts_at?: string | null;
+  boundary?: {
+    acquisition: boolean;
+    interpretation: boolean;
+    report: boolean;
+    dicom?: boolean;
+    pacs?: boolean;
+    viewer?: boolean;
+  };
+};
+
 export function fetchImagingProgress(opts: TokenOpts & { id: string }) {
+  return call<ImagingProgress>(`api/v1/me/imaging/bookings/${opts.id}/progress`, opts);
+}
+
+/** Safe captions for optional imaging progress fields (no crash on missing UID/viewer note). */
+export function imagingProgressCaptions(progress: ImagingProgress | null | undefined): string[] {
+  if (!progress) {
+    return [];
+  }
+  const lines: string[] = [`Progress: ${progress.progress}`];
+  if (progress.accession_number) {
+    lines.push(`Accession: ${progress.accession_number}`);
+  }
+  if (progress.study_instance_uid) {
+    lines.push(`Study UID ${progress.study_instance_uid.slice(0, 24)}…`);
+  }
+  if (progress.viewer_note) {
+    lines.push(progress.viewer_note);
+  }
+  if (progress.note) {
+    lines.push(progress.note);
+  }
+  return lines;
+}
+
+export function fetchImagingStudyMetadata(opts: TokenOpts & { id: string }) {
   return call<{
-    progress: string;
-    note: string;
-    study_status: string | null;
-    accession_number: string | null;
-    slot_starts_at: string | null;
-    boundary?: { acquisition: boolean; interpretation: boolean; report: boolean };
-  }>(`api/v1/me/imaging/bookings/${opts.id}/progress`, opts);
+    study_available: boolean;
+    study_instance_uid?: string;
+    accession_number?: string;
+    modality_code?: string | null;
+    viewer?: { available: boolean; reason: string };
+  }>(`api/v1/me/imaging/bookings/${opts.id}/study`, opts);
 }
 
 export type ImagingPreparation = {
@@ -176,12 +226,21 @@ export type ImagingCustomerReport = {
   imaging_booking_id: string;
   imaging_report_id: string;
   accession_number: string | null;
+  study_instance_uid?: string | null;
+  modality_code?: string | null;
+  study_description?: string | null;
   version_number: number;
   published_at: string | null;
   amendment_reason?: string | null;
   summary: string | null;
-  findings: Array<{ finding_code: string; finding_text: string }>;
+  findings: Array<{
+    finding_code: string;
+    finding_text: string;
+    body_region_code?: string | null;
+    severity_code?: string | null;
+  }>;
   sandbox: boolean;
+  viewer?: { available: boolean; reason: string };
   note?: string;
 };
 

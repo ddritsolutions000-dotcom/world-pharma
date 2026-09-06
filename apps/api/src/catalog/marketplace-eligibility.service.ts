@@ -1,11 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import { OrganizationKind, OrganizationStatus } from '@prisma/client';
-import { PrismaService } from '../app/prisma.service';
+import {
+  CountryProductionLifecycle,
+  KycCaseStatus,
+  OrganizationKind,
+  OrganizationStatus,
+  PartnerStatus,
+  PharmacyLicenceStatus,
+} from '@prisma/client';
+import { PrismaService, runWithTenant } from '../app/prisma.service';
 import { RedisService } from '../app/redis.service';
 import { Errors } from '../common/problem';
 import type { Principal } from '../identity/current-principal';
 import { SecurityEventsService } from '../identity/security-events.service';
 import { PolicyResolver } from '../policy/resolver';
+import { workerTenantContext } from '../tenancy/build-tenant-context';
 import { assertVendorSellerAccess } from './access';
 
 /** Product attestation codes — not legal certifications. Pack flags remain authoritative. */
@@ -110,11 +118,22 @@ export class MarketplaceEligibilityService {
     );
   }
 
-  async evaluate(sellerOrgId: string): Promise<MarketplaceEligibilityView> {
-    const org = await this.prisma.organization.findUnique({
-      where: { id: sellerOrgId },
-      include: { country: { select: { isoAlpha2: true, id: true } } },
-    });
+  async evaluate(
+    sellerOrgId: string,
+    preloadedOrg?: {
+      id: string;
+      kind: OrganizationKind;
+      status: OrganizationStatus;
+      countryId: string;
+      country: { isoAlpha2: string; id: string };
+    } | null,
+  ): Promise<MarketplaceEligibilityView> {
+    const org =
+      preloadedOrg ??
+      (await this.prisma.organization.findUnique({
+        where: { id: sellerOrgId },
+        include: { country: { select: { isoAlpha2: true, id: true } } },
+      }));
     const sandbox_note =
       'Marketplace eligibility is pack-gated and sandbox-only. Real payouts / live PSP remain OFF (R14).';
     if (!org || org.kind !== OrganizationKind.VENDOR) {
@@ -154,6 +173,17 @@ export class MarketplaceEligibilityService {
     const attested =
       Boolean(record.attested_at) && record.attestation_code === MARKETPLACE_ATTESTATION_CODE;
     const orgActive = org.status === OrganizationStatus.ACTIVE;
+    const partner = await this.prisma.partner.findFirst({
+      where: { organizationId: sellerOrgId, partnerTypeCode: 'VENDOR' },
+      select: { status: true },
+    });
+    const partnerBlocked =
+      partner !== null &&
+      (partner.status === PartnerStatus.SUSPENDED ||
+        partner.status === PartnerStatus.BLOCKED ||
+        partner.status === PartnerStatus.DEACTIVATED ||
+        partner.status === PartnerStatus.REJECTED);
+    const partnerActive = partner?.status === PartnerStatus.ACTIVE;
 
     let state: MarketplaceEligibilityState;
     let blocked_reason: string | null = null;
@@ -172,6 +202,10 @@ export class MarketplaceEligibilityService {
       state = 'BLOCKED';
       blocked_reason = `Organization status is ${org.status}.`;
       next_action = 'Ask company governance to activate the seller organization.';
+    } else if (partner && partnerBlocked) {
+      state = 'BLOCKED';
+      blocked_reason = `Vendor partner status is ${partner.status}.`;
+      next_action = 'Contact company support — seller onboarding is blocked.';
     } else if (record.acceptance === 'BLOCKED') {
       state = 'BLOCKED';
       blocked_reason = record.blocked_reason ?? 'Company governance blocked marketplace participation.';
@@ -181,6 +215,9 @@ export class MarketplaceEligibilityService {
     } else if (record.acceptance !== 'ACCEPTED') {
       state = 'PENDING';
       next_action = 'Waiting for company governance acceptance.';
+    } else if (partner && !partnerActive) {
+      state = 'PENDING';
+      next_action = 'Complete vendor activation after setup readiness.';
     } else {
       state = 'ELIGIBLE';
       next_action = null;
@@ -189,7 +226,16 @@ export class MarketplaceEligibilityService {
     const packOk = packPublished && marketplaceEnabled && vendorTypeEnabled;
     const financeVisible = packOk && orgActive && record.acceptance !== 'BLOCKED';
     const supportOk = financeVisible;
-    const catalogWrite = state === 'ELIGIBLE';
+    const catalogWrite =
+      packOk &&
+      orgActive &&
+      attested &&
+      record.acceptance === 'ACCEPTED' &&
+      !partnerBlocked &&
+      (!partner ||
+        partner.status === PartnerStatus.ACTIVE ||
+        partner.status === PartnerStatus.APPROVED ||
+        partner.status === PartnerStatus.VERIFIED);
 
     return {
       seller_org_id: sellerOrgId,
@@ -224,7 +270,7 @@ export class MarketplaceEligibilityService {
   async assertCatalogWrite(principal: Principal, sellerOrgId: string): Promise<MarketplaceEligibilityView> {
     await assertVendorSellerAccess(this.prisma, principal, sellerOrgId);
     const view = await this.evaluate(sellerOrgId);
-    if (view.state === 'ELIGIBLE' && view.gates.catalog_write) {
+    if (view.gates.catalog_write) {
       return view;
     }
     if (view.state === 'REQUIRES_ATTESTATION') {
@@ -367,6 +413,82 @@ export class MarketplaceEligibilityService {
       },
     });
     return this.evaluate(sellerOrgId);
+  }
+
+  /** Customer storefront / checkout — authoritative under worker tenant (RLS-safe). */
+  async isCustomerPurchasableSeller(sellerOrgId: string): Promise<boolean> {
+    return runWithTenant(workerTenantContext(), async () => {
+      const org = await this.prisma.organization.findUnique({
+        where: { id: sellerOrgId },
+        include: {
+          country: {
+            select: { isoAlpha2: true, id: true, productionLifecycle: true },
+          },
+        },
+      });
+      if (!org || org.kind !== OrganizationKind.VENDOR) {
+        return false;
+      }
+      const partner = await this.prisma.partner.findFirst({
+        where: { organizationId: sellerOrgId },
+        select: { id: true, status: true, countryId: true },
+      });
+      if (partner && partner.status !== PartnerStatus.ACTIVE) {
+        return false;
+      }
+      // Sprint 43 — country production suspension blocks NEW marketplace purchases.
+      if (org.country.productionLifecycle === CountryProductionLifecycle.SUSPENDED) {
+        return false;
+      }
+
+      if (partner) {
+        const licence = await this.prisma.pharmacyLicence.findFirst({
+          where: { partnerId: partner.id, countryId: partner.countryId },
+          orderBy: { createdAt: 'desc' },
+        });
+        const commercial = await this.prisma.partnerCommercialApproval.findFirst({
+          where: { partnerId: partner.id, countryId: partner.countryId },
+        });
+        const kyc = await this.prisma.kycCase.findFirst({
+          where: { partnerId: partner.id },
+          orderBy: { createdAt: 'desc' },
+        });
+        const productionHard =
+          org.country.productionLifecycle === CountryProductionLifecycle.ACTIVE;
+        const now = new Date();
+
+        // Soft sandbox: only enforce when an explicit licence/commercial gate exists.
+        // Production-active countries: fail closed on licence + commercial + KYC.
+        if (productionHard || licence) {
+          if (!licence) return false;
+          const expired =
+            licence.status === PharmacyLicenceStatus.EXPIRED ||
+            (licence.expiresAt != null && licence.expiresAt < now);
+          if (expired || licence.status !== PharmacyLicenceStatus.VERIFIED) {
+            return false;
+          }
+        }
+        if (productionHard || commercial) {
+          if (!commercial || !commercial.approved || commercial.revokedAt) {
+            return false;
+          }
+        }
+        if (productionHard) {
+          if (
+            !kyc ||
+            kyc.status !== KycCaseStatus.VERIFIED ||
+            (kyc.expiresAt != null && kyc.expiresAt < now)
+          ) {
+            return false;
+          }
+        } else if (kyc?.status === KycCaseStatus.EXPIRED) {
+          return false;
+        }
+      }
+
+      const view = await this.evaluate(sellerOrgId, org);
+      return view.state === 'ELIGIBLE';
+    });
   }
 
   async listSellerActivity(principal: Principal, sellerOrgId: string) {

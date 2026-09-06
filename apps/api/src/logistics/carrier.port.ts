@@ -29,6 +29,7 @@ export type CarrierBookRequest = {
   shipmentId: string;
   idempotencyKey: string;
   scenario: MockBookingScenario;
+  carrierCode?: string;
 };
 
 export type CarrierBookResponse = {

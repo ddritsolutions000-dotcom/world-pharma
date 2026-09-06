@@ -24,6 +24,10 @@
     "ci:migrations": "node scripts/ci/check-migrations.mjs",
     "compose:up": "docker compose up -d",
     "compose:down": "docker compose down",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:restore": "node scripts/db-restore.mjs",
+    "db:recovery-drill": "node scripts/db-recovery-drill.mjs",
+    "provider:verify": "node scripts/provider-verify.mjs",
     "postinstall": "prisma generate --schema packages/database/prisma/schema.prisma"
   },
   "dependencies": {

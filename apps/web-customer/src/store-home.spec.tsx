@@ -1,94 +1,61 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import { SessionProvider } from '@world-pharma/shell-web';
 import { ThemeProvider } from '@world-pharma/ui-kit/web';
 import { StoreHome } from './store-home';
 
-const mockFetchDiscoverySearch = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: jest.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 
-jest.mock('@world-pharma/shell-web', () => ({
-  useCountries: () => ({ countries: [{ iso_alpha2: 'XX' }], error: false }),
+jest.mock('./use-selected-country', () => ({
+  isStoreMarket: (iso: string) => ['IN', 'AE', 'US'].includes(iso?.trim().toUpperCase()),
+  useSelectedCountry: () => ({
+    country: 'IN',
+    countries: [{ iso_alpha2: 'IN', name: 'India' }],
+    setCountry: jest.fn(),
+    countryName: 'India',
+    loading: false,
+    hydrated: true,
+    needsSelection: false,
+    ready: true,
+  }),
+}));
+
+jest.mock('./care-api', () => ({
+  fetchPublicCareDoctors: async () => ({ doctors: [] }),
 }));
 
 jest.mock('./store-api', () => ({
-  fetchCatalog: async () => ({ country_enabled: true, data: [] }),
-  fetchCategories: async () => [],
-}));
-
-jest.mock('./discovery-api', () => ({
-  fetchDiscoverySearch: (...args: unknown[]) => mockFetchDiscoverySearch(...args),
-  DiscoveryApiError: class DiscoveryApiError extends Error {
-    status: number;
-    constructor(message: string, status: number) {
-      super(message);
-      this.status = status;
-    }
-  },
-  DISCOVERY_TYPE_LABELS: {
-    commerce: 'Products',
-    help: 'Help',
-    doctor: 'Doctors',
-    lab: 'Labs',
-    test: 'Tests',
-    pharmacy: 'Pharmacies',
-  },
+  fetchCatalog: async () => ({
+    country_enabled: true,
+    data: [
+      {
+        id: '1',
+        slug: 'demo-paracetamol',
+        title: 'Paracetamol',
+        brand: 'Demo',
+        category: null,
+        assets: [{ url: 'https://example.com/p.png', alt: 'Paracetamol' }],
+        offers: [{ id: 'o1', currency: 'XXX', price: { sell_minor: '8900', list_minor: '12000' }, pack_size: '10 tablets' }],
+      },
+    ],
+  }),
+  fetchCategories: async () => [{ slug: 'pain-relief', name: 'Pain Relief' }],
+  fetchBrands: async () => [{ id: 'b1', slug: 'demo', name: 'Demo Brand' }],
 }));
 
 describe('StoreHome', () => {
-  beforeEach(() => {
-    mockFetchDiscoverySearch.mockReset();
-    mockFetchDiscoverySearch.mockResolvedValue({
-      country_enabled: true,
-      discovery_enabled: true,
-      country: 'XX',
-      locale: 'en',
-      query: '',
-      types: ['commerce', 'help'],
-      data: [],
-      meta: { limit: 20, total: 0, next_cursor: null },
-    });
-  });
-
-  it('renders store catalog without cart or checkout', async () => {
+  it('renders World-Pharma homepage sections', async () => {
     render(
       <ThemeProvider defaultTheme="light">
-        <StoreHome />
+        <SessionProvider>
+          <StoreHome />
+        </SessionProvider>
       </ThemeProvider>,
     );
-    expect(await screen.findByRole('heading', { name: 'Store' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /cart/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /checkout/i })).not.toBeInTheDocument();
-  });
-
-  it('retries discovery search from network error state', async () => {
-    const { DiscoveryApiError } = jest.requireMock<{ DiscoveryApiError: new (message: string, status: number) => Error & { status: number } }>('./discovery-api');
-    mockFetchDiscoverySearch
-      .mockRejectedValueOnce(new DiscoveryApiError('offline', 0))
-      .mockResolvedValueOnce({
-        country_enabled: true,
-        discovery_enabled: true,
-        country: 'XX',
-        locale: 'en',
-        query: 'aspirin',
-        types: ['commerce'],
-        data: [{ type: 'commerce', id: '1', title: 'Aspirin', subtitle: null, slug: 'aspirin', href: '/p/aspirin' }],
-        meta: { limit: 20, total: 1, next_cursor: null },
-      });
-
-    render(
-      <ThemeProvider defaultTheme="light">
-        <StoreHome />
-      </ThemeProvider>,
-    );
-
-    fireEvent.change(screen.getByRole('textbox', { name: /search catalog/i }), {
-      target: { value: 'aspirin' },
-    });
-
-    expect(await screen.findByRole('heading', { name: 'Connection problem' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-    await waitFor(() => {
-      expect(mockFetchDiscoverySearch).toHaveBeenCalledTimes(2);
-    });
-    expect(await screen.findByRole('heading', { name: 'Products' })).toBeInTheDocument();
+    expect(await screen.findByText('Popular medicines')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /health for people everywhere/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Order medicines' })).toBeInTheDocument();
   });
 });

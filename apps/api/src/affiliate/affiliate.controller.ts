@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
@@ -6,6 +7,7 @@ import { RequireAudiences } from '../identity/require-audiences';
 import { PermissionsGuard } from '../identity/permissions.guard';
 import { RequirePermissions } from '../identity/require-permissions';
 import { AffiliateService } from './affiliate.service';
+import { AffiliateStatementService } from './affiliate-statement.service';
 
 @Controller('admin/affiliate')
 @UseGuards(JwtAuthGuard, AudienceGuard, PermissionsGuard)
@@ -50,11 +52,41 @@ export class AdminAffiliateController {
 @UseGuards(JwtAuthGuard, AudienceGuard)
 @RequireAudiences('customer')
 export class AffiliateSelfController {
-  constructor(private readonly affiliates: AffiliateService) {}
+  constructor(
+    private readonly affiliates: AffiliateService,
+    private readonly statements: AffiliateStatementService,
+  ) {}
 
   @Get('earnings')
   earnings(@CurrentPrincipal() principal: Principal) {
     return this.affiliates.listEarnings(principal);
+  }
+
+  @Get('statement')
+  statement(
+    @CurrentPrincipal() principal: Principal,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.statements.listStatement(principal, {
+      from,
+      to,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Get('statement/export.csv')
+  async statementCsv(
+    @CurrentPrincipal() principal: Principal,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Res() res: Response,
+  ) {
+    const csv = await this.statements.exportCsv(principal, { from, to });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="affiliate-statement.csv"');
+    res.send(csv);
   }
 
   @Get('codes')

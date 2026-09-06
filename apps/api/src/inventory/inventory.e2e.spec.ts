@@ -13,20 +13,7 @@ import {
   activateMarketplaceSeller,
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
-
-async function signIn(app: INestApplication, email: string): Promise<{ token: string; personId: string }> {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience: 'admin',
-    });
-  return { token: verified.body.access_token, personId: verified.body.person_id };
-}
+import { provisionOrgAdmin, provisionSuperAdmin } from '../test/sign-in';
 
 describe('inventory warehouse (e2e)', () => {
   let app: INestApplication;
@@ -118,34 +105,9 @@ describe('inventory warehouse (e2e)', () => {
       },
     });
 
-    const admin = await signIn(app, `inv-admin-${Date.now()}@example.com`);
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `inv-vendor-${Date.now()}@example.com`);
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendorA.id,
-        status: 'ACTIVE',
-      },
-    });
-    const otherVendor = await signIn(app, `inv-vendor-b-${Date.now()}@example.com`);
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: otherVendor.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendorB.id,
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, `inv-admin-${Date.now()}`);
+    const vendorUser = await provisionOrgAdmin(app, prisma, `inv-vendor-${Date.now()}`, vendorA.id);
+    const otherVendor = await provisionOrgAdmin(app, prisma, `inv-vendor-b-${Date.now()}`, vendorB.id);
 
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,

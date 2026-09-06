@@ -1,12 +1,20 @@
 import { Text, View } from 'react-native';
 import { NativeButton } from './button';
-import { nativeColors, type ColorMode } from './theme';
+import { nativeCanvas, nativeColors, nativeRadius, type ColorMode } from './theme';
 
 export function NativeLoadingState({ title = 'Loading', mode = 'light' }: { title?: string; mode?: ColorMode }) {
   const color = nativeColors(mode);
   return (
-    <View style={{ alignItems: 'center', padding: 32, gap: 12 }} accessibilityRole="progressbar">
-      <Text style={{ color: color.text.primary, fontSize: 16, fontWeight: '600' }}>{title}</Text>
+    <View style={{ alignItems: 'center', padding: 28, gap: 10 }} accessibilityRole="progressbar">
+      <View
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: 22,
+          backgroundColor: color.background.sunken,
+        }}
+      />
+      <Text style={{ color: color.text.primary, fontSize: 16, fontWeight: '700' }}>{title}</Text>
     </View>
   );
 }
@@ -77,9 +85,31 @@ export function NativeEmptyState({
 }) {
   const color = nativeColors(mode);
   return (
-    <View style={{ alignItems: 'center', padding: 32, gap: 12 }}>
-      <Text style={{ color: color.text.primary, fontSize: 18, fontWeight: '600' }}>{title}</Text>
-      <Text style={{ color: color.text.secondary, textAlign: 'center' }}>{description}</Text>
+    <View
+      style={{
+        alignItems: 'center',
+        padding: 28,
+        gap: 10,
+        backgroundColor: color.background.surface,
+        borderRadius: nativeRadius.lg,
+        borderWidth: 1,
+        borderColor: color.border.default,
+      }}
+    >
+      <View
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 26,
+          backgroundColor: nativeCanvas,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ fontSize: 22 }}>✦</Text>
+      </View>
+      <Text style={{ color: color.text.primary, fontSize: 18, fontWeight: '700', textAlign: 'center' }}>{title}</Text>
+      <Text style={{ color: color.text.secondary, textAlign: 'center', lineHeight: 20 }}>{description}</Text>
       {actionLabel && onAction ? <NativeButton label={actionLabel} onPress={onAction} mode={mode} /> : null}
     </View>
   );

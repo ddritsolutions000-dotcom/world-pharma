@@ -31,4 +31,23 @@ describe('policy document validation', () => {
     const result = validatePolicyDocument(document);
     expect(result.ok).toBe(false);
   });
+
+  it('accepts optional tax_profile_id as an id only', () => {
+    const document = emptyPolicyDocument();
+    document.tax_profile_id = 'tax-profile-xx';
+    expect(validatePolicyDocument(document).ok).toBe(true);
+    document.tax_profile_id = 'not a secret with spaces!!!';
+    expect(validatePolicyDocument(document).ok).toBe(false);
+  });
+
+  it('accepts optional ledger refs and rejects accounting currency outside allowed', () => {
+    const document = emptyPolicyDocument();
+    document.ledger = { legal_entity_id: null, accounting_currency: null };
+    expect(validatePolicyDocument(document).ok).toBe(true);
+    document.currency = { default: 'GBP', allowed: ['GBP'] };
+    document.ledger = { legal_entity_id: 'le-gb-sandbox', accounting_currency: 'GBP' };
+    expect(validatePolicyDocument(document).ok).toBe(true);
+    document.ledger = { legal_entity_id: null, accounting_currency: 'EUR' };
+    expect(validatePolicyDocument(document).ok).toBe(false);
+  });
 });

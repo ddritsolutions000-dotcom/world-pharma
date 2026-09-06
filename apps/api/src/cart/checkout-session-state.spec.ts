@@ -35,6 +35,15 @@ describe('checkout session state', () => {
     expect(resolveCheckoutSessionPaymentTarget(CheckoutStatus.FAILED, 'pre_submit_failed')).toBeNull();
   });
 
+  it('maps order creation failure from PAID back to FAILED', () => {
+    expect(resolveCheckoutSessionPaymentTarget(CheckoutStatus.PAID, 'order_creation_failed')).toBe(
+      CheckoutStatus.FAILED,
+    );
+    expect(resolveCheckoutSessionPaymentTarget(CheckoutStatus.READY_FOR_PAYMENT, 'order_creation_failed')).toBe(
+      CheckoutStatus.FAILED,
+    );
+  });
+
   it('does not change in-flight checkout on pre-submit failure mapping when already FAILED', async () => {
     const tx = {
       checkoutSession: {

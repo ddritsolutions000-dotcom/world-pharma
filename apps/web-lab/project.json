@@ -25,6 +25,13 @@
       "options": {
         "command": "tsc --noEmit -p apps/web-lab/tsconfig.json"
       }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "jestConfig": "apps/web-lab/jest.config.cts"
+      }
     }
   }
 }

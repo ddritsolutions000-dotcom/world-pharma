@@ -1,4 +1,4 @@
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { adminJson, AdminHttpError } from './admin-http';
 
 export class CmsAdminApiError extends Error {
   status: number;
@@ -44,7 +44,10 @@ export type CmsAssetResponse = {
   content_type: string;
   byte_size: number;
   checksum_sha256: string;
+  alt_text?: string | null;
+  folder?: string | null;
   created_at: string;
+  public_path?: string;
 };
 
 export const CMS_CONTENT_TYPES = [
@@ -68,26 +71,19 @@ export async function cmsAdminCall<T = unknown>(
   token: string,
   init?: RequestInit,
 ): Promise<T> {
-  const base = apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new CmsAdminApiError((body as { detail?: string }).detail ?? 'request_failed', res.status);
+  try {
+    return await adminJson<T>(token, path, init);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new CmsAdminApiError(err.message, err.status);
+    }
+    throw new CmsAdminApiError('request_failed', 0);
   }
-  return body as T;
 }
 
 export function listCmsContent(
   token: string,
-  query: { country_code: string; status?: string; content_type?: string },
+  query: { country_code: string; status?: string; content_type?: string; slug?: string },
 ) {
   const params = new URLSearchParams({ country_code: query.country_code });
   if (query.status) {
@@ -95,6 +91,9 @@ export function listCmsContent(
   }
   if (query.content_type) {
     params.set('content_type', query.content_type);
+  }
+  if (query.slug) {
+    params.set('slug', query.slug);
   }
   return cmsAdminCall<{ data: CmsContentItem[] }>(`/api/v1/admin/cms/content?${params}`, token);
 }
@@ -150,6 +149,14 @@ export function publishCmsContent(
   );
 }
 
+export function reviseCmsContent(token: string, id: string, countryCode: string) {
+  return cmsAdminCall<CmsContentItem>(
+    `/api/v1/admin/cms/content/${encodeURIComponent(id)}/revise`,
+    token,
+    { method: 'POST', body: JSON.stringify({ country_code: countryCode }) },
+  );
+}
+
 export function archiveCmsContent(token: string, id: string, countryCode: string) {
   return cmsAdminCall<CmsContentItem>(
     `/api/v1/admin/cms/content/${encodeURIComponent(id)}/archive`,
@@ -165,6 +172,14 @@ export function getCmsVersions(token: string, id: string, countryCode: string) {
   );
 }
 
+export function listCmsAssets(token: string, countryCode: string, folder?: string) {
+  const params = new URLSearchParams({ country_code: countryCode });
+  if (folder) {
+    params.set('folder', folder);
+  }
+  return cmsAdminCall<{ data: CmsAssetResponse[] }>(`/api/v1/admin/cms/assets?${params}`, token);
+}
+
 export function uploadCmsAsset(
   token: string,
   body: {
@@ -173,12 +188,31 @@ export function uploadCmsAsset(
     content_base64: string;
     content_type: string;
     original_name?: string;
+    alt_text?: string;
+    folder?: string;
   },
 ) {
   return cmsAdminCall<CmsAssetResponse>(`/api/v1/admin/cms/assets`, token, {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+export function updateCmsAsset(
+  token: string,
+  assetId: string,
+  countryCode: string,
+  patch: { alt_text?: string; folder?: string },
+) {
+  return cmsAdminCall<{ asset_id: string; alt_text: string | null; folder: string | null }>(
+    `/api/v1/admin/cms/assets/${encodeURIComponent(assetId)}`,
+    token,
+    { method: 'PATCH', body: JSON.stringify({ country_code: countryCode, ...patch }) },
+  );
+}
+
+export function updateCmsAssetAltText(token: string, assetId: string, countryCode: string, altText: string) {
+  return updateCmsAsset(token, assetId, countryCode, { alt_text: altText });
 }
 
 export async function fileToBase64(file: File): Promise<string> {

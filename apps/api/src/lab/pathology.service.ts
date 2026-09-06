@@ -1,6 +1,5 @@
 import { Inject, Injectable, forwardRef } from '@nestjs/common';
 import {
-  HealthArtifactType,
   LabProcessingStatus,
   LabReportVersionStatus,
   OrganizationKind,
@@ -14,7 +13,7 @@ import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
 import { SecurityEventsService } from '../identity/security-events.service';
 import { FinanceService } from '../finance/finance.service';
-import { HealthTimelineService } from '../health/health-timeline.service';
+import { HealthDiagnosticProjectionService } from '../health/health-diagnostic-projection.service';
 import { PrivateObjectStore } from '../partner/object-store';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
 import { assertReportTransition, isMutableReportStatus, isPublishedReportStatus } from './lab-report-status';
@@ -35,8 +34,8 @@ export class PathologyService {
     private readonly security: SecurityEventsService,
     private readonly objects: PrivateObjectStore,
     private readonly finance: FinanceService,
-    @Inject(forwardRef(() => HealthTimelineService))
-    private readonly healthTimeline: HealthTimelineService,
+    @Inject(forwardRef(() => HealthDiagnosticProjectionService))
+    private readonly healthDiagnostic: HealthDiagnosticProjectionService,
   ) {}
 
   async ensureDraftReportForProcessing(processingId: string, actorPersonId: string): Promise<void> {
@@ -300,7 +299,6 @@ export class PathologyService {
       contentType: 'application/json',
       prefix: `lab-reports/${labOrgId}`,
     });
-    const artifactId = uuidv7();
     const publishedAt = new Date();
     await this.prisma.runWithTenant(
       workerTenantContext({
@@ -319,29 +317,13 @@ export class PathologyService {
               objectKey: stored.key,
             },
           });
-          await tx.healthArtifact.create({
-            data: {
-              id: artifactId,
-              personId: booking.customerPersonId,
-              countryId: report.countryId,
-              title: 'Lab diagnostic report',
-              artifactType: HealthArtifactType.LAB_REPORT,
-              labReportVersionId: version.id,
-              labBookingId: report.labBookingId,
-              publishedAt,
-              sandbox: true,
-            },
-          });
-          await this.healthTimeline.projectArtifactPublished(tx, {
+          const artifact = await this.healthDiagnostic.projectPublishedLabReport(tx, {
+            labReportVersionId: version.id,
+            labBookingId: report.labBookingId,
             personId: booking.customerPersonId,
             countryId: report.countryId,
-            artifactId,
-            artifactType: HealthArtifactType.LAB_REPORT,
-            sourceModule: 'lab',
-            sourceId: report.labBookingId,
-            title: 'Lab diagnostic report',
-            occurredAt: publishedAt,
-            sandbox: true,
+            publishedAt,
+            subjectFamilyMemberId: booking.subjectFamilyMemberId,
           });
           await this.outbox.enqueue(tx, {
             type: 'LAB_REPORT_PUBLISHED',
@@ -350,7 +332,7 @@ export class PathologyService {
             producer: 'lab',
             countryId: report.countryId,
             payload: {
-              artifact_id: artifactId,
+              artifact_id: artifact.id,
               lab_report_id: report.id,
               lab_booking_id: report.labBookingId,
               lab_org_id: labOrgId,
@@ -694,7 +676,12 @@ export class PathologyService {
       },
     });
     if (!membership) {
-      throw Errors.forbidden('Laboratory membership required for pathology work.');
+      throw Errors.problem(
+        403,
+        'MEMBERSHIP_REQUIRED',
+        'Laboratory membership required',
+        'You must be an active staff member of this laboratory organization before assigning, verifying, or publishing pathology reports. Ask an operator to grant org_staff membership for this lab.',
+      );
     }
   }
 

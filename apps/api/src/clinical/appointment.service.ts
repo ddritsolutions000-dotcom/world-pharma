@@ -5,6 +5,7 @@ import {
   ClinicalRelationshipKind,
   ConversionEventKind,
   EncounterStatus,
+  KycCaseStatus,
   PartnerStatus,
   Prisma,
 } from '@prisma/client';
@@ -22,7 +23,12 @@ import { ScheduleService } from './schedule.service';
 import { ConversionEventService } from '../crm/conversion-event.service';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
 import { HealthConsultProjectionService } from '../health/health-consult-projection.service';
+import { HealthSubjectService } from '../health/health-subject.service';
 import { EncounterConsultNoteService } from './encounter-consult-note.service';
+import { DoctorWalletService } from './doctor-wallet.service';
+import type { Principal } from '../identity/current-principal';
+import { HealthcarePartnerReadinessService } from '../healthcare/healthcare-partner-readiness.service';
+import { evaluateDoctorClinicalActionEligibility } from './doctor-consultation-erx-production-workflow-closure';
 
 type Actor = {
   personId: string;
@@ -45,6 +51,9 @@ export class AppointmentService {
     private readonly events: SecurityEventsService,
     private readonly conversionEvents: ConversionEventService,
     private readonly consultNotes: EncounterConsultNoteService,
+    private readonly healthSubjects: HealthSubjectService,
+    private readonly healthcareReadiness: HealthcarePartnerReadinessService,
+    private readonly doctorWallet: DoctorWalletService,
     @Inject(forwardRef(() => HealthConsultProjectionService))
     private readonly healthConsultProjection: HealthConsultProjectionService,
   ) {}
@@ -110,11 +119,27 @@ export class AppointmentService {
     locationId?: string;
     reasonCategory?: string;
     requestId?: string;
+    familyMemberId?: string | null;
+    principal?: Principal;
   }) {
     if (input.audience !== 'customer') {
       throw Errors.forbidden('Only a customer session can book');
     }
     const resolved = await this.requireAppointmentsEnabled(input.countryCode);
+    const subjectPrincipal =
+      input.principal ??
+      ({
+        personId: input.customerPersonId,
+        audience: 'customer',
+        sessionId: 'appointment-book',
+        roles: [],
+        tokenVersion: 0,
+      } as Principal);
+    const subject = await this.healthSubjects.resolve(
+      subjectPrincipal,
+      input.countryCode,
+      input.familyMemberId,
+    );
     const type = input.type === 'ONLINE' ? AppointmentType.ONLINE : AppointmentType.IN_PERSON;
     if (type === AppointmentType.ONLINE && !this.policy.isTelemedicineEligible(resolved.document)) {
       throw Errors.serviceDisabled('Online consultation is not enabled for this country.');
@@ -129,6 +154,11 @@ export class AppointmentService {
     if (!profile || profile.partner.status !== PartnerStatus.ACTIVE) {
       throw Errors.forbidden('Doctor is not eligible for booking');
     }
+    await this.healthcareReadiness.assertBookingAllowed({
+      kind: 'DOCTOR',
+      countryCode: input.countryCode,
+      partnerId: profile.partnerId,
+    });
     const startsAt = new Date(input.startsAt);
     const window = await this.prisma.doctorAvailabilityWindow.findFirst({
       where: { doctorProfileId: profile.id, isActive: true },
@@ -178,6 +208,7 @@ export class AppointmentService {
             endsAt,
             status: AppointmentStatus.REQUESTED,
             reasonCategory: input.reasonCategory,
+            subjectFamilyMemberId: subject.familyMemberId,
           },
         });
         await tx.appointmentScheduleRevision.create({
@@ -207,6 +238,7 @@ export class AppointmentService {
           payload: {
             appointment_id: appointment.id,
             doctor_profile_id: profile.id,
+            doctor_person_id: profile.personId,
             customer_person_id: input.customerPersonId,
             status: appointment.status,
           },
@@ -305,6 +337,30 @@ export class AppointmentService {
   async startConsultation(id: string, actor: Actor) {
     const row = await this.load(id);
     this.assertDoctor(row, actor);
+    const partner = await this.prisma.partner.findUnique({
+      where: { id: row.doctorPartnerId },
+      select: { id: true, status: true },
+    });
+    const kyc = partner
+      ? await this.prisma.kycCase.findFirst({
+          where: { partnerId: partner.id },
+          orderBy: { createdAt: 'desc' },
+          select: { status: true, expiresAt: true },
+        })
+      : null;
+    const clinicalGate = evaluateDoctorClinicalActionEligibility({
+      partnerStatus: (partner?.status as PartnerStatus | undefined) ?? null,
+      kycStatus: (kyc?.status as KycCaseStatus | undefined) ?? null,
+      kycExpiresAt: kyc?.expiresAt ?? null,
+    });
+    if (!clinicalGate.allowed) {
+      throw Errors.problem(
+        403,
+        clinicalGate.blocker ?? 'PARTNER_NOT_ACTIVE',
+        'Doctor clinical action blocked',
+        clinicalGate.detail,
+      );
+    }
     const country = await this.prisma.country.findUnique({ where: { id: row.countryId } });
     const access = await this.access.evaluate({
       actorId: actor.personId,
@@ -315,7 +371,22 @@ export class AppointmentService {
       requestId: actor.requestId,
     });
     if (!access.allowed) {
-      throw Errors.forbidden('Consultation access denied');
+      if (access.reason === 'consent_missing_or_inactive' || access.reason === 'consent_expired') {
+        throw Errors.problem(
+          403,
+          'CONSENT_REQUIRED',
+          'Patient consent required',
+          access.reason === 'consent_expired'
+            ? 'Patient consent has expired. Ask the patient to renew consent before starting the consultation.'
+            : 'Patient consent is required before consultation can start. The patient must grant consultation access for this doctor.',
+        );
+      }
+      throw Errors.problem(
+        403,
+        'CONSULTATION_ACCESS_DENIED',
+        'Consultation access denied',
+        `Consultation cannot start (${access.reason}).`,
+      );
     }
     await this.ensureEncounter(id);
     await this.move(id, actor, AppointmentStatus.IN_CONSULTATION, 'started', 'doctor');
@@ -330,6 +401,9 @@ export class AppointmentService {
   async complete(id: string, actor: Actor) {
     const row = await this.load(id);
     this.assertDoctor(row, actor);
+    if (row.status === AppointmentStatus.COMPLETED) {
+      return this.present(row);
+    }
     assertAppointmentTransition(row.status, AppointmentStatus.COMPLETED);
     const country = await this.prisma.country.findUniqueOrThrow({ where: { id: row.countryId } });
     const patientSummary = this.consultNotes.normalizePatientSummary(actor.patientSummary);
@@ -374,13 +448,19 @@ export class AppointmentService {
               countryCode: country.isoAlpha2,
               publishedAt: completedAt,
               title: 'Consultation summary',
+              subjectFamilyMemberId: row.subjectFamilyMemberId,
             }),
         );
       }
     });
 
     const updated = await this.load(id);
-    await this.emitStandalone(updated, actor, 'ENCOUNTER_COMPLETED');
+    await this.emitStandalone(updated, actor, 'ENCOUNTER_COMPLETED', {
+      customer_person_id: updated.customerPersonId,
+      doctor_person_id: updated.doctorProfile.personId,
+      appointment_id: updated.id,
+      status: updated.status,
+    });
     await this.conversionEvents
       .recordHook({
         countryCode: country.isoAlpha2,
@@ -391,16 +471,27 @@ export class AppointmentService {
         metadata: { appointment_id: updated.id },
       })
       .catch(() => undefined);
+    await this.doctorWallet
+      .creditCompletedConsult({
+        doctorPersonId: updated.doctorProfile.personId,
+        appointmentId: updated.id,
+        doctorProfileId: updated.doctorProfileId,
+        countryId: updated.countryId,
+      })
+      .catch(() => undefined);
     return this.present(updated);
   }
 
   markNoShow(id: string, actor: Actor) {
-    return this.move(id, actor, AppointmentStatus.NO_SHOW, 'no_show', 'doctor');
+    return this.move(id, actor, AppointmentStatus.NO_SHOW, 'no_show', 'doctor', 'APPOINTMENT_NO_SHOW');
   }
 
   async cancel(id: string, actor: Actor) {
     const row = await this.load(id);
     this.assertCancel(row, actor);
+    if (row.status === AppointmentStatus.CANCELLED) {
+      return this.present(row);
+    }
     assertAppointmentTransition(row.status, AppointmentStatus.CANCELLED);
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.appointment.update({
@@ -499,7 +590,14 @@ export class AppointmentService {
     return this.present(updated);
   }
 
-  private async move(id: string, actor: Actor, to: AppointmentStatus, reason: string, role: 'doctor' | 'admin') {
+  private async move(
+    id: string,
+    actor: Actor,
+    to: AppointmentStatus,
+    reason: string,
+    role: 'doctor' | 'admin',
+    extraEvent?: string,
+  ) {
     const row = await this.load(id);
     if (role === 'doctor') {
       this.assertDoctor(row, actor);
@@ -508,11 +606,12 @@ export class AppointmentService {
     }
     assertAppointmentTransition(row.status, to);
     const eventName =
-      to === AppointmentStatus.CONFIRMED
+      extraEvent ??
+      (to === AppointmentStatus.CONFIRMED
         ? 'APPOINTMENT_CONFIRMED'
         : to === AppointmentStatus.CHECKED_IN
           ? 'APPOINTMENT_CHECKED_IN'
-          : null;
+          : null);
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.appointment.update({ where: { id }, data: { status: to } });
       await this.writeHistory(tx, id, row.status, to, actor.personId, reason, actor.requestId);
@@ -526,6 +625,7 @@ export class AppointmentService {
           payload: this.patientNotificationPayload(row.customerPersonId, actor.personId, {
             appointment_id: id,
             status: to,
+            customer_person_id: row.customerPersonId,
           }),
           occurrenceKey: `${to}:${id}`,
         });
@@ -637,6 +737,7 @@ export class AppointmentService {
     row: { id: string; countryId: string },
     actor: Actor,
     type: string,
+    payload: Record<string, unknown> = { appointment_id: row.id },
   ) {
     await this.prisma.$transaction(async (tx) => {
       await this.outbox.enqueue(tx, {
@@ -645,7 +746,7 @@ export class AppointmentService {
         aggregateId: row.id,
         producer: 'clinical',
         countryId: row.countryId,
-        payload: { appointment_id: row.id },
+        payload,
         actorId: actor.personId,
         occurrenceKey: `${type}:${row.id}`,
       });
@@ -709,6 +810,7 @@ export class AppointmentService {
     cancelReasonCode: string | null;
     cancelledAt: Date | null;
     videoSessionRef: string | null;
+    subjectFamilyMemberId?: string | null;
     encounter?: { id: string; status: EncounterStatus; startedAt: Date | null; endedAt: Date | null } | null;
     doctorProfile?: { displayName: string; professionalName: string };
   }) {
@@ -727,6 +829,7 @@ export class AppointmentService {
       cancel_reason_code: row.cancelReasonCode,
       cancelled_at: row.cancelledAt,
       video_session_ref: row.videoSessionRef,
+      subject_family_member_id: row.subjectFamilyMemberId ?? null,
       doctor_display_name: row.doctorProfile?.displayName || row.doctorProfile?.professionalName,
       encounter: row.encounter
         ? {

@@ -3,14 +3,14 @@ import { AppProviders } from '../src/providers';
 import '../src/shell.css';
 
 export const metadata = {
-  title: 'World Pharma Doctor',
-  description: 'Doctor application foundation — no clinical modules yet',
+  title: 'World Pharma · Doctor Portal',
+  description: 'Consultations, appointments, prescriptions, and patient inbox.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body>
+    <html lang="en" data-theme="light">
+      <body className="wp-portal-site doctor-body">
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

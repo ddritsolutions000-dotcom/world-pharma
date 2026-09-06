@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService, runWithTenant } from '../app/prisma.service';
-import { CatalogSearchService } from '../catalog/search.service';
+import { CatalogSearchService, type CatalogSearchHit } from '../catalog/search.service';
 import { CatalogService } from '../catalog/catalog.service';
 import { CmsSearchService } from '../cms/cms-search.service';
 import { Errors } from '../common/problem';
@@ -20,6 +20,7 @@ import {
   type DiscoveryResultItem,
   type DiscoverySearchResponse,
   type DiscoveryType,
+  type DiscoveryCommerceSort,
 } from './discovery-query';
 
 export interface DiscoverySearchInput {
@@ -34,6 +35,10 @@ export interface DiscoverySearchInput {
   specialty?: string;
   city?: string;
   labOrgId?: string;
+  manufacturer?: string;
+  rx?: boolean;
+  in_stock?: boolean;
+  sort?: DiscoveryCommerceSort;
 }
 
 @Injectable()
@@ -73,10 +78,54 @@ export class DiscoverySearchService {
       return this.emptyResponse(country.isoAlpha2, locale, query, input.types, limit, true, true);
     }
 
+    const commerceOnly =
+      input.types.length === 1 && input.types[0] === 'commerce' && this.isTypeEnabled(document, flags, 'commerce');
+    if (commerceOnly) {
+      const commercePage = await this.catalogSearch.searchPage(
+        country.id,
+        query,
+        locale,
+        limit,
+        {
+          brand: input.brand,
+          category: input.category,
+          manufacturer: input.manufacturer,
+          rx: input.rx,
+          in_stock: input.in_stock,
+        },
+        input.sort ?? 'relevance',
+        input.cursor,
+      );
+      const page = await this.mapCommerceDocs(country.id, commercePage.data);
+      return {
+        country: country.isoAlpha2,
+        locale,
+        country_enabled: true,
+        discovery_enabled: true,
+        query,
+        types: input.types,
+        data: page,
+        meta: {
+          limit,
+          total: page.length,
+          next_cursor: commercePage.next_cursor,
+        },
+      };
+    }
+
     const rows: DiscoveryResultItem[] = [];
     const take = limit + offset;
     if (input.types.includes('commerce') && this.isTypeEnabled(document, flags, 'commerce')) {
-      rows.push(...(await this.commerceResults(country.id, locale, query, take, input.brand, input.category)));
+      rows.push(
+        ...(await this.commerceResults(country.id, locale, query, take, {
+          brand: input.brand,
+          category: input.category,
+          manufacturer: input.manufacturer,
+          rx: input.rx,
+          in_stock: input.in_stock,
+          sort: input.sort,
+        })),
+      );
     }
     if (input.types.includes('help')) {
       rows.push(...(await this.helpResults(country.id, locale, query, take)));
@@ -211,10 +260,20 @@ export class DiscoverySearchService {
     locale: string,
     query: string,
     take: number,
-    brand?: string,
-    category?: string,
+    filters?: {
+      brand?: string;
+      category?: string;
+      manufacturer?: string;
+      rx?: boolean;
+      in_stock?: boolean;
+      sort?: DiscoveryCommerceSort;
+    },
   ): Promise<DiscoveryResultItem[]> {
-    const docs = await this.catalogSearch.search(countryId, query, locale, take, { brand, category });
+    const docs = await this.catalogSearch.search(countryId, query, locale, take, filters, filters?.sort);
+    return this.mapCommerceDocs(countryId, docs);
+  }
+
+  private async mapCommerceDocs(countryId: string, docs: CatalogSearchHit[]): Promise<DiscoveryResultItem[]> {
     if (!docs.length) {
       return [];
     }
@@ -233,6 +292,15 @@ export class DiscoverySearchService {
         slug,
         href: slug ? `/p/${slug}` : null,
         in_stock: row.inStock,
+        rx_required: row.rxRequired,
+        min_sell_minor: row.minSellMinor !== null ? row.minSellMinor.toString() : null,
+        max_discount_pct: row.maxDiscountPct,
+        avg_rating: row.avgRating,
+        review_count: row.reviewCount,
+        manufacturer: row.manufacturerName || null,
+        composition: row.composition || null,
+        brand: row.brandName || null,
+        category: row.categoryName || null,
       };
     });
   }
@@ -267,7 +335,7 @@ export class DiscoverySearchService {
       title: row.title,
       subtitle: row.subtitle,
       slug: null,
-      href: `/doctors`,
+      href: `/doctors/${row.profileId}`,
       online_capable: row.onlineCapable,
     }));
   }

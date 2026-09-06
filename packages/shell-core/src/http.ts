@@ -6,11 +6,33 @@ export function createCorrelationId(): string {
 }
 
 export function apiBaseUrl(env: Record<string, string | undefined> = {}): string {
-  return (
-    env['NEXT_PUBLIC_API_BASE_URL'] ??
-    env['EXPO_PUBLIC_API_BASE_URL'] ??
-    'http://127.0.0.1:4000'
-  ).replace(/\/$/, '');
+  const configured = (env['NEXT_PUBLIC_API_BASE_URL'] ?? env['EXPO_PUBLIC_API_BASE_URL'] ?? '').trim();
+  const fromEnv = configured.replace(/\/$/, '');
+  // Partner/admin Next apps proxy /api via rewrites. Hitting :4000 from the browser
+  // trips CORS / credential failures and surfaces as a generic "Connection problem".
+  if (typeof window !== 'undefined' && !env['EXPO_PUBLIC_API_BASE_URL']?.trim()) {
+    const port = window.location?.port;
+    const hostname = window.location?.hostname ?? '';
+    const portalPort = Number(port);
+    if (
+      (Number.isFinite(portalPort) && portalPort >= 3000 && portalPort <= 3011) ||
+      hostname === 'vendor.demo.com'
+    ) {
+      return window.location.origin;
+    }
+  }
+  if (fromEnv) {
+    return fromEnv;
+  }
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return `${window.location.protocol}//${host}:4000`;
+    }
+  }
+  // Native/physical devices must set EXPO_PUBLIC_API_BASE_URL (LAN or emulator alias).
+  // Do not invent a production host here — loopback is a local-only last resort for Node/web tests.
+  return 'http://127.0.0.1:4000';
 }
 
 export async function apiFetch(
@@ -31,6 +53,7 @@ export async function apiFetch(
   }
   return fetch(`${baseUrl ?? apiBaseUrl(typeof process === 'undefined' ? {} : process.env)}/${path.replace(/^\//, '')}`, {
     ...rest,
+    credentials: rest.credentials ?? 'include',
     headers: next,
   });
 }

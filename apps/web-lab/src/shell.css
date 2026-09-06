@@ -1,0 +1,204 @@
+.wp-portal-site {
+  min-height: 100dvh;
+  background: var(--wp-color-background-primary);
+  color: var(--wp-color-text-primary);
+}
+
+.wp-page-header {
+  margin-bottom: var(--wp-space-2);
+}
+
+.wp-page-header h1,
+.wp-page-header h2,
+.wp-page-header .wp-heading-1 {
+  margin: 0 0 var(--wp-space-2);
+}
+
+.wp-page-intro {
+  margin: 0;
+  color: var(--wp-color-text-secondary);
+  max-width: 52rem;
+  line-height: 1.55;
+}
+
+.wp-sandbox-banner {
+  margin: 0 0 var(--wp-space-3);
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--wp-radius-md, 8px);
+  background: #e8eef2;
+  border: 1px solid #cbd5e0;
+  color: #1a365d;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.wp-section-title {
+  margin: 0 0 var(--wp-space-2);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.wp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wp-space-2);
+  align-items: center;
+}
+
+.wp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wp-space-3);
+}
+
+.wp-list-title {
+  margin: 0 0 var(--wp-space-1);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.wp-list-meta {
+  margin: 0;
+  color: var(--wp-color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.wp-text-muted {
+  margin: 0;
+  color: var(--wp-color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.wp-status {
+  display: inline-block;
+  margin-bottom: var(--wp-space-2);
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--wp-color-background-secondary);
+  border: 1px solid var(--wp-color-border-subtle);
+}
+
+.wp-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--wp-space-4);
+  margin: 0;
+}
+
+.wp-kpi-grid dt {
+  margin: 0;
+  color: var(--wp-color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.wp-kpi-grid dd {
+  margin: 0.15rem 0 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.wp-kpi-meter {
+  margin-top: 0.7rem;
+  height: 6px;
+  border-radius: 999px;
+  background: #edf2f7;
+  overflow: hidden;
+}
+
+.wp-kpi-meter > i {
+  display: block;
+  height: 100%;
+  background: #9f7aea;
+  border-radius: inherit;
+}
+
+.wp-kpi-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.55rem;
+  height: 7.5rem;
+  padding: 0.75rem 0.5rem 0;
+  margin: 0 0 1rem;
+}
+
+.wp-kpi-bars span {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.35rem;
+  height: 100%;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--wp-color-text-secondary);
+}
+
+.wp-kpi-bars i {
+  display: block;
+  width: 100%;
+  max-width: 2.25rem;
+  border-radius: 8px 8px 2px 2px;
+  background: #9f7aea;
+}
+
+.wp-order-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--wp-space-4);
+}
+
+@media (min-width: 960px) {
+  .wp-order-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+    align-items: start;
+  }
+}
+
+.wp-order-detail {
+  position: sticky;
+  top: var(--wp-space-4);
+}
+
+.wp-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wp-space-4);
+}
+
+.shell-main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--wp-space-4);
+}
+
+.vendor-body,
+.lab-body,
+.radiology-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--wp-color-background-primary);
+}
+
+.vendor-layout,
+.lab-layout,
+.radiology-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.vendor-tab-row,
+.lab-tab-row,
+.radiology-tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wp-space-2);
+}

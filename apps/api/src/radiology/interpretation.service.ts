@@ -1,6 +1,5 @@
 import { Inject, Injectable, forwardRef } from '@nestjs/common';
 import {
-  HealthArtifactType,
   ImagingReportVersionStatus,
   ImagingStudyStatus,
   OrganizationKind,
@@ -14,7 +13,7 @@ import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
 import { SecurityEventsService } from '../identity/security-events.service';
 import { FinanceService } from '../finance/finance.service';
-import { HealthTimelineService } from '../health/health-timeline.service';
+import { HealthDiagnosticProjectionService } from '../health/health-diagnostic-projection.service';
 import { PrivateObjectStore } from '../partner/object-store';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
 import {
@@ -37,6 +36,7 @@ const reportInclude = {
       booking: { include: { lines: true } },
       acquisition: true,
       imagingLocation: { select: { id: true, name: true, city: true } },
+      series: { include: { instances: true } },
     },
   },
   currentVersion: { include: { findingLines: true } },
@@ -52,8 +52,8 @@ export class InterpretationService {
     private readonly security: SecurityEventsService,
     private readonly objects: PrivateObjectStore,
     private readonly finance: FinanceService,
-    @Inject(forwardRef(() => HealthTimelineService))
-    private readonly healthTimeline: HealthTimelineService,
+    @Inject(forwardRef(() => HealthDiagnosticProjectionService))
+    private readonly healthDiagnostic: HealthDiagnosticProjectionService,
   ) {}
 
   /** Idempotent: create DRAFT report when study reaches ACQUIRED. */
@@ -418,7 +418,6 @@ export class InterpretationService {
       contentType: 'application/json',
       prefix: `imaging-reports/${imagingOrgId}`,
     });
-    const artifactId = uuidv7();
     const publishedAt = new Date();
     await this.prisma.runWithTenant(
       workerTenantContext({
@@ -437,29 +436,13 @@ export class InterpretationService {
               objectKey: stored.key,
             },
           });
-          await tx.healthArtifact.create({
-            data: {
-              id: artifactId,
-              personId: booking.customerPersonId,
-              countryId: report.countryId,
-              title: 'Imaging report',
-              artifactType: HealthArtifactType.IMAGING_REPORT,
-              imagingReportVersionId: version.id,
-              imagingBookingId: report.imagingBookingId,
-              publishedAt,
-              sandbox: true,
-            },
-          });
-          await this.healthTimeline.projectArtifactPublished(tx, {
+          const artifact = await this.healthDiagnostic.projectPublishedImagingReport(tx, {
+            imagingReportVersionId: version.id,
+            imagingBookingId: report.imagingBookingId,
             personId: booking.customerPersonId,
             countryId: report.countryId,
-            artifactId,
-            artifactType: HealthArtifactType.IMAGING_REPORT,
-            sourceModule: 'radiology',
-            sourceId: report.imagingBookingId,
-            title: 'Imaging report',
-            occurredAt: publishedAt,
-            sandbox: true,
+            publishedAt,
+            subjectFamilyMemberId: booking.subjectFamilyMemberId,
           });
           await this.outbox.enqueue(tx, {
             type: 'IMAGING_REPORT_PUBLISHED',
@@ -468,7 +451,7 @@ export class InterpretationService {
             producer: 'radiology',
             countryId: report.countryId,
             payload: {
-              artifact_id: artifactId,
+              artifact_id: artifact.id,
               imaging_report_id: report.id,
               imaging_booking_id: report.imagingBookingId,
               imaging_org_id: imagingOrgId,
@@ -625,7 +608,7 @@ export class InterpretationService {
       where: { imagingBookingId },
       include: {
         currentVersion: { include: { findingLines: true } },
-        study: true,
+        study: { include: { series: { include: { instances: { select: { sopInstanceUid: true, status: true } } } } } },
       },
     });
     if (!report?.currentVersion || report.currentVersion.status !== ImagingReportVersionStatus.PUBLISHED) {
@@ -650,6 +633,10 @@ export class InterpretationService {
       imaging_booking_id: imagingBookingId,
       imaging_report_id: report.id,
       accession_number: report.study.accessionNumber,
+      study_instance_uid: report.study.studyInstanceUid,
+      modality_code: report.study.modalityCode,
+      study_description: report.study.studyDescription,
+      study_date_time: report.study.studyDateTime?.toISOString() ?? null,
       version_number: report.currentVersion.versionNumber,
       published_at: report.currentVersion.publishedAt?.toISOString() ?? null,
       amendment_reason: report.currentVersion.amendmentReason,
@@ -661,6 +648,10 @@ export class InterpretationService {
         severity_code: line.severityCode,
       })),
       sandbox: true,
+      viewer: {
+        available: false,
+        reason: 'DICOM viewer is not enabled. Report text is available; clinical image viewing requires production PACS.',
+      },
       note: 'Sandbox imaging report. Not for clinical use.',
     };
   }
@@ -798,8 +789,10 @@ export class InterpretationService {
       id: row.id,
       imaging_study_id: row.imagingStudyId,
       accession_number: row.study.accessionNumber,
+      study_instance_uid: row.study.studyInstanceUid,
       study_title: row.study.booking.lines[0]?.title ?? 'Imaging study',
       study_status: row.study.status,
+      modality_code: row.study.modalityCode,
       status: version?.status ?? null,
       version_number: version?.versionNumber ?? null,
       assigned_radiologist_id: row.assignedRadiologistPersonId,
@@ -818,9 +811,13 @@ export class InterpretationService {
       imaging_booking_id: row.imagingBookingId,
       imaging_org_id: row.imagingOrgId,
       accession_number: row.study.accessionNumber,
+      study_instance_uid: row.study.studyInstanceUid,
       study_title: row.study.booking.lines[0]?.title ?? 'Imaging study',
       study_status: row.study.status,
       modality_code: row.study.modalityCode,
+      study_description: row.study.studyDescription,
+      study_date_time: row.study.studyDateTime?.toISOString() ?? null,
+      series_count: row.study.series.length,
       body_region_code: row.study.bodyRegionCode,
       assigned_radiologist_id: row.assignedRadiologistPersonId,
       acquisition: acquisition
@@ -829,10 +826,13 @@ export class InterpretationService {
             sandbox_object_ref: acquisition.sandboxObjectRef,
             equipment_code: acquisition.equipmentCode,
             completed_at: acquisition.completedAt?.toISOString() ?? null,
+            study_instance_uid: row.study.studyInstanceUid,
+            series_count: row.study.series.length,
             sandbox: true,
             pacs: false,
-            dicom: false,
-            note: 'Sandbox metadata only. No image viewer or DICOM download.',
+            dicom: true,
+            viewer: row.study.sandbox,
+            note: 'Sandbox diagnostic viewer available via radiologist View study. Not a certified workstation. Production PACS EXTERNAL_GATED.',
           }
         : null,
       version: version
@@ -857,8 +857,9 @@ export class InterpretationService {
         publication: isPublishedImagingReportStatus(version?.status ?? ImagingReportVersionStatus.DRAFT),
         customer_report: isPublishedImagingReportStatus(version?.status ?? ImagingReportVersionStatus.DRAFT),
         pacs: false,
-        dicom: false,
-        note: 'R8-E publication when VERIFIED→PUBLISHED. R8-F physical delivery not started.',
+        dicom: true,
+        viewer: row.study.sandbox,
+        note: 'Sandbox diagnostic viewer available (S152). Not a certified workstation. Production PACS EXTERNAL_GATED.',
       },
     };
   }
@@ -884,7 +885,12 @@ export class InterpretationService {
       },
     });
     if (!membership) {
-      throw Errors.forbidden('Imaging center membership required for radiology work.');
+      throw Errors.problem(
+        403,
+        'MEMBERSHIP_REQUIRED',
+        'Imaging center membership required',
+        'You must be an active staff member of this imaging center before interpreting or publishing reports. Ask an operator to grant org_staff membership for this center.',
+      );
     }
   }
 }

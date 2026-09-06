@@ -3,10 +3,11 @@ import { PrismaService } from '../app/prisma.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { AudienceGuard } from './audience.guard';
 import { RequireAudiences } from './require-audiences';
+import { PermissionsGuard } from './permissions.guard';
 import { RequirePermissions } from './require-permissions';
 
 @Controller('admin/security-events')
-@UseGuards(JwtAuthGuard, AudienceGuard)
+@UseGuards(JwtAuthGuard, AudienceGuard, PermissionsGuard)
 @RequireAudiences('admin')
 @RequirePermissions('identity:audit_read')
 export class SecurityEventsController {

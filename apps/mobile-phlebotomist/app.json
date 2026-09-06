@@ -3,8 +3,20 @@
     "name": "World Pharma Phlebotomist",
     "slug": "world-pharma-phlebotomist",
     "scheme": "worldpharmaphlebotomist",
-    "version": "1.0.0",
+    "version": "0.0.0",
     "orientation": "portrait",
-    "platforms": ["ios", "android"]
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios", "android", "web"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.worldpharma.phlebotomist"
+    },
+    "android": {
+      "package": "com.worldpharma.phlebotomist",
+      "versionCode": 1
+    },
+    "extra": {
+      "appEnv": "local"
+    }
   }
 }

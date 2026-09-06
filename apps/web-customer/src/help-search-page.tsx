@@ -3,27 +3,18 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { useCountries } from '@world-pharma/shell-web';
-import {
-  Button,
-  Card,
-  EmptyState,
-  FormField,
-  Heading,
-  Input,
-  LoadingState,
-  NetworkErrorState,
-  Text,
-} from '@world-pharma/ui-kit/web';
+import { useSelectedCountry } from './use-selected-country';
+import { EmptyState, LoadingState, NetworkErrorState } from '@world-pharma/ui-kit/web';
 import { fetchHelpSearch, HelpApiError, type HelpArticleSummary } from './help-api';
 import { HelpShell } from './help-shell';
+import { MgBtn, MgCard, MgInput } from './ui/mg-ui';
 
 type ViewState = 'idle' | 'loading' | 'network' | 'validation' | 'error';
 
 export function HelpSearchScreen() {
   const searchParams = useSearchParams();
-  const { countries } = useCountries();
-  const country = searchParams.get('country') ?? countries[0]?.iso_alpha2 ?? 'XX';
+  const { country: selectedCountry } = useSelectedCountry();
+  const country = searchParams.get('country') ?? selectedCountry;
   const locale = searchParams.get('locale') ?? 'en';
   const initialQ = searchParams.get('q') ?? '';
   const [query, setQuery] = useState(initialQ);
@@ -81,27 +72,18 @@ export function HelpSearchScreen() {
   };
 
   return (
-    <HelpShell title="Search help">
-      <Card>
-        <div className="wp-stack">
-          <FormField label="Search query">
-            {({ id }) => (
-              <Input
-                id={id}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search help articles"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    onSubmit();
-                  }
-                }}
-              />
-            )}
-          </FormField>
-          <Button onClick={onSubmit}>Search</Button>
+    <HelpShell title="Search help" subtitle="Find answers about orders, refunds, and deliveries.">
+      <MgCard className="mg-help-search">
+        <div className="mg-toolbar">
+          <MgInput
+            value={query}
+            onChange={setQuery}
+            placeholder="Search help articles"
+            label="Search query"
+          />
+          <MgBtn onClick={onSubmit}>Search</MgBtn>
         </div>
-      </Card>
+      </MgCard>
 
       {viewState === 'loading' ? <LoadingState label="Searching help articles" /> : null}
       {viewState === 'network' ? (
@@ -119,21 +101,18 @@ export function HelpSearchScreen() {
       ) : null}
 
       {viewState === 'idle' && results.length > 0 ? (
-        <ul className="wp-stack" aria-label="Search results">
+        <ul className="mg-discovery-grid" aria-label="Search results">
           {results.map((article) => (
             <li key={article.id}>
-              <Card>
-                <Heading level={3}>
-                  <Link href={`/help/a/${encodeURIComponent(article.slug)}?country=${country}&locale=${locale}`}>
-                    {article.title}
-                  </Link>
-                </Heading>
-                {article.category_slug ? (
-                  <Text size="caption" tone="secondary">
-                    {article.category_slug}
-                  </Text>
-                ) : null}
-              </Card>
+              <Link
+                href={`/help/a/${encodeURIComponent(article.slug)}?country=${country}&locale=${locale}`}
+                className="mg-discovery-link"
+              >
+                <article className="mg-discovery-card">
+                  <span className="mg-discovery-type">{article.category_slug?.replace(/-/g, ' ') ?? 'Help'}</span>
+                  <h3>{article.title}</h3>
+                </article>
+              </Link>
             </li>
           ))}
         </ul>

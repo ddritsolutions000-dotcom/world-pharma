@@ -7,7 +7,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { ProblemBody } from './problem';
+import { correlationId } from './correlation';
+import { ProblemBody, ProblemException } from './problem';
 import { redactText } from './redact';
 
 @Catch()
@@ -19,7 +20,7 @@ export class ProblemFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
     const requestId = (request.headers['x-request-id'] as string | undefined) ?? undefined;
-    const correlationId = (request.headers['x-correlation-id'] as string | undefined) ?? requestId;
+    const corrId = correlationId() ?? (request.headers['x-correlation-id'] as string | undefined) ?? requestId;
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let body: ProblemBody = {
@@ -30,9 +31,22 @@ export class ProblemFilter implements ExceptionFilter {
       code: 'INTERNAL_ERROR',
       instance: request.path,
       request_id: requestId,
+      correlation_id: corrId,
     };
+    let retryAfter: number | undefined;
 
-    if (exception instanceof HttpException) {
+    if (exception instanceof ProblemException) {
+      status = exception.getStatus();
+      const payload = exception.getResponse() as ProblemBody;
+      body = {
+        ...payload,
+        status,
+        instance: request.path,
+        request_id: requestId,
+        correlation_id: corrId,
+      };
+      retryAfter = exception.retryAfterSeconds ?? payload.retry_after_seconds;
+    } else if (exception instanceof HttpException) {
       status = exception.getStatus();
       const payload = exception.getResponse();
       if (typeof payload === 'object' && payload && 'code' in payload) {
@@ -41,7 +55,9 @@ export class ProblemFilter implements ExceptionFilter {
           status,
           instance: request.path,
           request_id: requestId,
+          correlation_id: corrId,
         };
+        retryAfter = (payload as ProblemBody).retry_after_seconds;
       } else {
         body = {
           ...body,
@@ -61,6 +77,7 @@ export class ProblemFilter implements ExceptionFilter {
         code: 'PAYLOAD_TOO_LARGE',
         instance: request.path,
         request_id: requestId,
+        correlation_id: corrId,
       };
     } else {
       const raw = exception instanceof Error ? exception.message : String(exception);
@@ -69,7 +86,7 @@ export class ProblemFilter implements ExceptionFilter {
           JSON.stringify({
             msg: 'unhandled_exception',
             request_id: requestId,
-            correlation_id: correlationId,
+            correlation_id: corrId,
             error: process.env['NODE_ENV'] === 'production' ? 'internal' : raw,
           }),
         ),
@@ -78,6 +95,10 @@ export class ProblemFilter implements ExceptionFilter {
 
     if (looksInternal(body.detail)) {
       body = { ...body, detail: 'An unexpected error occurred.' };
+    }
+
+    if (retryAfter && retryAfter > 0) {
+      response.setHeader('Retry-After', String(retryAfter));
     }
 
     response.status(status).type('application/problem+json').json(body);

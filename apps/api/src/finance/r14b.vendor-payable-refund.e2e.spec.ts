@@ -28,8 +28,12 @@ async function signIn(app: INestApplication, email: string, audience: 'admin' | 
     .send({ identifier: email, purpose: 'REGISTER' });
   const verified = await request(app.getHttpServer())
     .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
+    .send({
+      challenge_id: requested.body.challenge_id,
+      code: requested.body.dev_code,
+      audience: 'customer',
+    });
+  return { token: verified.body.access_token as string, personId: verified.body.person_id as string, email };
 }
 
 describe('R14-B vendor payable partial refund (e2e)', () => {
@@ -108,13 +112,24 @@ describe('R14-B vendor payable partial refund (e2e)', () => {
     countryId = (await ensureCountry('VR', 'VRX', 'Vendor refund')).id;
     otherCountryId = (await ensureCountry('VJ', 'VJX', 'Vendor refund other')).id;
 
-    const admin = await signIn(app, `vpr-admin-${Date.now()}@example.com`, 'admin');
-    adminToken = admin.token;
+    const adminEmail = `vpr-admin-${Date.now()}@example.com`;
+    const admin = await signIn(app, adminEmail, 'admin');
     adminPersonId = admin.personId;
     const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
     await prisma.membership.create({
       data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
     });
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/v1/auth/otp/request')
+      .send({ identifier: adminEmail, purpose: 'LOGIN' });
+    const adminVerified = await request(app.getHttpServer())
+      .post('/api/v1/auth/otp/verify')
+      .send({
+        challenge_id: adminLogin.body.challenge_id,
+        code: adminLogin.body.dev_code,
+        audience: 'admin',
+      });
+    adminToken = adminVerified.body.access_token as string;
     await prisma.settlementPolicy.upsert({
       where: { countryId },
       create: { id: uuidv7(), countryId, holdDays: 0, dualControl: false },

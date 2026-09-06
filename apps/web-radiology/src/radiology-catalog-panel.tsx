@@ -129,7 +129,7 @@ export function RadiologyCatalogPanel({
     <div className="wp-stack">
       <Text tone="secondary">
         IMAGING_STUDY items use the shared catalog kernel with IMAGING_OWNED offers. Customer booking,
-        acquisition, interpretation, and DICOM/PACS remain OFF.
+        acquisition uses sandbox metadata only. PACS/DICOM and live image viewer are not available.
       </Text>
       <Card>
         <Heading level={2}>Create imaging offering</Heading>

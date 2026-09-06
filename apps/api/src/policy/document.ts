@@ -90,6 +90,24 @@ export const policyDocumentSchema = z
       gateway_refs: z.array(z.string()),
       currencies: z.array(iso4217),
     }),
+    tax_profile_id: z
+      .string()
+      .max(64)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/)
+      .nullable()
+      .optional(),
+    ledger: z
+      .object({
+        legal_entity_id: z
+          .string()
+          .max(64)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/)
+          .nullable()
+          .default(null),
+        accounting_currency: iso4217.nullable().default(null),
+      })
+      .optional()
+      .default({ legal_entity_id: null, accounting_currency: null }),
     shipping: z
       .object({
         domestic: z.boolean(),
@@ -104,6 +122,35 @@ export const policyDocumentSchema = z
         rx: false,
         controlled: false,
         cold_chain: false,
+      }),
+    commerce: z
+      .object({
+        platform_fee_bps: z.number().int().min(0).max(10_000).default(0),
+        platform_fee_flat_minor: z.number().int().min(0).default(0),
+        delivery_fee_minor: z.number().int().min(0).default(0),
+        packaging_fee_minor: z.number().int().min(0).default(0),
+        handling_fee_minor: z.number().int().min(0).default(0),
+        payment_convenience_fee_minor: z.number().int().min(0).default(0),
+        free_delivery_threshold_minor: z.number().int().min(0).nullable().default(null),
+        carrier_cost_estimate_minor: z.number().int().min(0).default(0),
+        affiliate_commission_bps: z.number().int().min(0).max(10_000).default(0),
+        /** Partner take (doctor wallet / partner wallet) — distinct from customer checkout platform_fee_bps. */
+        doctor_platform_fee_bps: z.number().int().min(0).max(10_000).optional(),
+        lab_platform_fee_bps: z.number().int().min(0).max(10_000).optional(),
+        delivery_platform_fee_bps: z.number().int().min(0).max(10_000).optional(),
+        pharmacy_platform_fee_bps: z.number().int().min(0).max(10_000).optional(),
+        partner_platform_fee_flat_minor: z.number().int().min(0).optional(),
+      })
+      .default({
+        platform_fee_bps: 0,
+        platform_fee_flat_minor: 0,
+        delivery_fee_minor: 0,
+        packaging_fee_minor: 0,
+        handling_fee_minor: 0,
+        payment_convenience_fee_minor: 0,
+        free_delivery_threshold_minor: null,
+        carrier_cost_estimate_minor: 0,
+        affiliate_commission_bps: 0,
       }),
     partner_types: partnerTypes,
     data_residency_mode: z.enum(['shared', 'pinned_region', 'dedicated_db']),
@@ -268,6 +315,13 @@ export const policyDocumentSchema = z
         code: 'custom',
         path: ['payments'],
         message: 'payments.enabled requires gateway_refs (no secrets — ids only)',
+      });
+    }
+    if (doc.ledger?.accounting_currency && !doc.currency.allowed.includes(doc.ledger.accounting_currency)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ledger', 'accounting_currency'],
+        message: 'accounting_currency must be in currency.allowed',
       });
     }
     try {

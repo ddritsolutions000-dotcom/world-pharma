@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+import { adminJson, AdminHttpError } from './admin-http';
 
 export class PromoApiError extends Error {
   constructor(
@@ -10,24 +10,15 @@ export class PromoApiError extends Error {
   }
 }
 
-async function parseJson(res: Response) {
-  return res.json().catch(() => ({}));
-}
-
 async function promoFetch(token: string, path: string, init?: RequestInit) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = await parseJson(res);
-  if (!res.ok) {
-    throw new PromoApiError((body.detail as string) ?? 'request_failed', res.status);
+  try {
+    return await adminJson(token, path, init);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new PromoApiError(err.message, err.status);
+    }
+    throw new PromoApiError('request_failed', 0);
   }
-  return body;
 }
 
 export type PromoCampaign = {

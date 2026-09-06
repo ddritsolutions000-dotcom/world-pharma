@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, View } from 'react-native';
-import { createSessionStore, requestOtp, verifyOtp } from '@world-pharma/shell-core';
+import { SafeAreaView } from 'react-native';
+import { createSessionStore } from '@world-pharma/shell-core';
 import {
   NativeButton,
   NativeCard,
@@ -8,9 +8,17 @@ import {
   NativeInput,
   NativeLoadingState,
   NativeNetworkErrorState,
-  NativePermissionDeniedState,
   NativeSessionExpiredState,
   NativeText,
+  NativeOtpSignIn,
+  OpsShell,
+  OpsKpiRow,
+  OpsWorkCard,
+  OpsStopRow,
+  OpsGiantButton,
+  OpsAccessGate,
+  readDeviceGps,
+  openTurnByTurn,
 } from '@world-pharma/ui-kit/native';
 import {
   DeliveryApiError,
@@ -21,43 +29,49 @@ import {
   getJob,
   listJobs,
   pickupJob,
-  rtoJob,
   setPresence,
+  uploadPodPhoto,
   verifyPod,
   createDeliverySupportTicket,
+  fetchDeliveryInbox,
   fetchDeliverySupportTickets,
+  markDeliveryInboxRead,
+  type DeliveryInboxItem,
   type DeliveryJob,
   type DeliverySupportTicket,
 } from './delivery-api';
-import { DELIVERY_TABS, deliveryMobileScreen, type DeliveryTab } from './navigation';
+import { DeliveryEarningsPanel } from './delivery-earnings';
+import { DELIVERY_TABS, deliveryMobileScreen, parseDeliveryDeepLink, type DeliveryTab } from './navigation';
+import { deliveryJobStatusLabel } from './delivery-status-labels';
+import { deliveryJobKicker, deliveryPrimaryKind, deliveryPrimaryLabel, isReturnPickupJob } from './delivery-job-next';
+import {
+  pickPodPhotoFromDevice,
+  podPhotoStatusLabel,
+  sandboxPodPhotoPayload,
+} from './pod-photo';
 
 type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'expired';
 
 export function App() {
   const store = useMemo(() => createSessionStore(), []);
   const [session, setSession] = useState(store.snapshot());
-  const [email, setEmail] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [signInBusy, setSignInBusy] = useState(false);
 
   const [tab, setTab] = useState<DeliveryTab>('jobs');
   const [jobs, setJobs] = useState<DeliveryJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DeliveryJob | null>(null);
   const [podCode, setPodCode] = useState('');
-  /**
-   * Photo POD boundary: capture URI only until upload API exists.
-   * Future: expo-image-picker -> local URI -> POST /delivery/jobs/:id/pod with multipart photo.
-   */
-  const [podPhotoUri, setPodPhotoUri] = useState<string | null>(null);
+  const [podPhotoBusy, setPodPhotoBusy] = useState(false);
+  const [podPhotoMessage, setPodPhotoMessage] = useState<string | null>(null);
   const [viewState, setViewState] = useState<ViewState>('idle');
   const [online, setOnline] = useState(false);
   const [supportTickets, setSupportTickets] = useState<DeliverySupportTicket[]>([]);
+  const [inbox, setInbox] = useState<DeliveryInboxItem[]>([]);
   const [supportSubject, setSupportSubject] = useState('');
   const [supportBody, setSupportBody] = useState('');
   const [supportJobId, setSupportJobId] = useState('');
   const [supportMessage, setSupportMessage] = useState<string | null>(null);
+  const [denyDetail, setDenyDetail] = useState<string | null>(null);
 
   const token = store.getAccessToken();
   const screen = deliveryMobileScreen(session, tab);
@@ -66,6 +80,7 @@ export function App() {
     (err: unknown) => {
       if (err instanceof DeliveryApiError) {
         if (err.status === 403) {
+          setDenyDetail(err.message);
           setViewState('forbidden');
           return;
         }
@@ -119,6 +134,27 @@ export function App() {
     }
   }, [session.status, tab, selectedId, loadJobs]);
 
+  useEffect(() => {
+    if (session.status !== 'authenticated') {
+      return;
+    }
+    const openFromUrl = (url: string) => {
+      const { jobId } = parseDeliveryDeepLink(url);
+      if (!jobId) {
+        return;
+      }
+      setTab('jobs');
+      void loadDetail(jobId);
+    };
+    void Linking.getInitialURL().then((url) => {
+      if (url) {
+        openFromUrl(url);
+      }
+    });
+    const subscription = Linking.addEventListener('url', ({ url }) => openFromUrl(url));
+    return () => subscription.remove();
+  }, [session.status, loadDetail]);
+
   const loadSupport = useCallback(async () => {
     if (!token) {
       return;
@@ -133,11 +169,27 @@ export function App() {
     }
   }, [token, handleError]);
 
+  const loadInbox = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    setViewState('loading');
+    try {
+      const res = await fetchDeliveryInbox(token);
+      setInbox(res.data ?? []);
+      setViewState('idle');
+    } catch (err) {
+      handleError(err);
+    }
+  }, [token, handleError]);
+
   useEffect(() => {
     if (session.status === 'authenticated' && tab === 'support') {
       void loadSupport();
+    } else if (session.status === 'authenticated' && tab === 'inbox') {
+      void loadInbox();
     }
-  }, [session.status, tab, loadSupport]);
+  }, [session.status, tab, loadSupport, loadInbox]);
 
   const runAction = async (fn: () => Promise<unknown>) => {
     setViewState('loading');
@@ -154,58 +206,50 @@ export function App() {
     }
   };
 
-  const sendOtp = async () => {
-    setSignInBusy(true);
-    try {
-      const result = await requestOtp(email, 'LOGIN');
-      setChallengeId(result.challengeId);
-      if (result.devCode) {
-        setOtpCode(result.devCode);
-      }
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
-    }
+  const runLocated = async (fn: (loc: Awaited<ReturnType<typeof readDeviceGps>>) => Promise<unknown>) => {
+    const loc = await readDeviceGps();
+    await runAction(() => fn(loc));
   };
 
-  const verifySignIn = async () => {
-    if (!challengeId) {
-      await sendOtp();
-      return;
-    }
-    setSignInBusy(true);
+  const uploadPodPhotoPayload = async (payload: {
+    content_base64: string;
+    content_type: string;
+  }) => {
+    if (!token || !detail) return;
+    setPodPhotoBusy(true);
+    setPodPhotoMessage(null);
     try {
-      const result = await verifyOtp(challengeId, otpCode, 'customer');
-      store.authenticate({
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        audience: 'customer',
+      const loc = await readDeviceGps();
+      await uploadPodPhoto(token, detail.id, {
+        content_base64: payload.content_base64,
+        content_type: payload.content_type,
+        idempotency_key: `pod-photo-${detail.id}-${Date.now()}`,
+        ...(loc ?? {}),
       });
-      setSession(store.snapshot());
-      setViewState('idle');
-    } catch {
-      setViewState('network');
+      setPodPhotoMessage('POD photo stored as private object (sandbox).');
+      await loadDetail(detail.id);
+    } catch (err) {
+      setPodPhotoMessage((err as Error).message ?? 'Photo upload failed.');
+      handleError(err);
     } finally {
-      setSignInBusy(false);
+      setPodPhotoBusy(false);
     }
   };
 
   if (screen === 'sign-in') {
     return (
       <SafeAreaView style={{ flex: 1 }}>
-        <View style={{ flex: 1, padding: 16, gap: 12 }}>
-          <NativeText variant="h1">Delivery mobile</NativeText>
-          <NativeCard>
-            <NativeInput label="Email" value={email} onChangeText={setEmail} />
-            {challengeId ? <NativeInput label="One-time code" value={otpCode} onChangeText={setOtpCode} /> : null}
-            <NativeButton
-              label={signInBusy ? 'Please wait…' : challengeId ? 'Verify & sign in' : 'Send OTP'}
-              onPress={() => void (challengeId ? verifySignIn() : sendOtp())}
-            />
-          </NativeCard>
-          {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => setViewState('idle')} /> : null}
-        </View>
+        <NativeOtpSignIn
+          portalTitle="World Pharma Rider"
+          portalDescription="Pickup, GPS navigation, drop-off, and proof of delivery for assigned jobs."
+          audience="customer"
+          staffEmail="sandbox-delivery@dev.local"
+          onAuthenticated={({ accessToken, refreshToken }) => {
+            store.authenticate({ accessToken, refreshToken, audience: 'customer' });
+            setSession(store.snapshot());
+            setViewState('idle');
+          }}
+        />
       </SafeAreaView>
     );
   }
@@ -226,60 +270,141 @@ export function App() {
     );
   }
 
+  const pickupQuery = (job: DeliveryJob) =>
+    job.pickup?.query ||
+    (isReturnPickupJob(job) ? 'Customer return address' : 'World Pharma pharmacy pickup');
+  const dropQuery = (job: DeliveryJob) =>
+    job.dropoff.query ||
+    [job.dropoff.line1, job.dropoff.city, job.dropoff.region].filter(Boolean).join(', ') ||
+    (isReturnPickupJob(job) ? 'Pharmacy return dock' : 'Customer drop-off');
+  const actionLabel = (job: DeliveryJob) =>
+    deliveryPrimaryLabel(deliveryPrimaryKind(job), job.job_type, job.direction);
+
   return (
-    <SafeAreaView style={{ flex: 1 }}>
-      <View style={{ flex: 1, padding: 16, gap: 12 }}>
-        <NativeText variant="h1">Delivery mobile</NativeText>
-
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          {DELIVERY_TABS.map((item) => (
-            <NativeButton
-              key={item.id}
-              label={item.label}
-              variant={tab === item.id ? 'primary' : 'secondary'}
-              onPress={() => {
-                setTab(item.id);
-                setSelectedId(null);
-                setDetail(null);
-              }}
-            />
-          ))}
-        </View>
-
-        {viewState === 'loading' ? <NativeLoadingState /> : null}
-        {viewState === 'forbidden' ? <NativePermissionDeniedState /> : null}
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#07111A' }}>
+      <OpsShell
+        product="Rider"
+        accent="#ED8936"
+        status={online ? 'On duty' : 'Off duty'}
+        tabs={DELIVERY_TABS}
+        active={tab}
+        onSelect={(id) => {
+          setTab(id as DeliveryTab);
+          setSelectedId(null);
+          setDetail(null);
+          if (id === 'earnings') {
+            setViewState('idle');
+          }
+        }}
+      >
+        {viewState === 'loading' ? <NativeLoadingState mode="dark" /> : null}
+        {viewState === 'forbidden' ? (
+          <OpsAccessGate
+            detail={denyDetail}
+            staffEmail="sandbox-delivery@dev.local"
+            onRetry={() => void loadJobs()}
+            onSignOut={() => {
+              store.signOut();
+              setSession(store.snapshot());
+              setJobs([]);
+              setDetail(null);
+              setSelectedId(null);
+              setDenyDetail(null);
+              setViewState('idle');
+            }}
+          />
+        ) : null}
         {viewState === 'network' ? (
-          <NativeNetworkErrorState onRetry={() => (selectedId ? void loadDetail(selectedId) : void loadJobs())} />
+          <NativeNetworkErrorState
+            mode="dark"
+            onRetry={() =>
+              selectedId
+                ? void loadDetail(selectedId)
+                : tab === 'support'
+                  ? void loadSupport()
+                  : tab === 'inbox'
+                    ? void loadInbox()
+                    : tab === 'earnings'
+                      ? undefined
+                      : void loadJobs()
+            }
+          />
         ) : null}
 
         {viewState === 'idle' && tab === 'presence' ? (
           <NativeCard>
-            <NativeText>{online ? 'You are online' : 'You are offline'}</NativeText>
-            <NativeButton
+            <NativeText variant="h2">{online ? 'On duty' : 'Go on duty'}</NativeText>
+            <NativeText variant="caption">
+              Dispatch assigns the nearest online rider. Going online may share coarse GPS for matching.
+            </NativeText>
+            <OpsGiantButton
               label={online ? 'Go offline' : 'Go online'}
+              tone={online ? 'idle' : 'go'}
               onPress={() =>
                 void runAction(async () => {
-                  await setPresence(token!, !online);
-                  setOnline(!online);
+                  const next = !online;
+                  let coords: { latitude: number; longitude: number } | undefined;
+                  if (next && typeof navigator !== 'undefined' && navigator.geolocation) {
+                    coords = await new Promise((resolve) => {
+                      navigator.geolocation.getCurrentPosition(
+                        (pos) =>
+                          resolve({
+                            latitude: pos.coords.latitude,
+                            longitude: pos.coords.longitude,
+                          }),
+                        () => resolve(undefined),
+                        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60_000 },
+                      );
+                    });
+                  }
+                  await setPresence(token!, next, coords);
+                  setOnline(next);
                 })
               }
             />
           </NativeCard>
         ) : null}
 
+        {viewState === 'idle' && tab === 'earnings' && token ? (
+          <DeliveryEarningsPanel
+            token={token}
+            onError={(err) => {
+              setViewState('idle');
+              handleError(err);
+            }}
+          />
+        ) : null}
+
+        {viewState === 'idle' && tab === 'inbox' ? (
+          inbox.length ? (
+            inbox.map((row) => (
+              <OpsWorkCard
+                key={row.id}
+                title={row.title}
+                meta={row.body}
+                status={row.read ? 'Read' : 'New'}
+                actionLabel={row.read ? undefined : 'Mark read'}
+                onAction={
+                  row.read
+                    ? undefined
+                    : () =>
+                        void markDeliveryInboxRead(token!, row.id)
+                          .then(() => loadInbox())
+                          .catch(handleError)
+                }
+              />
+            ))
+          ) : (
+            <NativeEmptyState title="Inbox empty" description="Dispatch notices appear here." />
+          )
+        ) : null}
+
         {viewState === 'idle' && tab === 'support' ? (
           <NativeCard>
-            <NativeText variant="h2">Delivery support</NativeText>
-            <NativeText variant="caption">
-              Shared support kernel. No clinical or recipient PHI in ticket bodies.
-            </NativeText>
+            <NativeText variant="h2">Control tower</NativeText>
             <NativeInput label="Subject" value={supportSubject} onChangeText={setSupportSubject} />
             <NativeInput label="Details" value={supportBody} onChangeText={setSupportBody} />
-            <NativeInput
-              label="Job ID (optional)"
-              value={supportJobId}
-              onChangeText={setSupportJobId}
-            />
+            <NativeInput label="Job ID (optional)" value={supportJobId} onChangeText={setSupportJobId} />
             {supportMessage ? <NativeText variant="caption">{supportMessage}</NativeText> : null}
             <NativeButton
               label="Submit ticket"
@@ -303,105 +428,165 @@ export function App() {
                 })
               }
             />
-            {supportTickets.length ? (
-              supportTickets.map((row) => (
-                <NativeText key={row.id} variant="caption">
-                  {`${row.subject} — ${row.status}`}
-                </NativeText>
-              ))
-            ) : (
-              <NativeEmptyState title="No tickets" description="Support tickets you file appear here." />
-            )}
           </NativeCard>
         ) : null}
 
         {viewState === 'idle' && tab === 'jobs' && !selectedId ? (
-          jobs.length ? (
-            jobs.map((job) => (
-              <NativeCard key={job.id}>
-                <NativeText>{`${job.tracking_number ?? job.id.slice(0, 8)} — ${job.status}`}</NativeText>
-                <NativeText variant="caption">
-                  {`${job.dropoff.city ?? '—'}, ${job.dropoff.region ?? '—'} · ${job.dropoff.recipient ?? '—'}`}
-                </NativeText>
-                <NativeButton label="Open" variant="secondary" onPress={() => void loadDetail(job.id)} />
-              </NativeCard>
-            ))
-          ) : (
-            <NativeEmptyState title="No jobs" description="Assigned jobs appear after dispatch." />
-          )
+          <>
+            <OpsKpiRow
+              items={[
+                { label: 'Open', value: jobs.filter((j) => deliveryPrimaryKind(j) !== 'done' && deliveryPrimaryKind(j) !== 'failed').length },
+                { label: 'Done', value: jobs.filter((j) => deliveryPrimaryKind(j) === 'done').length },
+                { label: 'Duty', value: online ? 'ON' : 'OFF' },
+              ]}
+            />
+            {jobs.length ? (
+              jobs.map((job) => {
+                const kind = deliveryPrimaryKind(job);
+                return (
+                  <OpsWorkCard
+                    key={job.id}
+                    kicker={deliveryJobKicker(job)}
+                    title={job.parcel_label ?? job.tracking_number ?? job.id.slice(0, 8)}
+                    meta={`${isReturnPickupJob(job) ? 'Collect → pharmacy' : 'Pharmacy → drop'} · ${dropQuery(job)}`}
+                    status={deliveryJobStatusLabel(job.status)}
+                    onOpen={() => void loadDetail(job.id)}
+                    actionLabel={kind === 'done' || kind === 'failed' ? undefined : actionLabel(job)}
+                    onAction={kind === 'done' || kind === 'failed' ? undefined : () => void loadDetail(job.id)}
+                  />
+                );
+              })
+            ) : (
+              <NativeEmptyState title="No jobs on board" description="Go on duty. Assigned stops appear here." />
+            )}
+          </>
         ) : null}
 
         {viewState === 'idle' && tab === 'jobs' && detail ? (
-          <NativeCard>
+          <>
             <NativeButton
-              label="Back to list"
+              label="Back to route"
               variant="secondary"
               onPress={() => {
                 setSelectedId(null);
                 setDetail(null);
-                setPodPhotoUri(null);
+                setPodCode('');
+                setPodPhotoMessage(null);
               }}
             />
-            <NativeText variant="h2">{detail.status}</NativeText>
-            {detail.job_type === 'SAMPLE_TRANSPORT' ? (
-              <>
-                <NativeText>{detail.test_title ?? 'Lab sample transport'}</NativeText>
-                <NativeText>{`Container: ${detail.tracking_number ?? 'pending'}`}</NativeText>
-                <NativeText>{`Custody: ${detail.shipment_status ?? '—'}`}</NativeText>
-                <NativeText variant="caption">{detail.note ?? 'Sealed sample transport. No clinical data.'}</NativeText>
-                {!detail.assignee_id ? (
-                  <NativeButton label="Accept job" onPress={() => void runAction(() => acceptJob(token!, detail.id))} />
-                ) : null}
-                <NativeButton label="Pickup sample" variant="secondary" onPress={() => void runAction(() => pickupJob(token!, detail.id))} />
-                <NativeButton label="Deliver to lab" onPress={() => void runAction(() => deliverSampleJob(token!, detail.id))} />
-              </>
-            ) : detail.job_type === 'REPORT_DELIVERY' ? (
-              <>
-                <NativeText>{detail.parcel_label ?? 'Sealed report parcel'}</NativeText>
-                <NativeText>{`Package: ${detail.tracking_number ?? 'pending'}`}</NativeText>
-                <NativeText>{`Status: ${detail.shipment_status ?? '—'}`}</NativeText>
-                <NativeText variant="caption">{detail.note ?? 'Sealed report parcel. No diagnostic content.'}</NativeText>
-                {!detail.assignee_id ? (
-                  <NativeButton label="Accept job" onPress={() => void runAction(() => acceptJob(token!, detail.id))} />
-                ) : null}
-                <NativeButton label="Pickup parcel" variant="secondary" onPress={() => void runAction(() => pickupJob(token!, detail.id))} />
-                <NativeButton label="Deliver parcel" onPress={() => void runAction(() => deliverSampleJob(token!, detail.id))} />
-                <NativeButton
-                  label="Delivery failed"
-                  variant="danger"
-                  onPress={() => void runAction(() => failJob(token!, detail.id, 'customer_unavailable'))}
-                />
-              </>
-            ) : (
-              <>
-                <NativeText>{`Tracking: ${detail.tracking_number ?? 'pending'}`}</NativeText>
-                <NativeText>{`Dropoff: ${detail.dropoff.city ?? '—'}, ${detail.dropoff.region ?? '—'}`}</NativeText>
-                <NativeText>{`Recipient: ${detail.dropoff.recipient ?? '—'}`}</NativeText>
-
-                {!detail.assignee_id ? (
-                  <NativeButton label="Accept job" onPress={() => void runAction(() => acceptJob(token!, detail.id))} />
-                ) : null}
-                <NativeButton label="Arrive" variant="secondary" onPress={() => void runAction(() => arriveJob(token!, detail.id))} />
-                <NativeButton label="Pickup" variant="secondary" onPress={() => void runAction(() => pickupJob(token!, detail.id))} />
-                <NativeInput label="POD code" value={podCode} onChangeText={setPodCode} />
-                <NativeButton label="Verify POD" onPress={() => void runAction(() => verifyPod(token!, detail.id, podCode))} />
-                <NativeInput
-                  label="POD photo URI (placeholder)"
-                  value={podPhotoUri ?? ''}
-                  onChangeText={(value) => setPodPhotoUri(value || null)}
-                />
-                <NativeText variant="caption">
-                  Camera capture will populate this URI; upload waits on delivery POD photo API.
-                </NativeText>
-                <NativeButton
-                  label="Delivery failed"
-                  variant="danger"
-                  onPress={() => void runAction(() => failJob(token!, detail.id, 'customer_unavailable'))}
-                />
-                <NativeButton label="Start RTO" variant="secondary" onPress={() => void runAction(() => rtoJob(token!, detail.id))} />
-              </>
-            )}
-          </NativeCard>
+            {detail.note ? (
+              <NativeText mode="dark" variant="caption">
+                {detail.note}
+              </NativeText>
+            ) : null}
+            {detail.pickup_slot_start ? (
+              <NativeText mode="dark" variant="caption">
+                {`Pickup slot ${new Date(detail.pickup_slot_start).toLocaleString()}${
+                  detail.pickup_slot_end ? ` – ${new Date(detail.pickup_slot_end).toLocaleString()}` : ''
+                }`}
+              </NativeText>
+            ) : null}
+            <OpsStopRow
+              kind="pickup"
+              title={detail.pickup?.label ?? (isReturnPickupJob(detail) ? 'Collect from customer' : 'Pickup')}
+              address={pickupQuery(detail)}
+              onNavigate={() => void openTurnByTurn(pickupQuery(detail))}
+            />
+            <OpsStopRow
+              kind="drop"
+              title={
+                isReturnPickupJob(detail)
+                  ? (detail.dropoff.recipient ?? 'Return to pharmacy')
+                  : (detail.dropoff.recipient ?? 'Drop-off')
+              }
+              address={dropQuery(detail)}
+              onNavigate={() => void openTurnByTurn(dropQuery(detail))}
+            />
+            {(() => {
+              const kind = deliveryPrimaryKind(detail);
+              const label = deliveryPrimaryLabel(kind, detail.job_type, detail.direction);
+              if (kind === 'accept') {
+                return <OpsGiantButton label={label} onPress={() => void runAction(() => acceptJob(token!, detail.id))} />;
+              }
+              if (kind === 'arrive') {
+                return (
+                  <OpsGiantButton
+                    label={`${label} + GPS`}
+                    onPress={() => void runLocated((loc) => arriveJob(token!, detail.id, loc ?? undefined))}
+                  />
+                );
+              }
+              if (kind === 'pickup') {
+                return (
+                  <OpsGiantButton
+                    label={`${label} + GPS`}
+                    onPress={() => void runLocated((loc) => pickupJob(token!, detail.id, loc ?? undefined))}
+                  />
+                );
+              }
+              if (kind === 'deliver') {
+                return (
+                  <OpsGiantButton
+                    label={`${label} + GPS`}
+                    onPress={() => void runLocated((loc) => deliverSampleJob(token!, detail.id, loc ?? undefined))}
+                  />
+                );
+              }
+              if (kind === 'pod') {
+                return (
+                  <NativeCard>
+                    <NativeText mode="dark">{podPhotoStatusLabel(detail.pod_photo_captured)}</NativeText>
+                    <NativeText mode="dark" variant="caption">
+                      Photo evidence uploads to private object store — no public URL. Camera picker stays external until
+                      native image-picker ships; web can pick a file.
+                    </NativeText>
+                    <NativeButton
+                      label={podPhotoBusy ? 'Uploading photo…' : 'Attach sandbox POD photo'}
+                      variant="secondary"
+                      disabled={podPhotoBusy || detail.pod_photo_captured === true}
+                      onPress={() => void uploadPodPhotoPayload(sandboxPodPhotoPayload())}
+                    />
+                    <NativeButton
+                      label={podPhotoBusy ? 'Uploading…' : 'Pick photo from device'}
+                      variant="secondary"
+                      disabled={podPhotoBusy}
+                      onPress={() => {
+                        void pickPodPhotoFromDevice().then((picked) => {
+                          if (!picked) {
+                            setPodPhotoMessage(
+                              'No file selected — on native use sandbox photo, or open Expo web to pick a file.',
+                            );
+                            return;
+                          }
+                          void uploadPodPhotoPayload(picked);
+                        });
+                      }}
+                    />
+                    {podPhotoMessage ? (
+                      <NativeText mode="dark" variant="caption">
+                        {podPhotoMessage}
+                      </NativeText>
+                    ) : null}
+                    <NativeInput label="POD code" value={podCode} onChangeText={setPodCode} />
+                    <OpsGiantButton
+                      label="Verify OTP POD with GPS"
+                      onPress={() =>
+                        void runLocated((loc) => verifyPod(token!, detail.id, podCode, undefined, loc ?? undefined))
+                      }
+                    />
+                  </NativeCard>
+                );
+              }
+              return <NativeText mode="dark">{label}</NativeText>;
+            })()}
+            {deliveryPrimaryKind(detail) !== 'done' && deliveryPrimaryKind(detail) !== 'failed' ? (
+              <OpsGiantButton
+                label="Mark failed"
+                tone="warn"
+                onPress={() => void runAction(() => failJob(token!, detail.id, 'customer_unavailable'))}
+              />
+            ) : null}
+          </>
         ) : null}
 
         <NativeButton
@@ -415,7 +600,7 @@ export function App() {
             setSelectedId(null);
           }}
         />
-      </View>
+      </OpsShell>
     </SafeAreaView>
   );
 }

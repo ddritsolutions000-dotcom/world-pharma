@@ -194,6 +194,20 @@ export class InventoryAdminController {
     return this.inventory.release(principal, id, String(body['idempotency_key'] ?? `release:${id}`));
   }
 
+  @Post('reservations/:id/consume')
+  @RequirePermissions('inventory:adjust')
+  consume(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.inventory.consumeReservation(
+      principal,
+      id,
+      String(body['idempotency_key'] ?? `consume:${id}`),
+    );
+  }
+
   @Get('transfers')
   @RequirePermissions('inventory:read')
   transfers(@CurrentPrincipal() principal: Principal, @Query('owner_org_id') ownerOrgId: string) {

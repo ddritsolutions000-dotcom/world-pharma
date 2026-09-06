@@ -2,18 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
-import {
-  Button,
-  Card,
-  EmptyState,
-  FormField,
-  Heading,
-  Input,
-  LoadingState,
-  ErrorState,
-  PermissionDeniedState,
-  Text,
-} from '@world-pharma/ui-kit/web';
+import { adminApiRoot, adminAuthHeaders, classifyAdminViewState } from './admin-http';
+import { presentCatalogList, type CatalogItemRow } from './catalog-admin-present';
 import {
   AnalyticsApiError,
   fetchAnalyticsCommerce,
@@ -21,8 +11,21 @@ import {
 } from './analytics-api';
 import { formatCount, formatMetricDate } from './analytics-format';
 import { AnalyticsScopeBar } from './analytics-scope';
+import { BarChart } from './admin-charts';
+import { workingCountry } from './working-country';
+import {
+  Button,
+  Card,
+  EmptyState,
+  FormField,
+  Heading,
+  LoadingState,
+  ErrorState,
+  PermissionDeniedState,
+  Select,
+} from '@world-pharma/ui-kit/web';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'empty';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error' | 'empty';
 
 function defaultToDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -37,10 +40,11 @@ function defaultFromDate(): string {
 export function AnalyticsCommerce() {
   const { getAccessToken, session } = useSession();
   const canRead = session.permissions.includes('analytics:read');
-  const [countryCode, setCountryCode] = useState('TR');
+  const [countryCode, setCountryCode] = useState(() => workingCountry(session.countryCode));
   const [from, setFrom] = useState(defaultFromDate);
   const [to, setTo] = useState(defaultToDate);
   const [catalogItemId, setCatalogItemId] = useState('');
+  const [catalogItems, setCatalogItems] = useState<CatalogItemRow[]>([]);
   const [data, setData] = useState<AnalyticsCommerceResponse | null>(null);
   const [viewState, setViewState] = useState<ViewState>('loading');
   const [errorMessage, setErrorMessage] = useState('');
@@ -56,8 +60,8 @@ export function AnalyticsCommerce() {
     }
     if (!/^[A-Z]{2}$/.test(countryCode)) {
       setData(null);
-      setErrorMessage('Country code must be two letters.');
-      setViewState('network');
+      setErrorMessage('Select a sandbox market (IN, AE, or US). Analytics is country-scoped and does not assume a default.');
+      setViewState('error');
       return;
     }
     setErrorMessage('');
@@ -78,13 +82,28 @@ export function AnalyticsCommerce() {
         return;
       }
       setErrorMessage(err instanceof AnalyticsApiError ? err.message : 'request_failed');
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [canRead, catalogItemId, countryCode, from, getAccessToken, to]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) {
+      return;
+    }
+    void fetch(`${adminApiRoot()}/api/v1/admin/catalog/items`, {
+      headers: adminAuthHeaders(token),
+    }).then(async (res) => {
+      if (!res.ok) {
+        return;
+      }
+      setCatalogItems(presentCatalogList(await res.json()));
+    });
+  }, [getAccessToken]);
 
   if (!canRead) {
     return <PermissionDeniedState />;
@@ -95,7 +114,7 @@ export function AnalyticsCommerce() {
   if (viewState === 'forbidden') {
     return <PermissionDeniedState />;
   }
-  if (viewState === 'network' && !data) {
+  if ((viewState === 'network' || viewState === 'error') && !data) {
     return (
       <ErrorState
         description={errorMessage || 'Check your network and retry.'}
@@ -117,9 +136,16 @@ export function AnalyticsCommerce() {
       />
 
       <Card>
-        <FormField label="Catalog item ID (optional)" hint="Filter funnel metrics to one SKU">
+        <FormField label="Catalog item (optional)" hint="Filter funnel metrics to one SKU">
           {({ id }) => (
-            <Input id={id} value={catalogItemId} onChange={(e) => setCatalogItemId(e.target.value)} />
+            <Select id={id} value={catalogItemId} onChange={(e) => setCatalogItemId(e.target.value)}>
+              <option value="">All items</option>
+              {catalogItems.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.title} {item.sku ? `(${item.sku})` : ''}
+                </option>
+              ))}
+            </Select>
           )}
         </FormField>
         <Button onClick={() => void load()}>Apply filter</Button>
@@ -133,9 +159,30 @@ export function AnalyticsCommerce() {
       ) : null}
 
       {data && data.items.length > 0 ? (
+        <>
+          <Card>
+            <Heading level={2}>Funnel mix</Heading>
+            <BarChart
+              rows={[
+                {
+                  label: 'Views',
+                  value: data.items.reduce((sum, row) => sum + row.view_count, 0),
+                },
+                {
+                  label: 'Add to cart',
+                  value: data.items.reduce((sum, row) => sum + row.add_to_cart_count, 0),
+                },
+                {
+                  label: 'Purchases',
+                  value: data.items.reduce((sum, row) => sum + row.purchase_count, 0),
+                },
+              ]}
+            />
+          </Card>
         <Card>
           <Heading level={2}>Product funnel ({data.country_code})</Heading>
-          <table>
+          <div className="wp-admin-table-wrap">
+          <table className="wp-table">
             <caption className="sr-only">Commerce analytics for {data.country_code}</caption>
             <thead>
               <tr>
@@ -160,7 +207,9 @@ export function AnalyticsCommerce() {
               ))}
             </tbody>
           </table>
+          </div>
         </Card>
+        </>
       ) : null}
     </div>
   );

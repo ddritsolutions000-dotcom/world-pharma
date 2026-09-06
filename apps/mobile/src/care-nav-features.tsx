@@ -41,8 +41,6 @@ import {
 } from './care-nav-utils';
 import type { FeatureCtx } from './customer-features';
 
-const CARE_NAV_COUNTRY = 'XX';
-
 type FlowStep =
   | 'entry'
   | 'complaint'
@@ -207,7 +205,7 @@ export function CareNavigationScreen({ ctx, onBack }: { ctx: FeatureCtx; onBack:
     ctx.setViewState('loading');
     try {
       const created = await createCareNavSession(ctx.token, newCareNavIdempotencyKey('care-nav-create'), {
-        country_code: CARE_NAV_COUNTRY,
+        country_code: ctx.country,
         chief_complaint: trimmed,
       });
       setSessionRow(created);
@@ -232,7 +230,7 @@ export function CareNavigationScreen({ ctx, onBack }: { ctx: FeatureCtx; onBack:
     setSubmitting(true);
     setError(null);
     try {
-      const updated = await submitCareNavAnswer(ctx.token, sessionRow.id, CARE_NAV_COUNTRY, {
+      const updated = await submitCareNavAnswer(ctx.token, sessionRow.id, ctx.country, {
         question_key: currentQuestion.key,
         answer_text: trimmed,
       });
@@ -258,7 +256,7 @@ export function CareNavigationScreen({ ctx, onBack }: { ctx: FeatureCtx; onBack:
     setError(null);
     ctx.setViewState('loading');
     try {
-      const result = await fetchCareNavRecommendations(ctx.token, sessionRow.id, CARE_NAV_COUNTRY);
+      const result = await fetchCareNavRecommendations(ctx.token, sessionRow.id, ctx.country);
       setMatchResult(result);
       setSessionRow({ ...sessionRow, status: result.status });
       setStep('providers');
@@ -283,7 +281,7 @@ export function CareNavigationScreen({ ctx, onBack }: { ctx: FeatureCtx; onBack:
       const slotResult = await fetchDoctorSlots(
         ctx.token,
         provider.doctor_profile_id,
-        CARE_NAV_COUNTRY,
+        ctx.country,
         window.from,
         window.to,
       );
@@ -307,7 +305,7 @@ export function CareNavigationScreen({ ctx, onBack }: { ctx: FeatureCtx; onBack:
       const result = await handoffCareNavAppointment(
         ctx.token,
         sessionRow.id,
-        CARE_NAV_COUNTRY,
+        ctx.country,
         newCareNavIdempotencyKey('care-nav-handoff'),
         {
           doctor_profile_id: selectedProvider.doctor_profile_id,
@@ -333,7 +331,7 @@ export function CareNavigationScreen({ ctx, onBack }: { ctx: FeatureCtx; onBack:
     setError(null);
     ctx.setViewState('loading');
     try {
-      const result = await completeCareNavIntake(ctx.token, sessionId, CARE_NAV_COUNTRY);
+      const result = await completeCareNavIntake(ctx.token, sessionId, ctx.country);
       setSessionRow(result);
       setAssessment(result.assessment);
       setStep('result');

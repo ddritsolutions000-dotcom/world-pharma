@@ -1,0 +1,36 @@
+[
+  {
+    "otpExpire": "Cannot find package '@world-pharma/database' imported from H:\\DDR IT SOLUTION\\world-pharma\\docs\\blueprint\\s465-artifacts\\run-s465-retry.mjs"
+  },
+  {
+    "id": "P0-01",
+    "FRONTEND": "FAIL",
+    "error": "locator.waitFor: Timeout 60000ms exceeded.\nCall log:\n  - waiting for getByRole('button', { name: /Sign out/i }).first() to be visible\n",
+    "cors": []
+  },
+  {
+    "otpExpire": "Cannot find package '@world-pharma/database' imported from H:\\DDR IT SOLUTION\\world-pharma\\docs\\blueprint\\s465-artifacts\\run-s465-retry.mjs"
+  },
+  {
+    "id": "P0-03",
+    "FRONTEND": "PASS",
+    "P1_08_login": "PASS",
+    "earn": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World Pharma › Affiliate › Earnings Sandbox a",
+    "stmt": "World Pharma Affiliate Sign out Dashboard Codes Links Earnings Statement Inbox Support Profile World Pharma › Affiliate › Statement Sandbox ",
+    "errs": [
+      "Error: Hydration failed because the server rendered HTML didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch `if (typeof window !== 'undefined')`.\n- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML tag nesting.\n\nIt can also happen if the client has a browser extension installed which messes with the HTML before React loaded.\n\nhttps://react.dev/link/hydration-mismatch\n\n  ...\n    <RenderFromTemplateContext>\n      <ScrollAndFocusHandler segmentPath={[...]}>\n        <InnerScrollAndFocusHandler segmentPath={[...]} focusAndScrollRef={{apply:false, ...}}>\n          <ErrorBoundary errorComponent={undefined} errorStyles={undefined} errorScripts={undefined}>\n            <LoadingBoundary loading={null}>\n              <HTTPAccessFallbackBoundary notFound={undefined} forbidden={undefined} unauthorized={undefined}>\n                <RedirectBoundary>\n                  <RedirectErrorBoundary router={{...}}>\n                    <InnerLayoutRouter url=\"/earnings\" tree={[...]} cacheNode={{lazyData:null, ...}} segmentPath={[...]}>\n                      <SegmentViewNode type=\"page\" pagePath=\"earnings/p...\">\n                        <SegmentTrieNode>\n                        <AffiliateEarningsRoute>\n                          <AffiliateShell currentNav=\"earnings\">\n                            <PortalWorkspaceShell portalId=\"affiliate\" brandTitle=\"World Phar...\" nav={[...]} ...>\n                              <div\n+                               className=\"portal-root\"\n-                               className=\"wp-auth-page\"\n-                               style={{--wp-auth-accent:\"#f59e0b\"}}\n                              >\n                                <HeaderBar title=\"World Phar...\">\n+                                 <header className=\"wp-nav-header\">\n-                                 <aside className=\"wp-auth-hero\">\n                                ...\n                      ...\n                    ...\n          ...\n",
+      "Error: Hydration failed because the server rendered HTML didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch `if (typeof window !== 'undefined')`.\n- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML tag nesting.\n\nIt can also happen if the client has a browser extension installed which messes with the HTML before React loaded.\n\nhttps://react.dev/link/hydration-mismatch\n\n  ...\n    <RenderFromTemplateContext>\n      <ScrollAndFocusHandler segmentPath={[...]}>\n        <InnerScrollAndFocusHandler segmentPath={[...]} focusAndScrollRef={{apply:false, ...}}>\n          <ErrorBoundary errorComponent={undefined} errorStyles={undefined} errorScripts={undefined}>\n            <LoadingBoundary loading={null}>\n              <HTTPAccessFallbackBoundary notFound={undefined} forbidden={undefined} unauthorized={undefined}>\n                <RedirectBoundary>\n                  <RedirectErrorBoundary router={{...}}>\n                    <InnerLayoutRouter url=\"/statement\" tree={[...]} cacheNode={{lazyData:null, ...}} segmentPath={[...]}>\n                      <SegmentViewNode type=\"page\" pagePath=\"statement/...\">\n                        <SegmentTrieNode>\n                        <AffiliateStatementRoute>\n                          <AffiliateShell currentNav=\"statement\">\n                            <PortalWorkspaceShell portalId=\"affiliate\" brandTitle=\"World Phar...\" nav={[...]} ...>\n                              <div\n+                               className=\"portal-root\"\n-                               className=\"wp-auth-page\"\n-                               style={{--wp-auth-accent:\"#f59e0b\"}}\n                              >\n                                <HeaderBar title=\"World Phar...\">\n+                                 <header className=\"wp-nav-header\">\n-                                 <aside className=\"wp-auth-hero\">\n                                ...\n                      ...\n                    ...\n          ...\n"
+    ]
+  },
+  {
+    "id": "P1-market-product",
+    "clearedHome": "PASS",
+    "clearedSearch": "PASS",
+    "clearedPdp": "PASS",
+    "searchUrl": "http://127.0.0.1:3000/search?q=paracetamol",
+    "searchHasResults": "PASS",
+    "image": "FAIL",
+    "alt": "FAIL",
+    "srcPreview": ""
+  }
+]

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { AdminViewLoadError } from './admin-request-error';
+import { adminJson, AdminHttpError, classifyAdminViewState } from './admin-http';
 import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
@@ -11,11 +12,12 @@ import {
   Heading,
   Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
+  Select,
   Table,
   Text,
 } from '@world-pharma/ui-kit/web';
+import { presentOrgPicks, type OrgPickRow } from './eligibility-admin-present';
 
 class AdminApiError extends Error {
   status: number;
@@ -27,18 +29,17 @@ class AdminApiError extends Error {
 }
 
 async function adminCall<T = unknown>(path: string, token: string): Promise<T> {
-  const base = apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
-  const res = await fetch(`${base}${path}`, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new AdminApiError((body as { detail?: string }).detail ?? 'request_failed', res.status);
+  try {
+    return await adminJson<T>(token, path);
+  } catch (err) {
+    if (err instanceof AdminHttpError) {
+      throw new AdminApiError(err.message, err.status);
+    }
+    throw new AdminApiError('request_failed', 0);
   }
-  return body as T;
 }
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
 
 function cell(value: unknown): string {
   if (value == null || value === '') {
@@ -75,6 +76,29 @@ function nested(obj: Record<string, unknown>, path: string): unknown {
   }, obj);
 }
 
+function OrgSelectField(props: {
+  id: string;
+  value: string;
+  orgs: OrgPickRow[];
+  onChange: (id: string) => void;
+}) {
+  return (
+    <Select
+      id={props.id}
+      value={props.value}
+      onChange={(event) => props.onChange(event.target.value)}
+      disabled={props.orgs.length === 0}
+    >
+      {props.orgs.length === 0 ? <option value="">No organizations</option> : null}
+      {props.orgs.map((org) => (
+        <option key={org.id} value={org.id}>
+          {org.name} ({org.kind})
+        </option>
+      ))}
+    </Select>
+  );
+}
+
 function GovernanceListPanel(props: {
   title: string;
   description: string;
@@ -86,6 +110,7 @@ function GovernanceListPanel(props: {
   requireQuery?: boolean;
   queryLabel?: string;
   queryPlaceholder?: string;
+  queryOptions?: { value: string; label: string }[];
   buildQuery?: (input: string) => string | undefined;
 }) {
   const { getAccessToken } = useSession();
@@ -119,13 +144,19 @@ function GovernanceListPanel(props: {
           return;
         }
         if (err.status === 401) {
-          setViewState('network');
+          setViewState(classifyAdminViewState(err));
           return;
         }
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [filterInput, getAccessToken, props.buildQuery, props.endpoint, props.requireQuery]);
+
+  useEffect(() => {
+    if (props.queryOptions?.length && !filterInput) {
+      setFilterInput(props.queryOptions[0].value);
+    }
+  }, [filterInput, props.queryOptions]);
 
   useEffect(() => {
     if (!props.requireQuery) {
@@ -144,14 +175,30 @@ function GovernanceListPanel(props: {
       {props.requireQuery || props.queryLabel ? (
         <Card>
           <FormField label={props.queryLabel ?? 'Filter'}>
-            {({ id }) => (
-              <Input
-                id={id}
-                value={filterInput}
-                onChange={(e) => setFilterInput(e.target.value)}
-                placeholder={props.queryPlaceholder}
-              />
-            )}
+            {({ id }) =>
+              props.queryOptions ? (
+                <Select
+                  id={id}
+                  value={filterInput}
+                  onChange={(e) => setFilterInput(e.target.value)}
+                  disabled={props.queryOptions.length === 0}
+                >
+                  {props.queryOptions.length === 0 ? <option value="">No organizations</option> : null}
+                  {props.queryOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  id={id}
+                  value={filterInput}
+                  onChange={(e) => setFilterInput(e.target.value)}
+                  placeholder={props.queryPlaceholder}
+                />
+              )
+            }
           </FormField>
           <Button onClick={() => void load()}>Load</Button>
         </Card>
@@ -163,9 +210,7 @@ function GovernanceListPanel(props: {
 
       {viewState === 'loading' ? <LoadingState label={`Loading ${props.title.toLowerCase()}`} /> : null}
       {viewState === 'forbidden' ? <PermissionDeniedState /> : null}
-      {viewState === 'network' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
-      ) : null}
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
 
       {viewState === 'idle' && tableRows.length > 0 ? (
         <Table caption={props.title} columns={props.columns} rows={tableRows} />
@@ -198,7 +243,7 @@ export function CountriesGovernance() {
   return (
     <GovernanceListPanel
       title="Countries"
-      description="Country packs and enablement. No if (country === 'IN') outside policy/adapters."
+      description="Country records. To stop selling in a country, open the policy pack below — Block storefront, then Validate + Publish."
       endpoint="/api/v1/admin/governance/countries"
       emptyTitle="No countries"
       emptyDescription="Enabled country packs appear here."
@@ -250,11 +295,90 @@ export function BusinessUnitsGovernance() {
   );
 }
 
+function OrgEditForm(props: { orgs: OrgPickRow[] }) {
+  const { getAccessToken } = useSession();
+  const [orgId, setOrgId] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [legalName, setLegalName] = useState('');
+  const [status, setStatus] = useState('ACTIVE');
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (props.orgs.length && !orgId) {
+      setOrgId(props.orgs[0].id);
+    }
+  }, [orgId, props.orgs]);
+
+  async function save() {
+    const token = getAccessToken();
+    if (!token || !orgId.trim()) {
+      return;
+    }
+    setMessage(null);
+    try {
+      await adminJson(token, `/api/v1/admin/governance/organizations/${encodeURIComponent(orgId.trim())}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          display_name: displayName.trim() || undefined,
+          legal_name: legalName.trim() || undefined,
+          status,
+        }),
+      });
+      setMessage('Organization updated.');
+    } catch {
+      setMessage('Update failed. Check API and retry.');
+    }
+  }
+
+  return (
+    <div className="wp-stack">
+      <FormField label="Organization">
+        {({ id }) => <OrgSelectField id={id} value={orgId} orgs={props.orgs} onChange={setOrgId} />}
+      </FormField>
+      <FormField label="Display name">
+        {({ id }) => <Input id={id} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />}
+      </FormField>
+      <FormField label="Legal name">
+        {({ id }) => <Input id={id} value={legalName} onChange={(e) => setLegalName(e.target.value)} />}
+      </FormField>
+      <FormField label="Status">
+        {({ id }) => (
+          <Select id={id} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="DRAFT">DRAFT</option>
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="SUSPENDED">SUSPENDED</option>
+            <option value="CLOSED">CLOSED</option>
+          </Select>
+        )}
+      </FormField>
+      <Button onClick={() => void save()} disabled={!orgId.trim()}>
+        Save organization
+      </Button>
+      {message ? <Text tone="secondary">{message}</Text> : null}
+    </div>
+  );
+}
+
 export function OrganizationsGovernance() {
   const { getAccessToken } = useSession();
+  const [orgs, setOrgs] = useState<OrgPickRow[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useState('');
   const [locations, setLocations] = useState<Record<string, unknown>[]>([]);
   const [locationsState, setLocationsState] = useState<ViewState>('idle');
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) {
+      return;
+    }
+    void adminCall('/api/v1/admin/governance/organizations', token)
+      .then((body) => {
+        const rows = presentOrgPicks(body);
+        setOrgs(rows);
+        setSelectedOrgId((current) => current || rows[0]?.id || '');
+      })
+      .catch(() => setOrgs([]));
+  }, [getAccessToken]);
 
   const loadLocations = useCallback(async () => {
     const token = getAccessToken();
@@ -275,7 +399,7 @@ export function OrganizationsGovernance() {
         setLocationsState('forbidden');
         return;
       }
-      setLocationsState('network');
+      setLocationsState(classifyAdminViewState(err));
     }
   }, [getAccessToken, selectedOrgId]);
 
@@ -299,18 +423,16 @@ export function OrganizationsGovernance() {
 
       <Card>
         <Heading level={3}>Locations</Heading>
-        <Text tone="secondary">Filter locations by organization ID.</Text>
-        <FormField label="Organization ID">
+        <Text tone="secondary">Filter locations by organization.</Text>
+        <FormField label="Organization">
           {({ id }) => (
-            <Input id={id} value={selectedOrgId} onChange={(e) => setSelectedOrgId(e.target.value)} />
+            <OrgSelectField id={id} value={selectedOrgId} orgs={orgs} onChange={setSelectedOrgId} />
           )}
         </FormField>
         <Button onClick={() => void loadLocations()}>Load locations</Button>
         {locationsState === 'loading' ? <LoadingState label="Loading locations" /> : null}
         {locationsState === 'forbidden' ? <PermissionDeniedState /> : null}
-        {locationsState === 'network' ? (
-          <NetworkErrorState action={{ label: 'Retry', onClick: () => void loadLocations() }} />
-        ) : null}
+        <AdminViewLoadError viewState={locationsState} onRetry={() => void loadLocations()} />
         {locationsState === 'idle' && locations.length > 0 ? (
           <Table
             caption="Locations"
@@ -327,18 +449,37 @@ export function OrganizationsGovernance() {
           <EmptyState title="No locations" description="No locations for this organization." />
         ) : null}
       </Card>
+
+      <Card>
+        <Heading level={3}>Edit organization</Heading>
+        <Text tone="secondary">PATCH /admin/governance/organizations/:id — display name, legal name, or status.</Text>
+        <OrgEditForm orgs={orgs} />
+      </Card>
     </section>
   );
 }
 
 export function MembershipsGovernance() {
+  const { getAccessToken } = useSession();
+  const [orgs, setOrgs] = useState<OrgPickRow[]>([]);
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) {
+      return;
+    }
+    void adminCall('/api/v1/admin/governance/organizations', token)
+      .then((body) => setOrgs(presentOrgPicks(body)))
+      .catch(() => setOrgs([]));
+  }, [getAccessToken]);
+
   return (
     <GovernanceListPanel
       title="Identity memberships"
       description="Person kernel, sessions, and company RBAC. Partners cannot administer company identity."
       endpoint="/api/v1/admin/governance/memberships"
       emptyTitle="No memberships"
-      emptyDescription="Provide an organization ID to list active memberships."
+      emptyDescription="Select an organization to list active memberships."
       columns={['Person', 'Organization', 'Role', 'Status']}
       mapRow={(row) => [
         cell(nested(row, 'person.id')),
@@ -347,8 +488,8 @@ export function MembershipsGovernance() {
         cell(row.status),
       ]}
       requireQuery
-      queryLabel="Organization ID"
-      queryPlaceholder="Organization UUID"
+      queryLabel="Organization"
+      queryOptions={orgs.map((org) => ({ value: org.id, label: `${org.name} (${org.kind})` }))}
       buildQuery={(input) =>
         input ? `organization_id=${encodeURIComponent(input)}` : undefined
       }
@@ -379,7 +520,7 @@ export function SecurityEventsGovernance() {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [getAccessToken]);
 
@@ -406,9 +547,7 @@ export function SecurityEventsGovernance() {
       </Button>
       {viewState === 'loading' ? <LoadingState label="Loading security events" /> : null}
       {viewState === 'forbidden' ? <PermissionDeniedState /> : null}
-      {viewState === 'network' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
-      ) : null}
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
       {viewState === 'idle' && tableRows.length > 0 ? (
         <Table
           caption="Security events"

@@ -15,13 +15,18 @@ import { SecurityEventsService } from '../identity/security-events.service';
 import { assertImagingOrgAccess } from '../catalog/access';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
 import { assertImagingStudyTransition } from './imaging-study-status';
+import { ImagingIngestService } from './imaging-ingest.service';
 import { InterpretationService } from './interpretation.service';
+import { generateDicomUid } from './dicom-uid';
 
 function sandboxAccessionNumber(): string {
   return `IMG-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }
 
-function sandboxObjectRef(studyId: string): string {
+function sandboxObjectRef(studyId: string, sopInstanceUid?: string): string {
+  if (sopInstanceUid) {
+    return `private://imaging-dicom/${studyId}/${sopInstanceUid}`;
+  }
   return `sandbox://imaging-objects/${studyId}/${uuidv7()}`;
 }
 
@@ -30,6 +35,7 @@ const studyInclude = {
   acquisition: true,
   imagingLocation: { select: { id: true, name: true, city: true } },
   report: { include: { currentVersion: { select: { status: true, versionNumber: true } } } },
+  series: { include: { instances: true } },
 } as const;
 
 type StaffStudyRow = Prisma.ImagingStudyGetPayload<{ include: typeof studyInclude }>;
@@ -41,6 +47,7 @@ export class ImagingStudyService {
     private readonly outbox: OutboxService,
     private readonly security: SecurityEventsService,
     private readonly interpretation: InterpretationService,
+    private readonly ingest: ImagingIngestService,
   ) {}
 
   /** Idempotent: create SCHEDULED study when booking is CONFIRMED. */
@@ -58,6 +65,7 @@ export class ImagingStudyService {
     }
     const studyId = uuidv7();
     const accession = sandboxAccessionNumber();
+    const studyInstanceUid = generateDicomUid();
     const line = booking.lines[0];
     await this.prisma.runWithTenant(
       workerTenantContext({
@@ -76,6 +84,8 @@ export class ImagingStudyService {
               countryId: booking.countryId,
               status: ImagingStudyStatus.SCHEDULED,
               accessionNumber: accession,
+              studyInstanceUid,
+              studyDescription: line?.title ?? 'Imaging study',
               modalityCode: 'XR',
               bodyRegionCode: line?.title?.slice(0, 64) ?? 'GENERAL',
               idempotencyKey: `study:${booking.id}`,
@@ -103,6 +113,7 @@ export class ImagingStudyService {
               imaging_booking_id: booking.id,
               imaging_org_id: booking.imagingOrgId,
               accession_number: accession,
+              study_instance_uid: studyInstanceUid,
               status: ImagingStudyStatus.SCHEDULED,
               sandbox: true,
             },
@@ -138,8 +149,8 @@ export class ImagingStudyService {
     });
     return {
       data: rows.map((row) => this.presentStaffStudy(row)),
-      note: 'Sandbox acquisition + interpretation ops metadata. No DICOM/PACS. Customer publication OFF (R8-E).',
-      boundary: { pacs: false, dicom: false, interpretation: true, publication: false },
+      note: 'Sandbox acquisition + DICOM study foundation. Local private storage — not production PACS.',
+      boundary: { pacs: false, dicom: true, interpretation: true, publication: false, viewer: false },
     };
   }
 
@@ -296,7 +307,20 @@ export class ImagingStudyService {
     if (study.status !== ImagingStudyStatus.ACQUISITION_IN_PROGRESS) {
       throw Errors.problem(409, 'STUDY_NOT_COMPLETABLE', 'Not completable', 'Acquisition is not in progress.');
     }
-    const objectRef = sandboxObjectRef(study.id);
+    const modality = input.modality_code ?? study.modalityCode ?? 'XR';
+    const ingestKey = `ingest:${study.id}`;
+    const ingested = await this.ingest.ingestStudyForAcquisition({
+      imagingStudyId: study.id,
+      imagingOrgId: study.imagingOrgId,
+      actorPersonId: principal.personId,
+      modalityCode: modality,
+      studyDescription: study.booking.lines[0]?.title,
+      idempotencyKey: ingestKey,
+    });
+    const primaryInstance = ingested.series[0]?.instances[0];
+    const objectRef = primaryInstance
+      ? sandboxObjectRef(study.id, primaryInstance.sopInstanceUid)
+      : sandboxObjectRef(study.id);
     await this.prisma.$transaction(async (tx) => {
       await tx.imagingAcquisition.update({
         where: { imagingStudyId: study.id },
@@ -306,9 +330,14 @@ export class ImagingStudyService {
           sandboxObjectRef: objectRef,
           equipmentCode: input.equipment_code ?? 'SANDBOX_UNIT',
           metadata: {
-            modality_code: input.modality_code ?? study.modalityCode,
+            modality_code: modality,
             sandbox: true,
             pacs: false,
+            study_instance_uid: ingested.studyInstanceUid,
+            series_instance_uid: ingested.series[0]?.seriesInstanceUid ?? null,
+            sop_instance_uid: primaryInstance?.sopInstanceUid ?? null,
+            object_key: primaryInstance?.objectKey ?? null,
+            storage: ingested.storage,
           } as Prisma.InputJsonValue,
         },
       });
@@ -320,6 +349,8 @@ export class ImagingStudyService {
       }
       await this.transitionStudyTx(tx, study, ImagingStudyStatus.ACQUIRED, principal.personId, 'acquisition_completed', {
         sandbox_object_ref: objectRef,
+        study_instance_uid: ingested.studyInstanceUid,
+        idempotent: ingested.idempotent,
       });
       await this.outbox.enqueue(tx, {
         type: 'IMAGING_ACQUISITION_COMPLETED',
@@ -331,6 +362,7 @@ export class ImagingStudyService {
           imaging_study_id: study.id,
           imaging_org_id: study.imagingOrgId,
           sandbox_object_ref: objectRef,
+          study_instance_uid: ingested.studyInstanceUid,
           sandbox: true,
         },
         occurrenceKey: `imaging_acquisition_completed:${study.id}`,
@@ -396,7 +428,7 @@ export class ImagingStudyService {
   async getCustomerProgress(imagingBookingId: string, customerPersonId: string) {
     const booking = await this.prisma.imagingBooking.findUnique({
       where: { id: imagingBookingId },
-      include: { study: { include: { acquisition: true } } },
+      include: { study: { include: { acquisition: true, series: { include: { instances: true } } } } },
     });
     if (!booking || booking.customerPersonId !== customerPersonId) {
       throw Errors.forbidden('You cannot access another customer’s imaging booking.');
@@ -477,6 +509,12 @@ export class ImagingStudyService {
       progress,
       study_status: study?.status ?? null,
       accession_number: study?.accessionNumber ?? null,
+      study_instance_uid: study?.studyInstanceUid ?? null,
+      modality_code: study?.modalityCode ?? null,
+      study_description: study?.studyDescription ?? null,
+      study_date_time: study?.studyDateTime?.toISOString() ?? null,
+      series_count: study?.series?.length ?? 0,
+      instance_count: study?.series?.reduce((n, s) => n + s.instances.length, 0) ?? 0,
       slot_starts_at: booking.slotStartsAt?.toISOString() ?? null,
       interpretation_status: interpretationStatus,
       note,
@@ -484,9 +522,14 @@ export class ImagingStudyService {
         acquisition: study?.status === ImagingStudyStatus.ACQUIRED,
         interpretation: Boolean(interpretationStatus),
         report: interpretationStatus === ImagingReportVersionStatus.PUBLISHED,
-        dicom: false,
+        dicom: Boolean(study?.studyInstanceUid),
         pacs: false,
+        viewer: false,
       },
+      viewer_note:
+        study?.status === ImagingStudyStatus.ACQUIRED
+          ? 'Imaging study metadata is available. DICOM viewer is not enabled in this environment.'
+          : undefined,
     };
   }
 
@@ -555,6 +598,7 @@ export class ImagingStudyService {
   }
 
   private presentStaffStudy(row: StaffStudyRow) {
+    const instanceCount = row.series.reduce((n, s) => n + s.instances.length, 0);
     return {
       id: row.id,
       imaging_booking_id: row.imagingBookingId,
@@ -562,8 +606,30 @@ export class ImagingStudyService {
       imaging_location_id: row.imagingLocationId,
       status: row.status,
       accession_number: row.accessionNumber,
+      study_instance_uid: row.studyInstanceUid,
+      study_description: row.studyDescription,
+      study_date_time: row.studyDateTime?.toISOString() ?? null,
       modality_code: row.modalityCode,
       body_region_code: row.bodyRegionCode,
+      series_count: row.series.length,
+      instance_count: instanceCount,
+      dicom: {
+        study_instance_uid: row.studyInstanceUid,
+        series: row.series.map((series) => ({
+          series_instance_uid: series.seriesInstanceUid,
+          modality_code: series.modalityCode,
+          description: series.description,
+          instances: series.instances.map((inst) => ({
+            sop_instance_uid: inst.sopInstanceUid,
+            status: inst.status,
+            object_stored: Boolean(inst.objectKey),
+            sandbox: inst.sandbox,
+          })),
+        })),
+        sandbox: true,
+        production_pacs: false,
+        viewer: row.sandbox && instanceCount > 0,
+      },
       assignee_person_id: row.assigneePersonId,
       study_title: row.booking.lines[0]?.title ?? 'Imaging study',
       slot_starts_at: row.booking.slotStartsAt?.toISOString() ?? null,
@@ -586,10 +652,11 @@ export class ImagingStudyService {
       assigned_radiologist_id: row.report?.assignedRadiologistPersonId ?? null,
       boundary: {
         pacs: false,
-        dicom: false,
+        dicom: true,
         interpretation: Boolean(row.report),
         report: false,
         publication: false,
+        viewer: row.sandbox && instanceCount > 0,
       },
     };
   }

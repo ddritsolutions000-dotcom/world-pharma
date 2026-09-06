@@ -1,5 +1,10 @@
+import { AdminShell } from '../../src/admin-shell';
 import { ReviewsModerationList } from '../../src/reviews-list';
 
 export default function ReviewsPage() {
-  return <ReviewsModerationList />;
+  return (
+    <AdminShell currentNav="reviews">
+      <ReviewsModerationList />
+    </AdminShell>
+  );
 }

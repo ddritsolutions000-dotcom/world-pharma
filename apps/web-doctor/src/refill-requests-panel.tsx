@@ -8,7 +8,6 @@ import {
   EmptyState,
   Heading,
   LoadingState,
-  NetworkErrorState,
   Text,
 } from '@world-pharma/ui-kit/web';
 import {
@@ -18,13 +17,14 @@ import {
   rejectDoctorRefillRequest,
   type DoctorRefillRequest,
 } from './doctor-api';
+import { DoctorLoadFailure, mapDoctorApiFailure, type DoctorLoadError } from './doctor-load-state';
 
 export function DoctorRefillRequestsPanel() {
   const { getAccessToken, session, expire } = useSession();
   const [rows, setRows] = useState<DoctorRefillRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<'network' | null>(null);
+  const [error, setError] = useState<DoctorLoadError | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const onUnauthorized = useCallback(() => expire(), [expire]);
@@ -39,7 +39,7 @@ export function DoctorRefillRequestsPanel() {
     setError(null);
     const result = await fetchDoctorRefillRequests({ token, onUnauthorized });
     if (!result.ok) {
-      setError(result.kind === 'network' ? 'network' : null);
+      setError(mapDoctorApiFailure(result.kind));
       setRows([]);
     } else {
       setRows(result.data.requests ?? []);
@@ -100,8 +100,8 @@ export function DoctorRefillRequestsPanel() {
   if (loading) {
     return <LoadingState label="Loading refill requests" />;
   }
-  if (error === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (error) {
+    return <DoctorLoadFailure error={error} onRetry={() => void load()} />;
   }
 
   return (

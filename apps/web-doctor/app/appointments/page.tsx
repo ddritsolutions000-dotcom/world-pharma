@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { DoctorAppointmentsPanel } from '../../src/appointments-panel';
 import { DoctorShell } from '../../src/doctor-shell';
 
@@ -5,9 +6,11 @@ export default function DoctorAppointmentsRoute() {
   return (
     <DoctorShell
       title="Appointments"
-      description="Your schedule only. Start consult is a placeholder for later video."
+      description="Manage your schedule, consultations, and encounters."
     >
-      <DoctorAppointmentsPanel />
+      <Suspense fallback={null}>
+        <DoctorAppointmentsPanel />
+      </Suspense>
     </DoctorShell>
   );
 }

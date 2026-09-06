@@ -2,6 +2,8 @@ import { createHash } from 'crypto';
 import { Inject, Injectable, forwardRef } from '@nestjs/common';
 import {
   EncounterStatus,
+  KycCaseStatus,
+  PartnerStatus,
   PrescriptionOrigin,
   PrescriptionStatus,
   type Prisma,
@@ -19,6 +21,7 @@ import { DispensingService } from './dispensing.service';
 import { ErxSubmissionService } from './erx-submission.service';
 import { HealthPrescriptionProjectionService } from '../health/health-prescription-projection.service';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
+import { evaluateDoctorClinicalActionEligibility } from './doctor-consultation-erx-production-workflow-closure';
 
 export type PrescriptionLineInput = {
   clinical_concept_code: string;
@@ -71,7 +74,10 @@ export class PrescriptionService {
     this.assertDoctorAudience(principal);
     return this.idempotent(principal.personId, input.idempotency_key, 'POST', '/doctor/prescriptions', async () => {
       const doctor = await this.resolveDoctor(principal.personId);
-      const encounter = await this.prisma.encounter.findUnique({ where: { id: input.encounter_id } });
+      const encounter = await this.prisma.encounter.findUnique({
+        where: { id: input.encounter_id },
+        include: { appointment: { select: { subjectFamilyMemberId: true } } },
+      });
       if (!encounter) {
         throw Errors.notFound('Encounter not found');
       }
@@ -93,6 +99,7 @@ export class PrescriptionService {
       const prescriptionId = uuidv7();
       const versionId = uuidv7();
       const now = new Date();
+      const subjectFamilyMemberId = encounter.appointment?.subjectFamilyMemberId ?? null;
 
       await this.prisma.$transaction(async (tx) => {
         await tx.prescription.create({
@@ -107,6 +114,7 @@ export class PrescriptionService {
             status: PrescriptionStatus.DRAFT,
             origin: PrescriptionOrigin.ENCOUNTER,
             createdByPersonId: principal.personId,
+            subjectFamilyMemberId,
           },
         });
         await tx.prescriptionVersion.create({
@@ -151,6 +159,30 @@ export class PrescriptionService {
     this.assertDoctorAudience(principal);
     return this.idempotent(principal.personId, idempotencyKey, 'POST', `/doctor/prescriptions/${prescriptionId}/issue`, async () => {
       const row = await this.loadOwned(prescriptionId, principal.personId);
+      const partner = await this.prisma.partner.findUnique({
+        where: { id: row.doctorPartnerId },
+        select: { id: true, status: true },
+      });
+      const kyc = partner
+        ? await this.prisma.kycCase.findFirst({
+            where: { partnerId: partner.id },
+            orderBy: { createdAt: 'desc' },
+            select: { status: true, expiresAt: true },
+          })
+        : null;
+      const clinicalGate = evaluateDoctorClinicalActionEligibility({
+        partnerStatus: (partner?.status as PartnerStatus | undefined) ?? null,
+        kycStatus: (kyc?.status as KycCaseStatus | undefined) ?? null,
+        kycExpiresAt: kyc?.expiresAt ?? null,
+      });
+      if (!clinicalGate.allowed) {
+        throw Errors.problem(
+          403,
+          clinicalGate.blocker ?? 'PARTNER_NOT_ACTIVE',
+          'Doctor clinical action blocked',
+          clinicalGate.detail,
+        );
+      }
       const country = await this.prisma.country.findUniqueOrThrow({ where: { id: row.countryId } });
       await this.requirePrescribeEnabled(country.isoAlpha2);
       await this.assertClinicalAccess(principal, row.patientPersonId, country.isoAlpha2);
@@ -216,6 +248,7 @@ export class PrescriptionService {
               countryId: row.countryId,
               countryCode: country.isoAlpha2,
               publishedAt: sealedAt,
+              subjectFamilyMemberId: row.subjectFamilyMemberId,
             }),
         );
       });
@@ -325,6 +358,7 @@ export class PrescriptionService {
                 countryId: row.countryId,
                 countryCode: country.isoAlpha2,
                 publishedAt: sealedAt,
+                subjectFamilyMemberId: row.subjectFamilyMemberId,
               }),
           );
         });
@@ -393,9 +427,19 @@ export class PrescriptionService {
 
   async listForDoctor(principal: Principal) {
     this.assertDoctorAudience(principal);
-    const doctor = await this.resolveDoctor(principal.personId);
+    const partner = await this.prisma.partner.findFirst({
+      where: { personId: principal.personId, partnerTypeCode: 'DOCTOR' },
+      select: { id: true },
+    });
+    if (!partner) {
+      return { prescriptions: [] };
+    }
+    const profile = await this.prisma.doctorProfile.findUnique({ where: { partnerId: partner.id } });
+    if (!profile) {
+      return { prescriptions: [] };
+    }
     const rows = await this.prisma.prescription.findMany({
-      where: { doctorProfileId: doctor.profile.id },
+      where: { doctorProfileId: profile.id },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
@@ -666,6 +710,7 @@ export class PrescriptionService {
       origin: row.origin,
       country_id: row.countryId,
       patient_person_id: row.patientPersonId,
+      subject_family_member_id: row.subjectFamilyMemberId ?? null,
       doctor_profile_id: row.doctorProfileId,
       doctor_partner_id: row.doctorPartnerId,
       encounter_id: row.encounterId,

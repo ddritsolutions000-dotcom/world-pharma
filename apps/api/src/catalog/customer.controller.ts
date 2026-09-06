@@ -42,21 +42,48 @@ export class CatalogCustomerController {
     @Query('country') country: string,
     @Query('q') q?: string,
     @Query('category') category?: string,
+    @Query('brand') brand?: string,
+    @Query('manufacturer') manufacturer?: string,
+    @Query('rx') rx?: string,
+    @Query('in_stock') inStock?: string,
+    @Query('sort') sort?: string,
     @Query('cursor') cursor?: string,
     @Query('locale') locale?: string,
   ) {
     if (!country) {
       throw Errors.validation('country query parameter is required');
     }
-    return this.catalog.customerBrowse(country, { q, category, cursor, locale });
+    const parsedSort =
+      sort === 'price_asc' ||
+      sort === 'price_desc' ||
+      sort === 'rating' ||
+      sort === 'discount' ||
+      sort === 'relevance'
+        ? sort
+        : undefined;
+    return this.catalog.customerBrowse(country, {
+      q,
+      category,
+      brand,
+      manufacturer,
+      rx: rx === undefined ? undefined : rx === 'true',
+      in_stock: inStock === undefined ? undefined : inStock === 'true',
+      sort: parsedSort,
+      cursor,
+      locale,
+    });
   }
 
   @Get('catalog/items/:slug')
-  item(@Param('slug') slug: string, @Query('country') country: string) {
+  item(
+    @Param('slug') slug: string,
+    @Query('country') country: string,
+    @Query('postal_code') postalCode?: string,
+  ) {
     if (!country) {
       throw Errors.validation('country query parameter is required');
     }
-    return this.catalog.customerItem(country, slug);
+    return this.catalog.customerItem(country, slug, postalCode);
   }
 
   @Get('catalog/search')

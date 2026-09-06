@@ -38,6 +38,7 @@ export type HelpBanner = {
   slug: string;
   title: string;
   body: string;
+  image_url: string | null;
 };
 
 type SearchRow = {
@@ -121,14 +122,21 @@ export function fetchHelpSearch(countryCode: string, query: string, locale = 'en
 }
 
 export function fetchHelpBanners(countryCode: string, locale = 'en') {
-  return helpCall<{ data: Array<{ contentItemId: string; slug: string; title: string; body: string }> }>(
-    `/api/v1/help/banners?${scope(countryCode, locale)}`,
-  ).then((body) => ({
+  return helpCall<{
+    data: Array<{
+      contentItemId: string;
+      slug: string;
+      title: string;
+      body: string;
+      image_url?: string | null;
+    }>;
+  }>(`/api/v1/help/banners?${scope(countryCode, locale)}`).then((body) => ({
     data: (body.data ?? []).map((row) => ({
       id: row.contentItemId,
       slug: row.slug,
       title: row.title,
       body: row.body,
+      image_url: row.image_url ? `${base()}${row.image_url}` : null,
     })),
   }));
 }

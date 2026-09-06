@@ -1,0 +1,72 @@
+/**
+ * Vendor portal bridges to the shared World-Pharma ui-kit theme.
+ * Do not introduce app-specific brand hex values — consume semantic tokens only.
+ */
+
+.vendor-font-root,
+.vendor-public-root,
+.vws-root {
+  font-family: var(--wp-font-ui);
+}
+
+.vendor-public-root {
+  --vendor-brand: var(--wp-color-action-primary);
+  --vendor-brand-dark: var(--wp-color-action-primary-hover);
+  --vendor-teal: var(--wp-color-action-primary);
+  --vendor-teal-soft: var(--wp-color-status-success-bg);
+  --vendor-surface: var(--wp-color-background-surface);
+  --vendor-muted: var(--wp-color-text-secondary);
+  --vendor-border: var(--wp-color-border-default);
+  --vendor-shadow: var(--wp-elev-card, 0 8px 24px -12px rgba(7, 16, 20, 0.12));
+  --vendor-radius: var(--wp-radius-md);
+  color: var(--wp-color-text-primary);
+}
+
+.vendor-body,
+.vws-root {
+  background: var(--wp-color-background-primary);
+  color: var(--wp-color-text-primary);
+}
+
+.vendor-public-ambient {
+  background:
+    radial-gradient(ellipse 70% 55% at 15% -10%, color-mix(in srgb, var(--wp-color-action-primary) 12%, transparent), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 90% 5%, color-mix(in srgb, var(--wp-color-action-accent) 10%, transparent), transparent 50%),
+    linear-gradient(180deg, var(--wp-color-background-primary) 0%, var(--wp-color-background-sunken) 100%);
+}
+
+.vendor-public-announce {
+  color: var(--wp-color-text-secondary);
+  background: color-mix(in srgb, var(--wp-color-action-primary) 8%, var(--wp-color-background-surface));
+  border-bottom: var(--wp-border-hairline) solid var(--wp-color-border-divider);
+}
+
+.vendor-public-announce-pill {
+  background: var(--wp-color-background-surface);
+  color: var(--wp-color-action-primary);
+  border: var(--wp-border-hairline) solid var(--wp-color-border-default);
+}
+
+.vd-quick-tile {
+  border-top-color: var(--wp-color-action-primary);
+}
+
+.vd-quick-tile:nth-child(2) {
+  border-top-color: var(--wp-color-status-info);
+}
+
+.vd-quick-tile:nth-child(3) {
+  border-top-color: var(--wp-color-action-primary);
+}
+
+.vd-quick-tile:nth-child(4) {
+  border-top-color: var(--wp-color-status-warning);
+}
+
+.vd-quick-tile:nth-child(5) {
+  border-top-color: var(--wp-color-status-success);
+}
+
+.vd-quick-tile:nth-child(6) {
+  border-top-color: var(--wp-color-text-muted);
+}

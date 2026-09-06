@@ -1,10 +1,10 @@
 import { AdminShell } from '../../src/admin-shell';
-import { SecurityEventsGovernance } from '../../src/governance-admin';
+import { AuditAdminPanel } from '../../src/audit-admin-panel';
 
 export default function AuditGovernancePage() {
   return (
-    <AdminShell>
-      <SecurityEventsGovernance />
+    <AdminShell currentNav="audit">
+      <AuditAdminPanel />
     </AdminShell>
   );
 }

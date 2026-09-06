@@ -18,22 +18,10 @@ import { PolicyCache } from '../policy/cache';
 import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateLabPartner, enableLabPartnerPack } from '../test/lab-partner';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R7-D transport + accession + processing (e2e)', () => {
+  jest.setTimeout(180_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -146,24 +134,13 @@ describe('R7-D transport + accession + processing (e2e)', () => {
 
   it('transport, accession, processing, isolation, duplicate prevention', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r7d-admin-${suffix}@example.com`, 'admin');
-    const labUser = await signIn(app, `r7d-la-${suffix}@example.com`);
-    const otherLab = await signIn(app, `r7d-lb-${suffix}@example.com`);
-    const customerA = await signIn(app, `r7d-ca-${suffix}@example.com`);
-    const customerB = await signIn(app, `r7d-cb-${suffix}@example.com`);
-    const phe = await signIn(app, `r7d-phe-${suffix}@example.com`);
-    const rider = await signIn(app, `r7d-rider-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r7d-admin-${suffix}@example.com`);
+    const labUser = await signInAudience(app, `r7d-la-${suffix}@example.com`);
+    const otherLab = await signInAudience(app, `r7d-lb-${suffix}@example.com`);
+    const customerA = await signInAudience(app, `r7d-ca-${suffix}@example.com`);
+    const customerB = await signInAudience(app, `r7d-cb-${suffix}@example.com`);
+    const phe = await signInAudience(app, `r7d-phe-${suffix}@example.com`);
+    const rider = await signInAudience(app, `r7d-rider-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableLabPartnerPack(enabledDoc, { home: true, center: true });

@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SafeAreaView, View } from 'react-native';
-import { createSessionStore, requestOtp, verifyOtp } from '@world-pharma/shell-core';
+import { createSessionStore } from '@world-pharma/shell-core';
 import {
   NativeButton,
   NativeCard,
   NativeEmptyState,
   NativeInput,
+  NativeListRow,
+  NativeListSection,
   NativeLoadingState,
   NativeNetworkErrorState,
-  NativePermissionDeniedState,
+  NativeOtpSignIn,
+  NativePageHeader,
   NativeSessionExpiredState,
   NativeText,
+  OpsKpiRow,
+  OpsShell,
+  OpsWorkCard,
+  OpsAccessGate,
 } from '@world-pharma/ui-kit/native';
 import { NativeConsultVideoPanel } from './consult-panel';
 import {
@@ -38,6 +45,9 @@ import {
   rejectDoctorRefillRequest,
   saveAvailability,
   submitCredential,
+  cancelAppointment,
+  markAppointmentNoShow,
+  fetchEarningsSummary,
   type ClinicalAccessEvaluation,
   type DoctorAppointment,
   type DoctorCredential,
@@ -48,6 +58,11 @@ import {
   type PrescriptionContext,
 } from './doctor-api';
 import { DOCTOR_TABS, doctorMobileScreen, type DoctorMobileTab } from './navigation';
+import {
+  availableEncounterActions,
+  availableEncounterSecondaryActions,
+} from './encounter-actions';
+import { DoctorInboxScreen, DoctorSupportScreen } from './ops-features';
 import {
   DEFAULT_COUNTRY,
   DoctorHealthArtifactScreen,
@@ -77,11 +92,6 @@ export function App() {
   const store = useMemo(() => createSessionStore(), []);
   const [session, setSessionState] = useState(store.snapshot());
   const syncSession = useCallback(() => setSessionState(store.snapshot()), [store]);
-
-  const [email, setEmail] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [signInBusy, setSignInBusy] = useState(false);
 
   const [tab, setTab] = useState<DoctorMobileTab>('dashboard');
   const [viewState, setViewState] = useState<ViewState>('idle');
@@ -118,9 +128,13 @@ export function App() {
   const [refillRequests, setRefillRequests] = useState<DoctorRefillRequest[]>([]);
   const [refillBusyId, setRefillBusyId] = useState<string | null>(null);
   const [refillMessage, setRefillMessage] = useState<string | null>(null);
+  const [patientSummary, setPatientSummary] = useState('');
+  const [earningsSummary, setEarningsSummary] = useState<string | null>(null);
   const [healthCountryCode, setHealthCountryCode] = useState(DEFAULT_COUNTRY);
   const [selectedHealthPatientId, setSelectedHealthPatientId] = useState<string | null>(null);
   const [selectedHealthArtifactId, setSelectedHealthArtifactId] = useState<string | null>(null);
+  const [opsSubScreen, setOpsSubScreen] = useState<'inbox' | 'support' | null>(null);
+  const [denyDetail, setDenyDetail] = useState<string | null>(null);
 
   const token = store.getAccessToken();
   const screen = doctorMobileScreen(
@@ -135,6 +149,9 @@ export function App() {
 
   const handleError = useCallback(
     (err: unknown) => {
+      if (err instanceof DoctorApiError && err.status === 403) {
+        setDenyDetail(err.message);
+      }
       setViewState(mapError(err, store, syncSession));
     },
     [store, syncSession],
@@ -146,7 +163,7 @@ export function App() {
     }
     setViewState('loading');
     try {
-      if (tab === 'dashboard' || tab === 'profile' || tab === 'settings') {
+      if (tab === 'dashboard' || tab === 'profile' || tab === 'settings' || tab === 'inbox') {
         setProfile(await fetchProfile(token));
       }
       if (tab === 'dashboard' || tab === 'availability') {
@@ -156,9 +173,21 @@ export function App() {
         const list = await fetchAppointments(token);
         setAppointments(list.appointments ?? []);
       }
+      if (tab === 'dashboard') {
+        try {
+          const earnings = await fetchEarningsSummary(token);
+          setEarningsSummary(
+            `Sandbox earnings: ${earnings.completed_consult_count} completed · payable ${earnings.doctor_payable_minor} ${earnings.currency} · ${earnings.settlement_status}`,
+          );
+        } catch {
+          setEarningsSummary(null);
+        }
+      }
       if (tab === 'prescriptions') {
         const list = await fetchPrescriptions(token);
         setPrescriptions(list.prescriptions ?? []);
+      }
+      if (tab === 'refill-requests') {
         const refills = await fetchDoctorRefillRequests(token);
         setRefillRequests(refills.requests ?? []);
       }
@@ -228,54 +257,48 @@ export function App() {
     }
   }, [selectedAppointmentId, selectedAppointment, loadAccess]);
 
-  const sendOtp = async () => {
-    setSignInBusy(true);
-    setViewState('idle');
-    try {
-      const result = await requestOtp(email, 'LOGIN');
-      setChallengeId(result.challengeId);
-      if (result.devCode) {
-        setOtpCode(result.devCode);
-      }
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
-    }
-  };
-
-  const verifySignIn = async () => {
-    if (!challengeId) {
-      await sendOtp();
+  const runEncounter = async (action: 'check-in' | 'start' | 'complete' | 'confirm') => {
+    if (!token || !selectedAppointmentId) {
       return;
     }
-    setSignInBusy(true);
+    if (action === 'complete') {
+      const summary = patientSummary.trim();
+      if (summary.length < 8) {
+        setRxMessage('Add a patient summary (at least 8 characters) before completing.');
+        return;
+      }
+    }
+    setViewState('loading');
+    setRxMessage(null);
     try {
-      const result = await verifyOtp(challengeId, otpCode, 'doctor');
-      store.authenticate({
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        audience: 'doctor',
-      });
-      syncSession();
-      setChallengeId(null);
+      await appointmentAction(
+        token,
+        selectedAppointmentId,
+        action,
+        action === 'complete' ? { patient_summary: patientSummary.trim() } : undefined,
+      );
+      const list = await fetchAppointments(token);
+      setAppointments(list.appointments ?? []);
       setViewState('idle');
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
+    } catch (err) {
+      handleError(err);
     }
   };
 
-  const runEncounter = async (action: 'check-in' | 'start' | 'complete') => {
+  const runSecondaryEncounter = async (action: 'cancel' | 'no-show') => {
     if (!token || !selectedAppointmentId) {
       return;
     }
     setViewState('loading');
     try {
-      await appointmentAction(token, selectedAppointmentId, action);
+      if (action === 'cancel') {
+        await cancelAppointment(token, selectedAppointmentId);
+      } else {
+        await markAppointmentNoShow(token, selectedAppointmentId);
+      }
       const list = await fetchAppointments(token);
       setAppointments(list.appointments ?? []);
+      setSelectedAppointmentId(null);
       setViewState('idle');
     } catch (err) {
       handleError(err);
@@ -539,22 +562,21 @@ export function App() {
 
   if (screen === 'sign-in') {
     return (
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={{ flex: 1, padding: 16, gap: 12 }}>
-          <NativeText variant="h1">Doctor mobile</NativeText>
-          <NativeCard>
-            <NativeInput label="Email" value={email} onChangeText={setEmail} />
-            {challengeId ? (
-              <NativeInput label="One-time code" value={otpCode} onChangeText={setOtpCode} />
-            ) : null}
-            <NativeButton
-              label={signInBusy ? 'Please wait…' : challengeId ? 'Verify & sign in' : 'Send OTP'}
-              onPress={() => void (challengeId ? verifySignIn() : sendOtp())}
-            />
-          </NativeCard>
-          {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => setViewState('idle')} /> : null}
-        </View>
-      </SafeAreaView>
+      <NativeOtpSignIn
+        portalTitle="World Pharma Clinician"
+        portalDescription="Consult queue, video, prescriptions, and patient records for verified doctors."
+        audience="doctor"
+        staffEmail="sandbox-doctor@dev.local"
+        onAuthenticated={({ accessToken, refreshToken }) => {
+          store.authenticate({
+            accessToken,
+            refreshToken,
+            audience: 'doctor',
+          });
+          syncSession();
+          setViewState('idle');
+        }}
+      />
     );
   }
 
@@ -584,7 +606,19 @@ export function App() {
           <NativeText variant="h2">{selectedAppointment.status}</NativeText>
           <NativeText>{selectedAppointment.starts_at ?? selectedAppointment.id.slice(0, 8)}</NativeText>
           {viewState === 'loading' ? <NativeLoadingState /> : null}
-          {viewState === 'forbidden' ? <NativePermissionDeniedState /> : null}
+          {viewState === 'forbidden' ? (
+            <OpsAccessGate
+              detail={denyDetail}
+              staffEmail="sandbox-doctor@dev.local"
+              onRetry={() => void loadTab()}
+              onSignOut={() => {
+                store.signOut();
+                syncSession();
+                setDenyDetail(null);
+                setViewState('idle');
+              }}
+            />
+          ) : null}
           {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => void runEncounter('check-in')} /> : null}
           {viewState === 'idle' ? (
             <>
@@ -600,9 +634,38 @@ export function App() {
                 )}
               </NativeCard>
               <NativeCard>
-                <NativeButton label="Check in" onPress={() => void runEncounter('check-in')} />
-                <NativeButton label="Start consult" variant="secondary" onPress={() => void runEncounter('start')} />
-                <NativeButton label="Complete" variant="secondary" onPress={() => void runEncounter('complete')} />
+                {availableEncounterActions(selectedAppointment.status).map((action) => (
+                  <NativeButton
+                    key={action}
+                    label={
+                      action === 'confirm'
+                        ? 'Confirm'
+                        : action === 'check-in'
+                          ? 'Check in'
+                          : action === 'start'
+                            ? 'Start consult'
+                            : 'Complete'
+                    }
+                    variant={action === 'confirm' ? 'primary' : 'secondary'}
+                    onPress={() => void runEncounter(action)}
+                  />
+                ))}
+                {availableEncounterSecondaryActions(selectedAppointment.status).map((action) => (
+                  <NativeButton
+                    key={action}
+                    label={action === 'cancel' ? 'Cancel appointment' : 'Mark no-show'}
+                    variant="secondary"
+                    onPress={() => void runSecondaryEncounter(action)}
+                  />
+                ))}
+                {selectedAppointment.status.toUpperCase() === 'IN_CONSULTATION' ? (
+                  <NativeInput
+                    label="Patient summary"
+                    value={patientSummary}
+                    onChangeText={setPatientSummary}
+                    placeholder="Minimum 8 characters"
+                  />
+                ) : null}
                 {selectedAppointment.encounter?.id ? (
                   <NativeButton label="Prescribe" onPress={startPrescribeFromAppointment} />
                 ) : (
@@ -690,7 +753,19 @@ export function App() {
             <NativeText variant="caption">{`Commercial: ${selectedPrescription.commercial_status}`}</NativeText>
           ) : null}
           {viewState === 'loading' ? <NativeLoadingState /> : null}
-          {viewState === 'forbidden' ? <NativePermissionDeniedState /> : null}
+          {viewState === 'forbidden' ? (
+            <OpsAccessGate
+              detail={denyDetail}
+              staffEmail="sandbox-doctor@dev.local"
+              onRetry={() => void loadTab()}
+              onSignOut={() => {
+                store.signOut();
+                syncSession();
+                setDenyDetail(null);
+                setViewState('idle');
+              }}
+            />
+          ) : null}
           {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => void openPrescription(selectedPrescription.id)} /> : null}
           {viewState === 'idle' ? (
             <NativeCard>
@@ -764,30 +839,68 @@ export function App() {
     profile?.profile?.display_name ?? profile?.profile?.professional_name ?? profile?.display_name ?? null;
 
   return (
-    <SafeAreaView style={{ flex: 1 }} accessibilityLabel="World Pharma doctor mobile shell">
-      <View style={{ flex: 1, padding: 16, gap: 12 }}>
-        <NativeText variant="h1">Doctor</NativeText>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {DOCTOR_TABS.map((item) => (
-            <NativeButton
-              key={item.id}
-              label={item.label}
-              variant={tab === item.id ? 'primary' : 'secondary'}
-              onPress={() => setTab(item.id)}
-            />
-          ))}
-        </View>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#07111A' }} accessibilityLabel="World Pharma doctor mobile shell">
+      <OpsShell
+        product="Clinician"
+        accent="#4FD1C5"
+        status={displayName ?? 'On duty'}
+        tabs={DOCTOR_TABS}
+        active={
+          tab === 'dashboard' ||
+          tab === 'appointments' ||
+          tab === 'prescriptions' ||
+          tab === 'patients' ||
+          tab === 'settings'
+            ? tab
+            : 'settings'
+        }
+        onSelect={(id) => setTab(id as DoctorMobileTab)}
+      >
 
-        {viewState === 'loading' ? <NativeLoadingState /> : null}
-        {viewState === 'forbidden' ? <NativePermissionDeniedState /> : null}
+        {viewState === 'loading' ? <NativeLoadingState mode="dark" /> : null}
+        {viewState === 'forbidden' ? (
+          <OpsAccessGate
+            detail={denyDetail}
+            staffEmail="sandbox-doctor@dev.local"
+            onRetry={() => void loadTab()}
+            onSignOut={() => {
+              store.signOut();
+              syncSession();
+              setDenyDetail(null);
+              setViewState('idle');
+            }}
+          />
+        ) : null}
         {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => void loadTab()} /> : null}
 
         {viewState === 'idle' && tab === 'dashboard' ? (
-          <NativeCard>
-            <NativeText>{displayName ?? 'Doctor profile loaded'}</NativeText>
-            <NativeText variant="caption">{availabilitySummary ?? 'No availability loaded'}</NativeText>
-            <NativeText variant="caption">{`${appointments.length} upcoming appointment(s)`}</NativeText>
-          </NativeCard>
+          <>
+            <OpsKpiRow
+              items={[
+                { label: 'Queue', value: appointments.length },
+                { label: 'Rx', value: prescriptions.length },
+                { label: 'Refills', value: refillRequests.length },
+              ]}
+            />
+            <NativeCard>
+              <NativeText variant="h2">{displayName ?? 'Clinician'}</NativeText>
+              <NativeText variant="caption">{availabilitySummary ?? 'Set availability from More'}</NativeText>
+              {earningsSummary ? <NativeText variant="caption">{earningsSummary}</NativeText> : null}
+            </NativeCard>
+            {appointments[0] ? (
+              <OpsWorkCard
+                kicker="NEXT"
+                title={appointments[0].starts_at ?? appointments[0].id.slice(0, 8)}
+                meta={appointments[0].status}
+                status="Open consult"
+                onOpen={() => setSelectedAppointmentId(appointments[0]!.id)}
+                actionLabel="Open consult"
+                onAction={() => setSelectedAppointmentId(appointments[0]!.id)}
+              />
+            ) : (
+              <NativeEmptyState title="No consults yet" description="Today's queue appears after bookings." />
+            )}
+          </>
         ) : null}
 
         {viewState === 'idle' && tab === 'profile' ? (
@@ -879,47 +992,61 @@ export function App() {
         {viewState === 'idle' && tab === 'appointments' ? (
           appointments.length ? (
             appointments.map((row) => (
-              <NativeCard key={row.id}>
-                <NativeText>{`${row.status} · ${row.starts_at ?? row.id.slice(0, 8)}`}</NativeText>
-                <NativeButton label="Open" variant="secondary" onPress={() => setSelectedAppointmentId(row.id)} />
-              </NativeCard>
+              <OpsWorkCard
+                key={row.id}
+                kicker="CONSULT"
+                title={row.starts_at ?? row.id.slice(0, 8)}
+                meta={row.status}
+                status="Queue"
+                onOpen={() => setSelectedAppointmentId(row.id)}
+                actionLabel="Open"
+                onAction={() => setSelectedAppointmentId(row.id)}
+              />
             ))
           ) : (
             <NativeEmptyState title="No appointments" description="Upcoming visits appear here." />
           )
         ) : null}
 
+        {viewState === 'idle' && tab === 'refill-requests' ? (
+          <NativeCard>
+            <NativeText variant="h2">Pending refill requests</NativeText>
+            <NativeText variant="caption">
+              Explicit approve/reject only — R5-E fail-closed re-authorization.
+            </NativeText>
+            {refillMessage ? <NativeText variant="caption">{refillMessage}</NativeText> : null}
+            {!refillRequests.length ? (
+              <NativeEmptyState title="No pending refills" description="Patient refill requests appear here." />
+            ) : (
+              refillRequests.map((row) => (
+                <View key={row.id} style={{ gap: 8, marginTop: 8 }}>
+                  <NativeText>{`${row.status} · Rx ${row.prescription_id.slice(0, 8)} · ${row.id.slice(0, 8)}`}</NativeText>
+                  {refillBusyId === row.id ? <NativeLoadingState title="Saving decision" /> : null}
+                  {refillBusyId !== row.id && row.status === 'PENDING_REAUTH' ? (
+                    <>
+                      <NativeButton label="Approve" onPress={() => void approveRefill(row.id)} />
+                      <NativeButton label="Reject" variant="secondary" onPress={() => void rejectRefill(row.id)} />
+                    </>
+                  ) : null}
+                </View>
+              ))
+            )}
+          </NativeCard>
+        ) : null}
+
         {viewState === 'idle' && tab === 'prescriptions' ? (
           <>
-            <NativeCard>
-              <NativeText variant="h2">Pending refill requests</NativeText>
-              <NativeText variant="caption">
-                Explicit approve/reject only — R5-E fail-closed re-authorization.
-              </NativeText>
-              {refillMessage ? <NativeText variant="caption">{refillMessage}</NativeText> : null}
-              {!refillRequests.length ? (
-                <NativeEmptyState title="No pending refills" description="Patient refill requests appear here." />
-              ) : (
-                refillRequests.map((row) => (
-                  <View key={row.id} style={{ gap: 8, marginTop: 8 }}>
-                    <NativeText>{`${row.status} · Rx ${row.prescription_id.slice(0, 8)} · ${row.id.slice(0, 8)}`}</NativeText>
-                    {refillBusyId === row.id ? <NativeLoadingState title="Saving decision" /> : null}
-                    {refillBusyId !== row.id && row.status === 'PENDING_REAUTH' ? (
-                      <>
-                        <NativeButton label="Approve" onPress={() => void approveRefill(row.id)} />
-                        <NativeButton label="Reject" variant="secondary" onPress={() => void rejectRefill(row.id)} />
-                      </>
-                    ) : null}
-                  </View>
-                ))
-              )}
-            </NativeCard>
             {prescriptions.length ? (
               prescriptions.map((row) => (
-                <NativeCard key={row.id}>
-                  <NativeText>{`${row.status} · v${row.current_version_number ?? '—'} · ${row.id.slice(0, 8)}`}</NativeText>
-                  <NativeButton label="Open" variant="secondary" onPress={() => void openPrescription(row.id)} />
-                </NativeCard>
+                <OpsWorkCard
+                  key={row.id}
+                  kicker="RX"
+                  title={`${row.status} · v${row.current_version_number ?? '—'}`}
+                  meta={row.id.slice(0, 8)}
+                  onOpen={() => void openPrescription(row.id)}
+                  actionLabel="Open"
+                  onAction={() => void openPrescription(row.id)}
+                />
               ))
             ) : (
               <NativeEmptyState title="No prescriptions" description="Select an encounter, compose lines, review, then issue." />
@@ -999,12 +1126,38 @@ export function App() {
           </>
         ) : null}
 
-        {viewState === 'idle' && tab === 'settings' ? (
-          <NativeCard>
-            <NativeText>Notification preferences</NativeText>
+        {viewState === 'idle' && tab === 'inbox' && token ? <DoctorInboxScreen token={token} /> : null}
+
+        {viewState === 'idle' && tab === 'settings' && opsSubScreen === 'inbox' && token ? (
+          <>
+            <NativeButton label="Back to settings" variant="secondary" onPress={() => setOpsSubScreen(null)} />
+            <DoctorInboxScreen token={token} />
+          </>
+        ) : null}
+
+        {viewState === 'idle' && tab === 'settings' && opsSubScreen === 'support' && token ? (
+          <>
+            <NativeButton label="Back to settings" variant="secondary" onPress={() => setOpsSubScreen(null)} />
+            <DoctorSupportScreen token={token} />
+          </>
+        ) : null}
+
+        {viewState === 'idle' && tab === 'settings' && !opsSubScreen ? (
+          <>
+            <NativePageHeader title="Settings" subtitle="Alerts, inbox, and support for your clinic login." />
             <NativeText variant="caption">{prefSummary ?? 'Preferences unavailable'}</NativeText>
-            <NativeText variant="caption">External SMS/email providers remain disabled in sandbox.</NativeText>
-          </NativeCard>
+            <NativeListSection title="Clinic">
+              <NativeListRow label="Profile" hint="Name, country, timezone" onPress={() => setTab('profile')} />
+              <NativeListRow label="Credentials" hint="License review" onPress={() => setTab('credentials')} />
+              <NativeListRow label="Organizations" onPress={() => setTab('organizations')} />
+              <NativeListRow label="Availability" onPress={() => setTab('availability')} />
+              <NativeListRow label="Refill requests" hint="Approve or reject" onPress={() => setTab('refill-requests')} />
+            </NativeListSection>
+            <NativeListSection title="Account">
+              <NativeListRow label="Inbox" hint="Appointment notices" onPress={() => setOpsSubScreen('inbox')} />
+              <NativeListRow label="Support" hint="Get help" onPress={() => setOpsSubScreen('support')} />
+            </NativeListSection>
+          </>
         ) : null}
 
         <NativeButton
@@ -1020,7 +1173,7 @@ export function App() {
             setSelectedHealthArtifactId(null);
           }}
         />
-      </View>
+      </OpsShell>
     </SafeAreaView>
   );
 }

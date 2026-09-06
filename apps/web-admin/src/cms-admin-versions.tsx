@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { classifyAdminViewState } from './admin-http';
+import { AdminViewLoadError } from './admin-request-error';
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
@@ -9,19 +11,19 @@ import {
   Card,
   Heading,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Table,
   Text,
 } from '@world-pharma/ui-kit/web';
 import { CmsAdminApiError, getCmsVersions, type CmsVersionsResponse } from './cms-admin-api';
+import { workingCountry } from './working-country';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
 
 export function CmsAdminVersions({ contentId }: { contentId: string }) {
   const searchParams = useSearchParams();
   const { getAccessToken } = useSession();
-  const countryCode = searchParams.get('country') ?? 'XX';
+  const countryCode = workingCountry(searchParams.get('country'));
   const [data, setData] = useState<CmsVersionsResponse | null>(null);
   const [viewState, setViewState] = useState<ViewState>('loading');
 
@@ -40,7 +42,7 @@ export function CmsAdminVersions({ contentId }: { contentId: string }) {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [contentId, countryCode, getAccessToken]);
 
@@ -54,8 +56,12 @@ export function CmsAdminVersions({ contentId }: { contentId: string }) {
   if (viewState === 'forbidden') {
     return <PermissionDeniedState />;
   }
-  if (viewState === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (viewState === 'network' || viewState === 'error') {
+    return (
+      <div className="wp-stack">
+        <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
+      </div>
+    );
   }
 
   return (

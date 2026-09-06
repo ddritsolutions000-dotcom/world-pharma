@@ -1,0 +1,44 @@
+/**
+ * Main Admin theme bridge — semantic tokens only (no app-specific hex).
+ * Mirrors web-vendor vendor-theme.css pattern.
+ */
+
+html:has(body.wp-admin-site .admin-body) {
+  height: 100%;
+  overflow: hidden;
+}
+
+.wp-admin-site,
+.admin-body {
+  font-family: var(--wp-font-ui);
+  background: var(--wp-color-background-primary);
+  color: var(--wp-color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+.wp-admin-site {
+  --admin-surface: var(--wp-color-background-surface);
+  --admin-surface-raised: var(--wp-color-background-secondary);
+  --admin-border: var(--wp-color-border-default);
+  --admin-border-subtle: var(--wp-color-border-subtle);
+  --admin-accent: #9b2c4a;
+  --admin-accent-soft: color-mix(in srgb, #9b2c4a 14%, var(--wp-color-background-sunken));
+  --admin-sidebar-width: 15.5rem;
+  --admin-topbar-height: 3.25rem;
+  --admin-content-max: 90rem;
+}
+
+.admin-body[data-tone='admin'] .wp-admin-top {
+  background: #9b2c4a;
+  color: #fff;
+  border-bottom: none;
+}
+
+.admin-body[data-tone='admin'] .wp-admin-env,
+.admin-body[data-tone='admin'] .wp-admin-top-links a {
+  color: #fde8ee;
+}
+
+.admin-body[data-tone='admin'] .wp-admin-top-links a:hover {
+  color: #fff;
+}

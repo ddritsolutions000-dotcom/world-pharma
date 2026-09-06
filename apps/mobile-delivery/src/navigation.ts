@@ -8,7 +8,7 @@ import type { SessionSnapshot } from '@world-pharma/shell-core';
  * - Route shape: worldpharma-delivery://jobs/{jobId} -> resolve job -> open jobs tab detail view.
  * - Keep navigation state in a single store; tabs are primary, job detail is a stack overlay on jobs tab.
  */
-export type DeliveryTab = 'jobs' | 'presence' | 'support';
+export type DeliveryTab = 'jobs' | 'presence' | 'earnings' | 'inbox' | 'support';
 
 export type DeliveryMobileScreen = 'sign-in' | DeliveryTab | 'expired';
 
@@ -26,9 +26,11 @@ export function deliveryMobileScreen(
 }
 
 export const DELIVERY_TABS: Array<{ id: DeliveryTab; label: string }> = [
-  { id: 'jobs', label: 'Jobs' },
-  { id: 'presence', label: 'Presence' },
-  { id: 'support', label: 'Support' },
+  { id: 'jobs', label: 'Route' },
+  { id: 'presence', label: 'Duty' },
+  { id: 'earnings', label: 'Pay' },
+  { id: 'inbox', label: 'Inbox' },
+  { id: 'support', label: 'Help' },
 ];
 
 export function parseDeliveryDeepLink(url: string): { jobId?: string } {

@@ -6,13 +6,29 @@
     "version": "0.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1A365D"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.worldpharma.app"
     },
     "android": {
-      "package": "com.worldpharma.app"
+      "package": "com.worldpharma.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#1A365D"
+      },
+      "permissions": ["INTERNET"],
+      "usesCleartextTraffic": true
     },
-    "plugins": []
+    "plugins": ["expo-document-picker"],
+    "extra": {
+      "appEnv": "local"
+    }
   }
 }

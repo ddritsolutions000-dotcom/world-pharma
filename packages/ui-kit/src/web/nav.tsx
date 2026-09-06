@@ -72,23 +72,38 @@ export function HeaderBar({ title, children }: { title: string; children?: React
 export function Sidebar({
   items,
   current,
+  onSelect,
 }: {
   items: Array<{ id: string; label: string; icon?: IconName }>;
   current?: string;
+  onSelect?: (id: string) => void;
 }) {
   return (
     <nav className="wp-nav-side" aria-label="Sidebar">
-      {items.map((item) => (
-        <a
-          key={item.id}
-          href={`#${item.id}`}
-          className="wp-nav-item"
-          aria-current={current === item.id ? 'page' : undefined}
-        >
-          {item.icon ? <Icon name={item.icon} size="sm" decorative /> : null}
-          {item.label}
-        </a>
-      ))}
+      {items.map((item) =>
+        onSelect ? (
+          <button
+            key={item.id}
+            type="button"
+            className="wp-nav-item"
+            aria-current={current === item.id ? 'page' : undefined}
+            onClick={() => onSelect(item.id)}
+          >
+            {item.icon ? <Icon name={item.icon} size="sm" decorative /> : null}
+            {item.label}
+          </button>
+        ) : (
+          <a
+            key={item.id}
+            href={`#${item.id}`}
+            className="wp-nav-item"
+            aria-current={current === item.id ? 'page' : undefined}
+          >
+            {item.icon ? <Icon name={item.icon} size="sm" decorative /> : null}
+            {item.label}
+          </a>
+        ),
+      )}
     </nav>
   );
 }

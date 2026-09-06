@@ -1,11 +1,13 @@
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { adminFetch } from './admin-http';
 
 export class PaymentsAdminApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -128,17 +130,12 @@ export type PaymentObservabilityDetail = {
 };
 
 async function paymentsCall<T>(token: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/payments${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
+  const res = await adminFetch(token, `/api/v1/admin/payments${path}`, init);
+  const body = (await res.json().catch(() => ({}))) as T & { code?: string };
   if (!res.ok) {
-    throw new PaymentsAdminApiError(`Payments admin API ${res.status}`, res.status);
+    throw new PaymentsAdminApiError(`Payments admin API ${res.status}`, res.status, body.code);
   }
-  return (await res.json()) as T;
+  return body;
 }
 
 export async function listPayments(token: string, countryCode: string) {
@@ -168,5 +165,222 @@ export async function getPaymentRoutingMatrix(token: string, countryCode: string
   return paymentsCall<PaymentRoutingMatrix>(
     token,
     `/routing-matrix?country_code=${encodeURIComponent(countryCode)}`,
+  );
+}
+
+export type R14AGateRow = {
+  gate_code: string;
+  value: string;
+  evidence_class: string;
+  workflow_status: 'NOT_EVIDENCED' | 'PENDING' | 'OWNER_EVIDENCED';
+  evidence_ref: string | null;
+  placeholder: boolean;
+  updated_by_person_id: string | null;
+  verified_by_person_id: string | null;
+  verified_at: string | null;
+  updated_at: string;
+};
+
+export type R14AGateConfigResponse = {
+  engineering_config_status: string;
+  readiness_status: string;
+  next_required_action: string;
+  live_production_status: string;
+  book_263_production_evidence: string;
+  live_payment_enabled: boolean;
+  owner_evidenced_count: number;
+  placeholder_count: number;
+  live_unlock_blocked_reason: string | null;
+  note: string;
+  gates: R14AGateRow[];
+};
+
+export type R14AGateRevision = {
+  id: string;
+  action: string;
+  previous_value: string;
+  new_value: string;
+  previous_evidence_class: string;
+  new_evidence_class: string;
+  actor_person_id: string;
+  note: string | null;
+  created_at: string;
+};
+
+export async function getR14AGateConfig(token: string) {
+  return paymentsCall<R14AGateConfigResponse>(token, '/r14a-gates');
+}
+
+export async function updateR14AGate(
+  token: string,
+  gateCode: string,
+  body: { value: string; evidence_ref?: string | null },
+) {
+  return paymentsCall<R14AGateConfigResponse>(token, `/r14a-gates/${encodeURIComponent(gateCode)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function verifyR14AGate(token: string, gateCode: string, body: { evidence_ref: string }) {
+  return paymentsCall<R14AGateConfigResponse>(token, `/r14a-gates/${encodeURIComponent(gateCode)}/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listR14AGateRevisions(token: string, gateCode: string) {
+  return paymentsCall<{ gate_code: string; data: R14AGateRevision[] }>(
+    token,
+    `/r14a-gates/${encodeURIComponent(gateCode)}/revisions`,
+  );
+}
+
+export type PaymentProviderAccount = {
+  code: string;
+  active: boolean;
+  environment: string;
+  countries_csv: string;
+  currencies_csv: string;
+  methods_csv: string;
+  vault_path: string;
+};
+
+export type PaymentProviderRow = {
+  code: string;
+  name: string;
+  environment: string;
+  active: boolean;
+  priority: number;
+  health_score: number;
+  vault_path: string;
+  registry_registered: boolean;
+  capabilities: string[];
+  accounts: PaymentProviderAccount[];
+  updated_at: string;
+};
+
+export type PaymentProviderConfigResponse = {
+  kernel: 'provider_agnostic';
+  selection: 'configuration_driven';
+  live_payment_enabled: boolean;
+  live_production_status: string;
+  owner_evidenced_count: number;
+  live_unlock_blocked_reason: string | null;
+  registered_adapter_codes: string[];
+  note: string;
+  providers: PaymentProviderRow[];
+};
+
+export async function getPaymentProviders(token: string) {
+  return paymentsCall<PaymentProviderConfigResponse>(token, '/providers');
+}
+
+export type PaymentProviderPatch = {
+  active?: boolean;
+  priority?: number;
+  account?: {
+    countries_csv?: string;
+    currencies_csv?: string;
+    methods_csv?: string;
+    vault_path?: string;
+  };
+};
+
+export type PaymentProviderAuditRow = {
+  id: string;
+  outcome: string;
+  actor_person_id: string | null;
+  created_at: string;
+};
+
+export async function updatePaymentProvider(token: string, code: string, body: PaymentProviderPatch) {
+  return paymentsCall<PaymentProviderConfigResponse>(token, `/providers/${encodeURIComponent(code)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getPaymentProviderAudit(token: string, code: string) {
+  return paymentsCall<{ gateway_code: string; data: PaymentProviderAuditRow[] }>(
+    token,
+    `/providers/${encodeURIComponent(code)}/audit`,
+  );
+}
+
+export async function refundPayment(
+  token: string,
+  intentId: string,
+  idempotencyKey: string,
+  amountMinor?: string,
+) {
+  return paymentsCall<PaymentSummary>(token, `/${encodeURIComponent(intentId)}/refund`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify(amountMinor ? { amount_minor: amountMinor } : {}),
+  });
+}
+
+export type ProductionPaymentAvailability = {
+  country_code: string;
+  available: boolean;
+  environment: string;
+  live_payments_enabled: boolean;
+  country_production_lifecycle: string;
+  blockers: string[];
+  warnings: string[];
+  message: string;
+  r14a: {
+    live_production_status: string;
+    owner_evidenced_count: number;
+    live_unlock_blocked_reason: string | null;
+  };
+  payment_dependency: {
+    present: boolean;
+    status: string | null;
+    external_gated: boolean;
+    config_reference: string | null;
+  };
+};
+
+export type ReconReviewRow = {
+  reconciliation_id: string;
+  intent_id: string | null;
+  order_id: string | null;
+  discrepancy: string;
+  reconciliation_status: string;
+  expected_amount_minor: string | null;
+  provider_amount_minor: string | null;
+  expected_currency: string | null;
+  provider_currency: string | null;
+  webhook_state: string | null;
+  created_at: string;
+};
+
+export async function getProductionPaymentAvailability(token: string, countryCode: string) {
+  return paymentsCall<ProductionPaymentAvailability>(
+    token,
+    `/production-availability?country_code=${encodeURIComponent(countryCode)}`,
+  );
+}
+
+export async function listPaymentReconciliations(
+  token: string,
+  opts: { country_code?: string; status?: string; limit?: number } = {},
+) {
+  const params = new URLSearchParams();
+  if (opts.country_code) params.set('country_code', opts.country_code);
+  if (opts.status) params.set('status', opts.status);
+  if (opts.limit) params.set('limit', String(opts.limit));
+  const q = params.toString();
+  return paymentsCall<{ data: ReconReviewRow[]; sandbox: true }>(
+    token,
+    `/reconciliation${q ? `?${q}` : ''}`,
   );
 }

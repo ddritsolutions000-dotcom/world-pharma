@@ -4,6 +4,7 @@ import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { presentConsentScope, parseConsentScope } from '../clinical/consent-scope';
 import type { Principal } from '../identity/current-principal';
+import { RateLimitService } from '../identity/rate-limit.service';
 import { BreakGlassBridgeService } from './break-glass-bridge.service';
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -14,6 +15,7 @@ export class AdminHealthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly breakGlass: BreakGlassBridgeService,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   async listConsentGrants(
@@ -224,7 +226,7 @@ export class AdminHealthService {
     };
   }
 
-  openBreakGlass(
+  async openBreakGlass(
     principal: Principal,
     body: {
       patient_person_id: string;
@@ -238,6 +240,10 @@ export class AdminHealthService {
     requestId?: string,
   ) {
     this.assertAdmin(principal);
+    const hit = await this.rateLimit.hit(`admin:break-glass:${principal.personId}`, 5, 900);
+    if (!hit.allowed) {
+      throw Errors.rateLimited(hit.retryAfter);
+    }
     if (!body.patient_person_id?.trim()) {
       throw Errors.validation('patient_person_id is required');
     }

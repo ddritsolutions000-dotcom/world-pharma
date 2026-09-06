@@ -12,6 +12,12 @@ export function enableImagingPartnerPack(doc: PolicyDocument, opts?: { physicalR
   doc.partner_types.IMAGING_CENTER.join_public = false;
 }
 
+/** Sandbox onboarding — imaging partners can apply via web-join. */
+export function enableImagingPartnerPackForSandbox(doc: PolicyDocument): void {
+  enableImagingPartnerPack(doc);
+  doc.partner_types.IMAGING_CENTER.join_public = true;
+}
+
 /** Imaging attestation + company acceptance → ELIGIBLE (catalog + booking when R8-B pack enabled). */
 export async function activateImagingPartner(
   app: INestApplication,

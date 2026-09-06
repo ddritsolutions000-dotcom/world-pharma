@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
@@ -9,6 +9,7 @@ import { RequirePermissions } from '../identity/require-permissions';
 import { RadiologyCapabilityService } from './radiology-capability.service';
 import { InterpretationService } from './interpretation.service';
 import { ImagingPhysicalReportService } from './imaging-physical-report.service';
+import { ImagingAdminOperationsService } from './imaging-admin-operations.service';
 
 @Controller('admin/imaging')
 @UseGuards(JwtAuthGuard, AudienceGuard, PermissionsGuard)
@@ -18,6 +19,7 @@ export class AdminRadiologyController {
     private readonly capabilities: RadiologyCapabilityService,
     private readonly interpretation: InterpretationService,
     private readonly physicalReports: ImagingPhysicalReportService,
+    private readonly operations: ImagingAdminOperationsService,
   ) {}
 
   @Get('eligibility')
@@ -59,5 +61,51 @@ export class AdminRadiologyController {
   @RequirePermissions('partner:manage')
   async listPhysicalReports(@Query('imaging_org_id') imagingOrgId?: string) {
     return this.physicalReports.listAdminMetadata(imagingOrgId);
+  }
+
+  @Get('locations')
+  @RequirePermissions('partner:manage')
+  async locations(@Query('imaging_org_id') imagingOrgId: string) {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required.');
+    }
+    return this.operations.listLocations(imagingOrgId);
+  }
+
+  @Patch('locations/:id')
+  @RequirePermissions('partner:manage')
+  async patchLocation(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body: { is_active?: boolean; name?: string; timezone?: string },
+  ) {
+    return this.operations.updateLocation(principal, id, body);
+  }
+
+  @Get('studies')
+  @RequirePermissions('partner:manage')
+  async studies(@Query('imaging_org_id') imagingOrgId: string) {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required.');
+    }
+    return this.operations.listStudies(imagingOrgId);
+  }
+
+  @Get('equipment')
+  @RequirePermissions('partner:manage')
+  async equipment(@Query('imaging_org_id') imagingOrgId: string) {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required.');
+    }
+    return this.operations.listEquipment(imagingOrgId);
+  }
+
+  @Get('booking-summary')
+  @RequirePermissions('partner:manage')
+  async bookingSummary(@Query('imaging_org_id') imagingOrgId: string) {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required.');
+    }
+    return this.operations.bookingSummary(imagingOrgId);
   }
 }

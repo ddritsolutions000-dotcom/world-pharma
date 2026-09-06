@@ -47,12 +47,37 @@ export interface PolicyDocument {
     gateway_refs: string[];
     currencies: string[];
   };
+  /** Opaque tax profile id/code only — never rates, secrets, or credentials (Book 18). */
+  tax_profile_id?: string | null;
+  /** Opaque legal-entity / accounting-currency refs — empty until legal fills (Book 18). */
+  ledger?: {
+    legal_entity_id: string | null;
+    accounting_currency: string | null;
+  };
   shipping: {
     domestic: boolean;
     international: boolean;
     rx: boolean;
     controlled: boolean;
     cold_chain: boolean;
+  };
+  commerce?: {
+    platform_fee_bps: number;
+    platform_fee_flat_minor: number;
+    delivery_fee_minor: number;
+    packaging_fee_minor: number;
+    handling_fee_minor: number;
+    payment_convenience_fee_minor: number;
+    free_delivery_threshold_minor: number | null;
+    carrier_cost_estimate_minor: number;
+    /** Basis points on eligible non-clinical goods subtotal after discounts. 0 = commission off. */
+    affiliate_commission_bps?: number;
+    /** Partner wallet / doctor take (bundled platform fee). Affiliate commission stays separate. */
+    doctor_platform_fee_bps?: number;
+    lab_platform_fee_bps?: number;
+    delivery_platform_fee_bps?: number;
+    pharmacy_platform_fee_bps?: number;
+    partner_platform_fee_flat_minor?: number;
   };
   partner_types: Record<PartnerTypeCode, PartnerTypePolicy>;
   data_residency_mode: 'shared' | 'pinned_region' | 'dedicated_db';
@@ -215,12 +240,28 @@ export function emptyPolicyDocument(): PolicyDocument {
       gateway_refs: [],
       currencies: [],
     },
+    tax_profile_id: null,
+    ledger: {
+      legal_entity_id: null,
+      accounting_currency: null,
+    },
     shipping: {
       domestic: false,
       international: false,
       rx: false,
       controlled: false,
       cold_chain: false,
+    },
+    commerce: {
+      platform_fee_bps: 0,
+      platform_fee_flat_minor: 0,
+      delivery_fee_minor: 0,
+      packaging_fee_minor: 0,
+      handling_fee_minor: 0,
+      payment_convenience_fee_minor: 0,
+      free_delivery_threshold_minor: null,
+      carrier_cost_estimate_minor: 0,
+      affiliate_commission_bps: 0,
     },
     partner_types,
     data_residency_mode: 'shared',

@@ -1,6 +1,9 @@
 'use client';
 
 import Link from 'next/link';
+import { classifyAdminViewState } from './admin-http';
+import { AdminViewLoadError } from './admin-request-error';
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
 import {
@@ -9,35 +12,47 @@ import {
   EmptyState,
   FormField,
   Heading,
-  Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Select,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import {
-  CMS_CONTENT_TYPES,
   CmsAdminApiError,
+  archiveCmsContent,
   type CmsContentItem,
   listCmsContent,
 } from './cms-admin-api';
+import { MARKET_COUNTRY_CODES, persistAdminCountry, resolveAdminWorkingCountry, workingCountry } from './working-country';
+import { customerPageUrl } from './site-url';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
+
+const TYPE_CHIPS = ['', 'BANNER', 'LANDING', 'ARTICLE', 'FAQ', 'LEGAL_NOTICE', 'PACK_STRING'] as const;
 
 export function CmsAdminList() {
+  const searchParams = useSearchParams();
   const { getAccessToken, session } = useSession();
   const [rows, setRows] = useState<CmsContentItem[]>([]);
   const [viewState, setViewState] = useState<ViewState>('idle');
-  const [countryCode, setCountryCode] = useState('XX');
+  const [countryCode, setCountryCode] = useState(() =>
+    resolveAdminWorkingCountry({
+      urlCountry: searchParams.get('country'),
+      sessionCountry: session.countryCode,
+    }),
+  );
   const [statusFilter, setStatusFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState(() => searchParams.get('type')?.toUpperCase() ?? '');
 
   const canWrite = session.permissions.includes('cms:write');
 
   const load = useCallback(async () => {
     const token = getAccessToken();
     if (!token) {
+      return;
+    }
+    if (!countryCode) {
+      setRows([]);
+      setViewState('idle');
       return;
     }
     setViewState('loading');
@@ -54,7 +69,7 @@ export function CmsAdminList() {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [countryCode, getAccessToken, statusFilter, typeFilter]);
 
@@ -68,84 +83,147 @@ export function CmsAdminList() {
   if (viewState === 'forbidden') {
     return <PermissionDeniedState />;
   }
-  if (viewState === 'network' && rows.length === 0) {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
-  }
 
   return (
     <div className="wp-stack">
-      <Heading level={1}>CMS content</Heading>
-      <Text tone="secondary">
-        Author operational help content. The server enforces DRAFT → IN_REVIEW → PUBLISHED → ARCHIVED. OD-CMS-01
-        dual-control is not implemented — publish requires <code>cms:publish</code> only (not a separate reviewer
-        gate).
-      </Text>
+      <header className="wp-page-header">
+        <Heading level={1}>Storefront CMS</Heading>
+        <p className="wp-page-intro">
+          Edit banners, landing pages, blog posts, FAQ, and legal copy for {countryCode}. Use Blog and Legal pages in
+          the sidebar if you only need those. Publish needs cms:publish.
+        </p>
+      </header>
 
-      <Card>
-        <div className="wp-stack">
-          <FormField label="Country code">
-            {({ id }) => (
-              <Input
-                id={id}
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
-                placeholder="XX"
-              />
-            )}
-          </FormField>
-          <FormField label="Status filter">
-            {({ id }) => (
-              <Select id={id} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="">All statuses</option>
-                <option value="DRAFT">DRAFT</option>
-                <option value="IN_REVIEW">IN_REVIEW</option>
-                <option value="PUBLISHED">PUBLISHED</option>
-                <option value="ARCHIVED">ARCHIVED</option>
-              </Select>
-            )}
-          </FormField>
-          <FormField label="Content type filter">
-            {({ id }) => (
-              <Select id={id} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                <option value="">All types</option>
-                {CMS_CONTENT_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </FormField>
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <Button variant="secondary" onClick={() => void load()}>
-              Refresh
+      <div className="wp-toolbar">
+        <div className="wp-toolbar-chips">
+          {TYPE_CHIPS.map((type) => (
+            <Button
+              key={type || 'all'}
+              size="sm"
+              variant={typeFilter === type ? 'primary' : 'secondary'}
+              onClick={() => setTypeFilter(type)}
+            >
+              {type || 'All types'}
             </Button>
-            {canWrite ? (
-              <Link href={`/cms/new?country=${countryCode}`}>
-                <Button>Create content</Button>
-              </Link>
-            ) : null}
-          </div>
-        </div>
-      </Card>
-
-      {rows.length === 0 ? (
-        <EmptyState title="No content" description="Create a draft or adjust filters." />
-      ) : (
-        <div className="wp-stack">
-          {rows.map((row) => (
-            <Card key={row.id}>
-              <Heading level={3}>{row.title}</Heading>
-              <Text tone="secondary">
-                {row.content_type} · {row.status} · {row.slug} · v{row.version}
-              </Text>
-              <Text tone="secondary">Updated {new Date(row.updated_at).toLocaleString()}</Text>
-              <Link href={`/cms/${row.id}?country=${countryCode}`}>
-                <Button variant="secondary">Open editor</Button>
-              </Link>
-            </Card>
           ))}
         </div>
+        <FormField label="Country">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={countryCode}
+              onChange={(e) => setCountryCode(persistAdminCountry(workingCountry(e.target.value)))}
+            >
+              <option value="">Select country</option>
+              {MARKET_COUNTRY_CODES.map((iso) => (
+                <option key={iso} value={iso}>
+                  {iso}
+                </option>
+              ))}
+            </Select>
+          )}
+        </FormField>
+        <FormField label="Status filter">
+          {({ id }) => (
+            <Select id={id} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              <option value="DRAFT">DRAFT</option>
+              <option value="IN_REVIEW">IN_REVIEW</option>
+              <option value="PUBLISHED">PUBLISHED</option>
+              <option value="ARCHIVED">ARCHIVED</option>
+            </Select>
+          )}
+        </FormField>
+        <Button variant="secondary" onClick={() => void load()}>
+          Refresh
+        </Button>
+        {canWrite ? (
+          <>
+            <Link href={`/cms/new?country=${countryCode}&type=ARTICLE&category=blog&intent=blog`}>
+              <Button>Add blog post</Button>
+            </Link>
+            <Link href={`/cms/legal?country=${countryCode}`}>
+              <Button variant="secondary">Legal pages</Button>
+            </Link>
+            <Link href={`/cms/new?country=${countryCode}&type=${typeFilter || 'BANNER'}`}>
+              <Button variant="secondary">Create {typeFilter || 'BANNER'}</Button>
+            </Link>
+            <Link href="/storefront">
+              <Button variant="tertiary">Storefront desk</Button>
+            </Link>
+          </>
+        ) : null}
+      </div>
+
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
+
+      {rows.length === 0 ? (
+        <EmptyState
+          title="No content in this country"
+          description="Switch country to IN for sandbox, or create a BANNER / LANDING / ARTICLE draft."
+        />
+      ) : (
+        <Card>
+          <div className="wp-admin-table-wrap">
+            <table className="wp-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Slug</th>
+                  <th>Updated</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.title}</td>
+                    <td>{row.content_type}</td>
+                    <td>
+                      <span className="wp-status">{row.status}</span>
+                    </td>
+                    <td>
+                      <code>{row.slug}</code>
+                    </td>
+                    <td>{new Date(row.updated_at).toLocaleString()}</td>
+                    <td>
+                      <div className="wp-row-actions">
+                        <Link href={`/cms/${row.id}?country=${countryCode}`}>Edit</Link>
+                        {row.content_type === 'LANDING' && row.status === 'PUBLISHED' ? (
+                          <a href={customerPageUrl(`/l/${encodeURIComponent(row.slug)}`)} target="_blank" rel="noreferrer">
+                            View
+                          </a>
+                        ) : null}
+                        {row.content_type === 'ARTICLE' && row.status === 'PUBLISHED' ? (
+                          <a href={customerPageUrl(`/blog/${encodeURIComponent(row.slug)}`)} target="_blank" rel="noreferrer">
+                            Blog
+                          </a>
+                        ) : null}
+                        {session.permissions.includes('cms:publish') && row.status !== 'ARCHIVED' ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              const token = getAccessToken();
+                              if (!token) {
+                                return;
+                              }
+                              void archiveCmsContent(token, row.id, countryCode).then(() => void load());
+                            }}
+                          >
+                            Archive
+                          </Button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
     </div>
   );

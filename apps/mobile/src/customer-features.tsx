@@ -43,6 +43,7 @@ import {
   fetchAppointment,
   fetchAppointments,
   fetchCareDoctors,
+  fetchPublicCareDoctors,
   fetchCommerceEligibility,
   fetchDoctorSlots,
   fetchPrescription,
@@ -50,6 +51,11 @@ import {
   fetchRefillEligibility,
   fetchRefillRequests,
   cancelRefillRequest,
+  cancelRxSubscription,
+  enableRxSubscription,
+  fetchCustomerSubscriptions,
+  fetchRxSubscription,
+  pauseRxSubscription,
   refillEligibilityLabel,
   requestRefill,
   rescheduleAppointment,
@@ -61,19 +67,43 @@ import {
   type Prescription,
   type RefillEligibility,
   type RefillRequest,
+  type RxSubscriptionListItem,
   type RxSubscriptionView,
 } from './care-api';
+import {
+  activeSubscriptions,
+  canCancelSubscription,
+  canEnableSubscription,
+  canPauseSubscription,
+  formatNextReminderDate,
+  openRefillRequests,
+  refillRequestStatusLabel,
+  rxSubscriptionStatusLabel,
+  subscriptionModeLabel,
+  subscriptionSummaryLine,
+} from './refill-subscription-ui';
 import { newIdempotencyKey } from './commerce-api';
 import { NativeConsultVideoPanel } from './consult-panel';
+import {
+  NativeDoctorCard,
+  NativeFilterChip,
+  NativeGuestAuthCard,
+  NativeListRow,
+  NativeListSection,
+  NativePageHeader,
+  formatConsultWhen,
+} from './native-screens';
 import {
   cancelLabBooking,
   createLabBooking,
   fetchLabBooking,
   fetchLabBookingCollection,
   fetchLabReport,
+  fetchLabReportStatus,
   fetchPhysicalReportEligibility,
   fetchPhysicalReportStatus,
   requestPhysicalReport,
+  cancelPhysicalReport,
   type PhysicalReportEligibility,
   type PhysicalReportStatus,
   type LabCustomerReport,
@@ -81,7 +111,9 @@ import {
   fetchLabCatalog,
   fetchLabCatalogItem,
   fetchLabSlots,
+  fetchPopularHealthPackages,
   payLabBooking,
+  type HealthPackageCard,
   type LabBooking,
   type LabBookingCollection,
   type LabCatalogItem,
@@ -107,27 +139,100 @@ import {
   imagingBookingDraftError,
   imagingPaymentRetryable,
   payImagingBooking,
+  imagingProgressCaptions,
   type ImagingBooking,
   type ImagingCatalogItem,
   type ImagingCustomerReport,
   type ImagingPhysicalReportEligibility,
   type ImagingPhysicalReportStatus,
   type ImagingPreparation,
+  type ImagingProgress,
   type ImagingReportStatus,
 } from './imaging-api';
 import type { ViewState } from './navigation';
-
-const CARE_COUNTRY = 'DQ';
-const LAB_COUNTRY = 'XX';
-const IMAGING_COUNTRY = 'XX';
+import { appointmentLifecycleSummary, appointmentStatusLabel } from './appointment-status-labels';
 
 const CANCELLABLE_REFILL_STATUSES = new Set(['REQUESTED', 'PENDING_REAUTH']);
 
-function subscriptionStatusLabel(subscription: RxSubscriptionView | null | undefined): string {
-  if (!subscription?.available) {
-    return 'UNAVAILABLE';
+function RxSubscriptionPanel({
+  ctx,
+  prescriptionId,
+}: {
+  ctx: FeatureCtx;
+  prescriptionId: string;
+}) {
+  const [subscription, setSubscription] = useState<RxSubscriptionView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const result = await fetchRxSubscription({ token: ctx.token, id: prescriptionId, onUnauthorized: ctx.onUnauthorized });
+    if (result.ok) {
+      setSubscription(result.data);
+    } else {
+      setSubscription(null);
+      setError(result.error || 'Could not load subscription.');
+    }
+    setLoading(false);
+  }, [ctx, prescriptionId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const mutate = useCallback(
+    async (action: 'enable' | 'pause' | 'cancel') => {
+      setBusy(true);
+      setError(null);
+      const fn =
+        action === 'enable'
+          ? enableRxSubscription
+          : action === 'pause'
+            ? pauseRxSubscription
+            : cancelRxSubscription;
+      const result = await fn({ token: ctx.token, id: prescriptionId, onUnauthorized: ctx.onUnauthorized });
+      if (result.ok) {
+        setSubscription(result.data);
+      } else {
+        setError(result.error || 'Could not update subscription.');
+      }
+      setBusy(false);
+    },
+    [ctx, prescriptionId],
+  );
+
+  if (loading) {
+    return <NativeLoadingState title="Loading refill reminders" />;
   }
-  return subscription.status === 'DISABLED' || !subscription.auto_execute_enabled ? 'OFF' : subscription.status;
+  if (!subscription) {
+    return error ? <NativeText variant="caption">{error}</NativeText> : null;
+  }
+
+  const nextReminder = formatNextReminderDate(subscription.next_attempt_at);
+
+  return (
+    <View style={{ gap: 8 }}>
+      <NativeText variant="caption">{`${rxSubscriptionStatusLabel(subscription.status)} · ${subscriptionModeLabel(subscription)}`}</NativeText>
+      <NativeText variant="caption">{subscriptionSummaryLine(subscription)}</NativeText>
+      {nextReminder && subscription.status === 'ACTIVE' ? (
+        <NativeText variant="caption">{`Next reminder: ${nextReminder}`}</NativeText>
+      ) : null}
+      <NativeText variant="caption">Auto-payment and dispense stay off — you approve each refill.</NativeText>
+      {error ? <NativeText variant="caption">{error}</NativeText> : null}
+      {!busy && canEnableSubscription(subscription) ? (
+        <NativeButton label="Turn on reminders" onPress={() => void mutate('enable')} />
+      ) : null}
+      {!busy && canPauseSubscription(subscription) ? (
+        <NativeButton label="Pause reminders" variant="secondary" onPress={() => void mutate('pause')} />
+      ) : null}
+      {!busy && canCancelSubscription(subscription) ? (
+        <NativeButton label="Cancel subscription" variant="secondary" onPress={() => void mutate('cancel')} />
+      ) : null}
+    </View>
+  );
 }
 
 export type FeatureCtx = {
@@ -137,6 +242,7 @@ export type FeatureCtx = {
   setViewState: (state: ViewState) => void;
   onBack: () => void;
   signOut: () => void;
+  country: string;
 };
 
 function FeatureStates({ viewState, onRetry }: { viewState: ViewState; onRetry?: () => void }) {
@@ -190,7 +296,7 @@ export function PrivacyScreen({ ctx }: { ctx: FeatureCtx }) {
 export function ConsentScreen({ ctx }: { ctx: FeatureCtx }) {
   const [grants, setGrants] = useState<ConsentGrant[]>([]);
   const [doctors, setDoctors] = useState<CareDoctor[]>([]);
-  const [countryCode, setCountryCode] = useState(CARE_COUNTRY);
+  const countryCode = ctx.country;
   const [partnerId, setPartnerId] = useState('');
   const [purpose, setPurpose] = useState('consultation');
   const [consentScopes, setConsentScopes] = useState<string[]>(
@@ -240,7 +346,7 @@ export function ConsentScreen({ ctx }: { ctx: FeatureCtx }) {
           {policyClosed ? (
             <NativeText variant="caption">Clinical services unavailable for this country. Consent cannot be granted.</NativeText>
           ) : null}
-          <NativeInput label="Country code" value={countryCode} onChangeText={setCountryCode} />
+          <NativeText variant="caption">{`Market: ${countryCode}`}</NativeText>
           <NativeButton label="Reload doctors" variant="secondary" onPress={() => void load()} />
           {doctors.length ? (
             <NativeCard>
@@ -624,21 +730,25 @@ export function ProfileEditScreen({ ctx }: { ctx: FeatureCtx }) {
 
 export function DoctorsScreen({
   ctx,
-  country,
   onBooked,
+  onNeedAuth,
 }: {
   ctx: FeatureCtx;
-  country: string;
   onBooked: () => void;
+  onNeedAuth: () => void;
 }) {
+  const country = ctx.country;
   const [doctors, setDoctors] = useState<DirectoryDoctor[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [slots, setSlots] = useState<DoctorSlot[]>([]);
+  const [specialty, setSpecialty] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     ctx.setViewState('loading');
-    const result = await fetchCareDoctors({ token: ctx.token, onUnauthorized: ctx.onUnauthorized, country });
+    const result = ctx.token
+      ? await fetchCareDoctors({ token: ctx.token, onUnauthorized: ctx.onUnauthorized, country })
+      : await fetchPublicCareDoctors(country);
     if (!applyApiResult(result, {
       onOk: (data) => setDoctors(data.doctors ?? []),
       onUnauthorized: ctx.onUnauthorized,
@@ -654,6 +764,10 @@ export function DoctorsScreen({
   }, [load]);
 
   async function loadSlots(profileId: string) {
+    if (!ctx.token) {
+      onNeedAuth();
+      return;
+    }
     ctx.setViewState('loading');
     const from = new Date().toISOString();
     const to = new Date(Date.now() + 7 * 86400_000).toISOString();
@@ -678,38 +792,72 @@ export function DoctorsScreen({
     ctx.setViewState('idle');
   }
 
+  const chips = ['All', 'General Medicine', 'Dermatologist', 'Pediatrician', 'Gynecologist', 'Cardiologist'];
+  const visible = specialty
+    ? doctors.filter((doc) => (doc.specialties ?? []).some((row) => row.toLowerCase().includes(specialty.toLowerCase())))
+    : doctors;
+  const selected = doctors.find((doc) => doc.profile_id === selectedId);
+
   return (
     <View style={{ gap: 12 }}>
-      <NativeText variant="h2">Doctors</NativeText>
+      <NativePageHeader
+        title="Consult Doctors"
+        subtitle="Video or clinic visits with verified doctors. Booking needs an account."
+      />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {chips.map((chip) => {
+          const active = (chip === 'All' && !specialty) || specialty === chip;
+          return (
+            <NativeFilterChip
+              key={chip}
+              label={chip}
+              active={active}
+              onPress={() => setSpecialty(chip === 'All' ? '' : chip)}
+            />
+          );
+        })}
+      </View>
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
       {error ? <NativeText>{error}</NativeText> : null}
-      {ctx.viewState === 'idle' && doctors.length === 0 ? (
-        <NativeEmptyState title="No doctors listed" description="Country policy may keep discovery closed." />
+      {ctx.viewState === 'idle' && visible.length === 0 ? (
+        <NativeEmptyState title="No doctors listed" description="Try another specialty, or check back for this country." />
       ) : null}
       {ctx.viewState === 'idle'
-        ? doctors.map((doc) => (
-            <View key={doc.profile_id}>
-              <NativeCard>
-                <NativeText>{doc.display_name}</NativeText>
-                <NativeButton label="View slots" variant="secondary" onPress={() => void loadSlots(doc.profile_id)} />
-              </NativeCard>
-            </View>
+        ? visible.map((doc) => (
+            <NativeDoctorCard
+              key={doc.profile_id}
+              name={doc.display_name}
+              specialty={(doc.specialties ?? []).join(' · ')}
+              online={Boolean(doc.online_capable)}
+              actionLabel="Book Appointment"
+              onPress={() => void loadSlots(doc.profile_id)}
+            />
           ))
         : null}
-      {ctx.viewState === 'idle' && selectedId
-        ? slots.map((slot) => (
-            <View key={slot.starts_at}>
-              <NativeButton
-                label={`Book ${slot.starts_at}`}
-                variant="secondary"
+      {ctx.viewState === 'idle' && selectedId ? (
+        <NativeListSection title={selected ? `Times for ${selected.display_name}` : 'Available times'}>
+          {slots.length === 0 ? (
+            <NativeText variant="caption" style={{ padding: 14 }}>
+              No open slots in the next 7 days.
+            </NativeText>
+          ) : (
+            slots.map((slot) => (
+              <NativeListRow
+                key={slot.starts_at}
+                label={formatConsultWhen(slot.starts_at)}
+                hint={selected?.online_capable ? 'Video consult' : 'In-clinic visit'}
                 onPress={() => {
+                  if (!ctx.token) {
+                    onNeedAuth();
+                    return;
+                  }
                   void bookAppointment({
                     token: ctx.token,
                     onUnauthorized: ctx.onUnauthorized,
                     doctor_profile_id: selectedId,
                     country_code: country,
                     starts_at: slot.starts_at,
-                    type: 'IN_PERSON',
+                    type: selected?.online_capable ? 'VIDEO' : 'IN_PERSON',
                   }).then((result) => {
                     if (result.ok) {
                       onBooked();
@@ -722,9 +870,10 @@ export function DoctorsScreen({
                   });
                 }}
               />
-            </View>
-          ))
-        : null}
+            ))
+          )}
+        </NativeListSection>
+      ) : null}
     </View>
   );
 }
@@ -757,31 +906,26 @@ export function AppointmentsListScreen({
 
   return (
     <View style={{ gap: 12 }}>
-      <NativeText variant="h2">Appointments</NativeText>
+      <NativePageHeader title="Appointments" subtitle="Upcoming and past consults." />
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
       {ctx.viewState === 'idle' && rows.length === 0 ? (
-        <NativeEmptyState title="No appointments" description="Book a doctor to see upcoming visits." />
+        <NativeEmptyState title="No appointments yet" description="Book a doctor from Consult to see visits here." />
       ) : null}
-      {ctx.viewState === 'idle'
-        ? rows.map((row) => (
-            <View key={row.id}>
-              <NativeCard>
-                <NativeText>{row.doctor_display_name ?? 'Doctor'}</NativeText>
-                <NativeText variant="caption">{`${row.starts_at ?? '—'} · ${row.status}`}</NativeText>
-                <NativeButton label="Details" variant="secondary" onPress={() => onOpen(row.id)} />
-                <NativeButton
-                  label="Cancel"
-                  variant="secondary"
-                  onPress={() => {
-                    void cancelAppointment({ token: ctx.token, onUnauthorized: ctx.onUnauthorized, id: row.id }).then(
-                      () => void load(),
-                    );
-                  }}
-                />
-              </NativeCard>
-            </View>
-          ))
-        : null}
+      {ctx.viewState === 'idle' ? (
+        <NativeListSection title="Your visits">
+          {rows.map((row) => {
+            const lifecycle = appointmentLifecycleSummary({ status: row.status, starts_at: row.starts_at });
+            return (
+              <NativeListRow
+                key={row.id}
+                label={row.doctor_display_name ?? 'Doctor'}
+                hint={`${lifecycle.headline} · ${formatConsultWhen(row.starts_at)}`}
+                onPress={() => onOpen(row.id)}
+              />
+            );
+          })}
+        </NativeListSection>
+      ) : null}
     </View>
   );
 }
@@ -818,11 +962,24 @@ export function AppointmentDetailScreen({
   return (
     <View style={{ gap: 12 }}>
       <NativeButton label="Back" variant="secondary" onPress={onBack} />
-      <NativeText variant="h2">Appointment</NativeText>
+      <NativePageHeader title="Appointment" subtitle={row ? formatConsultWhen(row.starts_at) : undefined} />
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
       {ctx.viewState === 'idle' && row ? (
         <NativeCard>
-          <NativeText>{row.status}</NativeText>
+          {(() => {
+            const lifecycle = appointmentLifecycleSummary({
+              status: row.status,
+              starts_at: row.starts_at,
+              encounter_status: row.encounter?.status,
+            });
+            return (
+              <>
+                <NativeText>{lifecycle.headline}</NativeText>
+                {lifecycle.detail ? <NativeText variant="caption">{lifecycle.detail}</NativeText> : null}
+                <NativeText variant="caption">{appointmentStatusLabel(row.status)}</NativeText>
+              </>
+            );
+          })()}
           <NativeText variant="caption">{`${row.starts_at ?? '—'} – ${row.ends_at ?? '—'}`}</NativeText>
           <NativeText variant="caption">{`Encounter: ${row.encounter?.status ?? 'none'}`}</NativeText>
           <NativeButton
@@ -868,9 +1025,11 @@ export function AppointmentDetailScreen({
 export function PrescriptionsListScreen({
   ctx,
   onOpen,
+  onOpenSubscriptions,
 }: {
   ctx: FeatureCtx;
   onOpen: (id: string) => void;
+  onOpenSubscriptions?: () => void;
 }) {
   const [rows, setRows] = useState<Prescription[]>([]);
 
@@ -893,10 +1052,10 @@ export function PrescriptionsListScreen({
 
   return (
     <View style={{ gap: 12 }}>
-      <NativeText variant="h2">Prescriptions</NativeText>
-      <NativeText variant="caption">
-        Read-only. Drafts are not shown. You cannot edit clinical instructions.
-      </NativeText>
+      <NativePageHeader title="Prescriptions" subtitle="Issued Rx only — drafts and clinical edits stay with your doctor." />
+      {onOpenSubscriptions ? (
+        <NativeButton label="Medicine subscriptions" variant="secondary" onPress={onOpenSubscriptions} />
+      ) : null}
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
       {ctx.viewState === 'idle' && rows.length === 0 ? (
         <NativeEmptyState title="No prescriptions" description="Issued prescriptions from care visits appear here." />
@@ -912,6 +1071,80 @@ export function PrescriptionsListScreen({
             </View>
           ))
         : null}
+    </View>
+  );
+}
+
+export function SubscriptionsListScreen({
+  ctx,
+  onOpenPrescription,
+}: {
+  ctx: FeatureCtx;
+  onOpenPrescription: (id: string) => void;
+}) {
+  const [subscriptions, setSubscriptions] = useState<RxSubscriptionListItem[]>([]);
+  const [refillRequests, setRefillRequests] = useState<RefillRequest[]>([]);
+
+  const load = useCallback(async () => {
+    ctx.setViewState('loading');
+    const [subsResult, refillResult] = await Promise.all([
+      fetchCustomerSubscriptions({ token: ctx.token, onUnauthorized: ctx.onUnauthorized }),
+      fetchRefillRequests({ token: ctx.token, onUnauthorized: ctx.onUnauthorized }),
+    ]);
+    if (!subsResult.ok || !refillResult.ok) {
+      if (subsResult.status === 401 || refillResult.status === 401) {
+        ctx.onUnauthorized();
+        return;
+      }
+      ctx.setViewState('network');
+      return;
+    }
+    setSubscriptions(subsResult.data.subscriptions ?? []);
+    setRefillRequests(refillResult.data.requests ?? []);
+    ctx.setViewState('idle');
+  }, [ctx]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const openRequests = openRefillRequests(refillRequests);
+  const activeSubs = activeSubscriptions(subscriptions);
+
+  return (
+    <View style={{ gap: 12 }}>
+      <NativeText variant="h2">Medicine subscriptions</NativeText>
+      <NativeText variant="caption">
+        Refill reminders like 1mg — automatic payment stays off; you approve each refill.
+      </NativeText>
+      <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
+      {ctx.viewState === 'idle' ? (
+        <>
+          <NativeText variant="caption">{`Open refill requests: ${openRequests.length}`}</NativeText>
+          {openRequests.map((row) => (
+            <NativeCard key={row.id}>
+              <NativeText>{refillRequestStatusLabel(row.status)}</NativeText>
+              <NativeText variant="caption">{row.prescription_id.slice(0, 8)}</NativeText>
+              <NativeButton label="Open prescription" variant="secondary" onPress={() => onOpenPrescription(row.prescription_id)} />
+            </NativeCard>
+          ))}
+          <NativeText variant="caption">{`Active reminders: ${activeSubs.length}`}</NativeText>
+          {activeSubs.map((row) => (
+            <NativeCard key={row.prescription_id}>
+              <NativeText>{row.medicine_label ?? `Rx v${row.prescription_version_number ?? '—'}`}</NativeText>
+              <NativeText variant="caption">{rxSubscriptionStatusLabel(row.status)}</NativeText>
+              <NativeText variant="caption">{subscriptionSummaryLine(row)}</NativeText>
+              <NativeButton label="Manage" variant="secondary" onPress={() => onOpenPrescription(row.prescription_id)} />
+            </NativeCard>
+          ))}
+          {activeSubs.length === 0 && openRequests.length === 0 ? (
+            <NativeEmptyState
+              title="No subscriptions yet"
+              description="Open a prescription and turn on refill reminders."
+            />
+          ) : null}
+        </>
+      ) : null}
     </View>
   );
 }
@@ -1181,9 +1414,17 @@ export function PrescriptionDetailScreen({
 
           {row.status !== 'DRAFT' && row.status !== 'CANCELLED' ? (
             <NativeCard>
+              <NativeText variant="h2">Refill reminders</NativeText>
+              <NativeText variant="caption">Get notified when it is time to reorder. Auto-payment stays off.</NativeText>
+              <RxSubscriptionPanel ctx={ctx} prescriptionId={prescriptionId} />
+            </NativeCard>
+          ) : null}
+
+          {row.status !== 'DRAFT' && row.status !== 'CANCELLED' ? (
+            <NativeCard>
               <NativeText variant="h2">Refill request</NativeText>
               <NativeText variant="caption">
-                Fail-closed refill with doctor re-authorization. Automatic subscription refill stays off.
+                Fail-closed refill with doctor re-authorization.
               </NativeText>
               {refillLoading ? <NativeLoadingState title="Checking refill eligibility" /> : null}
               {!refillLoading && refillEligibility ? (
@@ -1194,17 +1435,6 @@ export function PrescriptionDetailScreen({
                       {`Open request: ${refillEligibility.open_request_status ?? '—'} (${refillEligibility.open_request_id.slice(0, 8)})`}
                     </NativeText>
                   ) : null}
-                  <NativeText variant="caption">{`Automatic refill: OFF`}</NativeText>
-                  <NativeText variant="caption">
-                    {`Subscription: ${subscriptionStatusLabel(refillEligibility.subscription)} · auto-execute: OFF`}
-                  </NativeText>
-                  {refillEligibility.subscription?.note ? (
-                    <NativeText variant="caption">{refillEligibility.subscription.note}</NativeText>
-                  ) : (
-                    <NativeText variant="caption">
-                      Automatic refill / subscription is unavailable unless explicitly configured.
-                    </NativeText>
-                  )}
                   {refillBusy ? <NativeLoadingState title="Updating refill request" /> : null}
                   {refillError ? <NativeText variant="caption">{refillError}</NativeText> : null}
                   {!refillBusy && refillEligibility.eligible && !refillEligibility.open_request_id ? (
@@ -1280,30 +1510,54 @@ export function PrescriptionDetailScreen({
 
 export function AccountHubScreen({
   ctx,
-  country,
   onNavigate,
+  onSignIn,
+  onSignUp,
 }: {
   ctx: FeatureCtx;
   country: string;
+  onSignIn: () => void;
+  onSignUp: () => void;
   onNavigate: (
     screen:
       | 'privacy'
       | 'consent'
       | 'preferences'
+      | 'inbox'
       | 'support'
       | 'addresses'
+      | 'family'
       | 'profile-edit'
       | 'wishlist'
+      | 'recently-viewed'
+      | 'reminders'
       | 'lab'
       | 'lab-bookings'
       | 'imaging'
       | 'imaging-bookings'
-      | 'health-home',
+      | 'health-home'
+      | 'appointments'
+      | 'prescriptions'
+      | 'doctors'
+      | 'orders'
+      | 'buy-again'
+      | 'stores'
+      | 'shipments'
+      | 'loyalty'
+      | 'care-plan'
+      | 'deals'
+      | 'track-order'
+      | 'help-home',
   ) => void;
 }) {
   const [summary, setSummary] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!ctx.token) {
+      setSummary(null);
+      ctx.setViewState('idle');
+      return;
+    }
     ctx.setViewState('loading');
     const profile = await fetchProfile({ token: ctx.token, onUnauthorized: ctx.onUnauthorized });
     if (!profile.ok) {
@@ -1315,7 +1569,7 @@ export function AccountHubScreen({
       return;
     }
     const email = profile.data.identifiers.find((row) => row.type === 'EMAIL')?.value ?? '—';
-    setSummary(`Signed in as ${email}`);
+    setSummary(email);
     ctx.setViewState('idle');
   }, [ctx]);
 
@@ -1323,19 +1577,97 @@ export function AccountHubScreen({
     void load();
   }, [load]);
 
+  if (!ctx.token) {
+    return (
+      <View style={{ gap: 16 }}>
+        <View style={{ alignItems: 'center', gap: 8, paddingVertical: 12 }}>
+          <View
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: 36,
+              backgroundColor: '#E8EEF2',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <NativeText variant="h2">👤</NativeText>
+          </View>
+          <NativeText variant="h2">Guest</NativeText>
+          <NativeText variant="caption">Sign in for orders, consults, and records.</NativeText>
+        </View>
+        <NativeGuestAuthCard onSignIn={onSignIn} onSignUp={onSignUp} />
+        <NativeListSection title="Browse">
+          <NativeListRow label="Consult a doctor" hint="See doctors without signing in" onPress={() => onNavigate('doctors')} />
+          <NativeListRow label="Lab tests" hint="Packages and home collection" onPress={() => onNavigate('lab')} />
+          <NativeListRow label="Track an order" hint="Guest tracking" onPress={() => onNavigate('track-order')} />
+          <NativeListRow label="Offers" hint="Deals for your country" onPress={() => onNavigate('deals')} />
+          <NativeListRow label="Help & Support" hint="Guides and FAQs" onPress={() => onNavigate('help-home')} />
+        </NativeListSection>
+      </View>
+    );
+  }
+
   return (
-    <View style={{ gap: 12 }}>
-      <NativeText variant="h2">Account</NativeText>
+    <View style={{ gap: 16 }}>
+      <View style={{ alignItems: 'center', gap: 8, paddingVertical: 8 }}>
+        <View
+          style={{
+            width: 80,
+            height: 80,
+            borderRadius: 40,
+            backgroundColor: '#1A365D',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <NativeText variant="h2" style={{ color: '#fff' }}>
+            {(summary?.[0] ?? 'U').toUpperCase()}
+          </NativeText>
+        </View>
+        <NativeText variant="h2">{summary ?? 'Your profile'}</NativeText>
+        <NativeButton label="Edit Profile" variant="secondary" onPress={() => onNavigate('profile-edit')} />
+      </View>
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
-      {ctx.viewState === 'idle' && summary ? <NativeText>{summary}</NativeText> : null}
       {ctx.viewState === 'idle' ? (
         <>
-          {(['privacy', 'consent', 'preferences', 'wishlist', 'support', 'addresses', 'profile-edit', 'lab', 'lab-bookings', 'imaging', 'imaging-bookings', 'health-home'] as const).map(
-            (item) => (
-            <View key={item}>
-              <NativeButton label={item.replace('-', ' ')} variant="secondary" onPress={() => onNavigate(item)} />
-            </View>
-          ))}
+          <NativeListSection title="My Account">
+            <NativeListRow label="Orders" hint="History and status" onPress={() => onNavigate('orders')} />
+            <NativeListRow label="Buy again" hint="Repeat a past order" onPress={() => onNavigate('buy-again')} />
+            <NativeListRow label="Addresses" onPress={() => onNavigate('addresses')} />
+            <NativeListRow label="Family members" onPress={() => onNavigate('family')} />
+            <NativeListRow label="Wishlist" onPress={() => onNavigate('wishlist')} />
+          </NativeListSection>
+          <NativeListSection title="My Health Records">
+            <NativeListRow label="Health records" hint="Reports and files" onPress={() => onNavigate('health-home')} />
+            <NativeListRow label="Prescriptions" hint="Refills and Rx" onPress={() => onNavigate('prescriptions')} />
+            <NativeListRow label="Appointments" hint="Upcoming visits" onPress={() => onNavigate('appointments')} />
+            <NativeListRow label="Consult a doctor" hint="Video or clinic" onPress={() => onNavigate('doctors')} />
+          </NativeListSection>
+          <NativeListSection title="Labs & scans">
+            <NativeListRow label="Lab tests" hint="Book home collection" onPress={() => onNavigate('lab')} />
+            <NativeListRow label="Lab reports" hint="Past bookings" onPress={() => onNavigate('lab-bookings')} />
+            <NativeListRow label="Imaging & Scans" hint="Book and view reports" onPress={() => onNavigate('imaging')} />
+          </NativeListSection>
+          <NativeListSection title="Payment Methods">
+            <NativeListRow label="Rewards" onPress={() => onNavigate('loyalty')} />
+            <NativeListRow label="Care Plan" onPress={() => onNavigate('care-plan')} />
+            <NativeListRow label="Shipments" hint="Track delivery" onPress={() => onNavigate('shipments')} />
+          </NativeListSection>
+          <NativeListSection title="Settings">
+            <NativeListRow label="Inbox" hint="Notifications" onPress={() => onNavigate('inbox')} />
+            <NativeListRow label="Medication reminders" onPress={() => onNavigate('reminders')} />
+            <NativeListRow label="Alerts" onPress={() => onNavigate('preferences')} />
+            <NativeListRow label="Privacy & security" onPress={() => onNavigate('privacy')} />
+            <NativeListRow label="Consent" onPress={() => onNavigate('consent')} />
+          </NativeListSection>
+          <NativeListSection title="Help & Support">
+            <NativeListRow label="Help Center" onPress={() => onNavigate('help-home')} />
+            <NativeListRow label="Support tickets" onPress={() => onNavigate('support')} />
+            <NativeListRow label="Offers" onPress={() => onNavigate('deals')} />
+            <NativeListRow label="Track order" onPress={() => onNavigate('track-order')} />
+            <NativeListRow label="Recently viewed" onPress={() => onNavigate('recently-viewed')} />
+          </NativeListSection>
         </>
       ) : null}
     </View>
@@ -1345,13 +1677,21 @@ export function AccountHubScreen({
 export function LabBrowseScreen({
   ctx,
   onOpenBookings,
+  onOpenPrograms,
+  onNeedAuth,
+  onSignUp,
 }: {
   ctx: FeatureCtx;
   onOpenBookings: () => void;
+  onOpenPrograms?: () => void;
+  onNeedAuth: () => void;
+  onSignUp: () => void;
 }) {
   const [rows, setRows] = useState<LabCatalogItem[]>([]);
+  const [packages, setPackages] = useState<HealthPackageCard[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [selected, setSelected] = useState<LabCatalogItem | null>(null);
+  const [offerId, setOfferId] = useState<string | null>(null);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [slot, setSlot] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1359,12 +1699,23 @@ export function LabBrowseScreen({
 
   const load = useCallback(async () => {
     ctx.setViewState('loading');
-    const result = await fetchLabCatalog({
+    const packagesResult = await fetchPopularHealthPackages(ctx.country);
+    if (packagesResult.ok) {
+      setPackages(packagesResult.data.popular_packages ?? []);
+    }
+    if (!ctx.token) {
+      setEnabled(true);
+      setRows([]);
+      setMessage(null);
+      ctx.setViewState(packagesResult.ok ? 'idle' : 'network');
+      return;
+    }
+    const catalogResult = await fetchLabCatalog({
       token: ctx.token,
       onUnauthorized: ctx.onUnauthorized,
-      country: LAB_COUNTRY,
+      country: ctx.country,
     });
-    applyApiResult(result, {
+    applyApiResult(catalogResult, {
       onOk: (data) => {
         setEnabled(data.country_enabled);
         setRows(data.data);
@@ -1373,7 +1724,7 @@ export function LabBrowseScreen({
       onUnauthorized: ctx.onUnauthorized,
       setViewState: ctx.setViewState,
     });
-    if (result.ok) {
+    if (catalogResult.ok) {
       ctx.setViewState('idle');
     }
   }, [ctx]);
@@ -1385,14 +1736,14 @@ export function LabBrowseScreen({
   async function openDetail(slug: string) {
     ctx.setViewState('loading');
     const [detail, addr, slots] = await Promise.all([
-      fetchLabCatalogItem({ token: ctx.token, onUnauthorized: ctx.onUnauthorized, slug, country: LAB_COUNTRY }),
+      fetchLabCatalogItem({ token: ctx.token, onUnauthorized: ctx.onUnauthorized, slug, country: ctx.country }),
       fetchAddresses({ token: ctx.token, onUnauthorized: ctx.onUnauthorized }),
       fetchLabSlots({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         labOrgId: '',
         collectionMode: 'HOME',
-        country: LAB_COUNTRY,
+        country: ctx.country,
       }).catch(() => null),
     ]);
     void slots;
@@ -1405,13 +1756,14 @@ export function LabBrowseScreen({
       return;
     }
     const offer = detail.data.offers[0];
+    setOfferId(offer?.id ?? null);
     if (offer) {
       const slotRes = await fetchLabSlots({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         labOrgId: offer.seller_org_id,
         collectionMode: 'HOME',
-        country: LAB_COUNTRY,
+        country: ctx.country,
       });
       if (slotRes.ok) {
         setSlot(slotRes.data.data[0]?.starts_at ?? '');
@@ -1425,13 +1777,13 @@ export function LabBrowseScreen({
   }
 
   async function bookPay() {
-    if (!selected?.offers[0] || !addresses[0] || !slot) {
+    const offer = selected?.offers.find((row) => row.id === offerId) ?? selected?.offers[0];
+    if (!offer || !addresses[0] || !slot) {
       setMessage('Address and slot are required for home collection.');
       return;
     }
     setBusy(true);
     setMessage(null);
-    const offer = selected.offers[0];
     const booking = await createLabBooking({
       token: ctx.token,
       onUnauthorized: ctx.onUnauthorized,
@@ -1442,7 +1794,7 @@ export function LabBrowseScreen({
         lab_org_id: offer.seller_org_id,
         customer_address_id: addresses[0].id,
         slot_starts_at: slot,
-        country: LAB_COUNTRY,
+        country: ctx.country,
       },
     });
     if (!booking.ok) {
@@ -1475,9 +1827,32 @@ export function LabBrowseScreen({
 
   return (
     <View style={{ gap: 12 }}>
-      <NativeText variant="h2">Lab tests</NativeText>
-      <NativeText variant="caption">Commercial catalog only — not medical advice. Sandbox pay only.</NativeText>
-      <NativeButton label="My lab bookings" variant="secondary" onPress={onOpenBookings} />
+      <NativePageHeader title="Lab Tests" subtitle="Home collection packages. Booking needs an account." />
+      {ctx.token ? (
+        <NativeListRow label="My lab bookings" hint="Reports and collection status" onPress={onOpenBookings} />
+      ) : (
+        <NativeGuestAuthCard
+          title="Book tests with an account"
+          body="Browse packages here. Sign in or create an account to schedule home collection."
+          onSignIn={onNeedAuth}
+          onSignUp={onSignUp}
+        />
+      )}
+      {onOpenPrograms ? (
+        <NativeButton label="Speciality programs" variant="secondary" onPress={onOpenPrograms} />
+      ) : null}
+      {packages.length ? (
+        <NativeCard>
+          <NativeText variant="h2">Full body checkups</NativeText>
+          {packages.slice(0, 4).map((row) => (
+            <View key={row.id} style={{ gap: 6, marginTop: 10 }}>
+              <NativeText variant="h3">{row.name}</NativeText>
+              <NativeText variant="caption">{`₹${row.price} · ${row.tests_count} tests included`}</NativeText>
+              <NativeButton label="Book Now" onPress={onOpenPrograms ?? (() => undefined)} />
+            </View>
+          ))}
+        </NativeCard>
+      ) : null}
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
       {ctx.viewState === 'idle' && !enabled ? (
         <NativeEmptyState title="Lab unavailable" description={message ?? 'Country pack disables lab services.'} />
@@ -1489,7 +1864,7 @@ export function LabBrowseScreen({
         ? rows.map((row) => (
             <View key={row.id}>
               <NativeCard>
-                <NativeText>{row.title}</NativeText>
+                <NativeText variant="h3">{row.title}</NativeText>
                 <NativeText variant="caption">
                   {`${row.offers[0]?.seller_display_name ?? 'Lab'} · ${
                     row.offers[0]?.price
@@ -1497,7 +1872,8 @@ export function LabBrowseScreen({
                       : 'Price n/a'
                   }`}
                 </NativeText>
-                <NativeButton label="Book" variant="secondary" onPress={() => void openDetail(row.slug)} />
+                <NativeText variant="caption">Includes listed tests for this commercial package.</NativeText>
+                <NativeButton label="Book Now" onPress={() => void openDetail(row.slug)} />
               </NativeCard>
             </View>
           ))
@@ -1506,6 +1882,31 @@ export function LabBrowseScreen({
         <NativeCard>
           <NativeText variant="h2">{selected.title}</NativeText>
           <NativeText variant="caption">{selected.description || 'Commercial listing.'}</NativeText>
+          {selected.offers.length > 1
+            ? selected.offers.map((row) => (
+                <NativeButton
+                  key={row.id}
+                  label={`${row.id === offerId ? '✓ ' : ''}${row.seller_display_name} · ${
+                    row.price ? `${row.currency} ${row.price.sell_minor}` : 'Price n/a'
+                  }`}
+                  variant={row.id === offerId ? 'primary' : 'secondary'}
+                  onPress={() => {
+                    setOfferId(row.id);
+                    void fetchLabSlots({
+                      token: ctx.token,
+                      onUnauthorized: ctx.onUnauthorized,
+                      labOrgId: row.seller_org_id,
+                      collectionMode: 'HOME',
+                      country: ctx.country,
+                    }).then((slotRes) => {
+                      if (slotRes.ok) setSlot(slotRes.data.data[0]?.starts_at ?? '');
+                    });
+                  }}
+                />
+              ))
+            : (
+                <NativeText variant="caption">{selected.offers[0]?.seller_display_name ?? 'Partner lab'}</NativeText>
+              )}
           <NativeText variant="caption">
             {`Address: ${addresses[0] ? `${addresses[0].line1}, ${addresses[0].city}` : 'Add an address in Account first'}`}
           </NativeText>
@@ -1602,32 +2003,62 @@ export function LabBookingDetailScreen({
     setReportLoading(true);
     setReportError(null);
     setReport(null);
-    void fetchLabReport({
+    void fetchLabReportStatus({
       token: ctx.token,
       onUnauthorized: ctx.onUnauthorized,
       id: bookingId,
-    }).then((result) => {
-      if (result.ok) {
-        setReport(result.data);
+    }).then((statusResult) => {
+      if (!statusResult.ok) {
+        if (statusResult.kind === 'unauthorized') {
+          ctx.onUnauthorized();
+          return;
+        }
+        if (statusResult.kind === 'forbidden' || statusResult.status === 403) {
+          setReportError('forbidden');
+          return;
+        }
+        if (statusResult.status === 404) {
+          setReportError('unavailable');
+          return;
+        }
+        if (statusResult.kind === 'network' || statusResult.status === 0) {
+          setReportError('network');
+          return;
+        }
+        setReportError('generic');
         return;
       }
-      if (result.kind === 'unauthorized') {
-        ctx.onUnauthorized();
-        return;
-      }
-      if (result.kind === 'forbidden' || result.status === 403) {
-        setReportError('forbidden');
-        return;
-      }
-      if (result.status === 404) {
+      if (!statusResult.data.report_available) {
         setReportError('unavailable');
         return;
       }
-      if (result.kind === 'network' || result.status === 0) {
-        setReportError('network');
-        return;
-      }
-      setReportError('generic');
+      return fetchLabReport({
+        token: ctx.token,
+        onUnauthorized: ctx.onUnauthorized,
+        id: bookingId,
+      }).then((result) => {
+        if (result.ok) {
+          setReport(result.data);
+          return;
+        }
+        if (result.kind === 'unauthorized') {
+          ctx.onUnauthorized();
+          return;
+        }
+        if (result.kind === 'forbidden' || result.status === 403) {
+          setReportError('forbidden');
+          return;
+        }
+        if (result.status === 404) {
+          setReportError('unavailable');
+          return;
+        }
+        if (result.kind === 'network' || result.status === 0) {
+          setReportError('network');
+          return;
+        }
+        setReportError('generic');
+      });
     }).finally(() => setReportLoading(false));
   }, [bookingId, ctx]);
 
@@ -1791,6 +2222,23 @@ export function LabBookingDetailScreen({
                       {physicalStatus.failure_reason ? (
                         <NativeText variant="caption">{`Issue: ${physicalStatus.failure_reason}`}</NativeText>
                       ) : null}
+                      {physicalStatus.status === 'REQUESTED' || physicalStatus.status === 'ACCEPTED' ? (
+                        <NativeButton
+                          label="Cancel physical report"
+                          variant="secondary"
+                          onPress={() =>
+                            void cancelPhysicalReport({
+                              token: ctx.token,
+                              onUnauthorized: ctx.onUnauthorized,
+                              id: bookingId,
+                            }).then((result) => {
+                              if (result.ok) {
+                                setPhysicalStatus(result.data);
+                              }
+                            })
+                          }
+                        />
+                      ) : null}
                     </>
                   ) : null}
                 </NativeCard>
@@ -1840,7 +2288,7 @@ export function ImagingBrowseScreen({
     const result = await fetchImagingCatalog({
       token: ctx.token,
       onUnauthorized: ctx.onUnauthorized,
-      country: IMAGING_COUNTRY,
+      country: ctx.country,
     });
     applyApiResult(result, {
       onOk: (data) => {
@@ -1882,7 +2330,7 @@ export function ImagingBrowseScreen({
       token: ctx.token,
       onUnauthorized: ctx.onUnauthorized,
       slug,
-      country: IMAGING_COUNTRY,
+      country: ctx.country,
     });
     if (!detail.ok) {
       applyApiResult(detail, {
@@ -1905,20 +2353,20 @@ export function ImagingBrowseScreen({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         imagingOrgId: offer.seller_org_id,
-        country: IMAGING_COUNTRY,
+        country: ctx.country,
       }),
       fetchImagingSlots({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         imagingOrgId: offer.seller_org_id,
-        country: IMAGING_COUNTRY,
+        country: ctx.country,
       }),
       checkImagingEligibility({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         imagingOrgId: offer.seller_org_id,
         offerId: offer.id,
-        country: IMAGING_COUNTRY,
+        country: ctx.country,
       }),
     ]);
     setLocationsLoading(false);
@@ -1970,13 +2418,13 @@ export function ImagingBrowseScreen({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         imagingOrgId: offer.seller_org_id,
-        country: IMAGING_COUNTRY,
+        country: ctx.country,
       }),
       fetchImagingSlots({
         token: ctx.token,
         onUnauthorized: ctx.onUnauthorized,
         imagingOrgId: offer.seller_org_id,
-        country: IMAGING_COUNTRY,
+        country: ctx.country,
       }),
     ]);
     setLocationsLoading(false);
@@ -2036,7 +2484,7 @@ export function ImagingBrowseScreen({
         imaging_location_id: locationId,
         slot_starts_at: slot,
         slot_ends_at: slotEnd || undefined,
-        country: IMAGING_COUNTRY,
+        country: ctx.country,
         prep_acknowledged: true,
         referral_reference: referralRef.trim() || undefined,
       },
@@ -2073,8 +2521,7 @@ export function ImagingBrowseScreen({
 
   return (
     <View style={{ gap: 12 }}>
-      <NativeText variant="h2">Radiology studies</NativeText>
-      <NativeText variant="caption">Commercial catalog only — not medical advice. Sandbox pay only.</NativeText>
+      <NativePageHeader title="Imaging & Scans" subtitle="Radiology studies — commercial catalog only, not medical advice." />
       <NativeButton label="My imaging bookings" variant="secondary" onPress={onOpenBookings} />
       <FeatureStates viewState={ctx.viewState} onRetry={() => void load()} />
       {ctx.viewState === 'idle' && !enabled ? (
@@ -2087,15 +2534,31 @@ export function ImagingBrowseScreen({
         ? rows.map((row) => (
             <View key={row.id}>
               <NativeCard>
-                <NativeText>{row.title}</NativeText>
-                <NativeText variant="caption">
-                  {`${row.offers[0]?.seller_display_name ?? 'Imaging center'} · ${
-                    row.offers[0]?.price
-                      ? `${row.offers[0].currency} ${row.offers[0].price.sell_minor}`
-                      : 'Price n/a'
-                  }`}
-                </NativeText>
-                <NativeButton label="Book" variant="secondary" onPress={() => void openDetail(row.slug)} />
+                <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                  <View
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 12,
+                      backgroundColor: '#EDF2F7',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <NativeText>🩻</NativeText>
+                  </View>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <NativeText variant="h3">{row.title}</NativeText>
+                    <NativeText variant="caption">
+                      {`${row.offers[0]?.seller_display_name ?? 'Imaging center'} · ${
+                        row.offers[0]?.price
+                          ? `${row.offers[0].currency} ${row.offers[0].price.sell_minor}`
+                          : 'Price n/a'
+                      }`}
+                    </NativeText>
+                  </View>
+                </View>
+                <NativeButton label="View Report / Book" onPress={() => void openDetail(row.slug)} />
               </NativeCard>
             </View>
           ))
@@ -2313,12 +2776,7 @@ export function ImagingBookingDetailScreen({
   onBack: () => void;
 }) {
   const [row, setRow] = useState<ImagingBooking | null>(null);
-  const [progress, setProgress] = useState<{
-    progress: string;
-    note: string;
-    accession_number?: string | null;
-    study_status?: string | null;
-  } | null>(null);
+  const [progress, setProgress] = useState<ImagingProgress | null>(null);
   const [prep, setPrep] = useState<ImagingPreparation | null>(null);
   const [reportStatus, setReportStatus] = useState<ImagingReportStatus | null>(null);
   const [report, setReport] = useState<ImagingCustomerReport | null>(null);
@@ -2492,11 +2950,11 @@ export function ImagingBookingDetailScreen({
           ) : null}
           {progress ? (
             <>
-              <NativeText variant="caption">{`Progress: ${progress.progress}`}</NativeText>
-              {progress.accession_number ? (
-                <NativeText variant="caption">{`Accession: ${progress.accession_number}`}</NativeText>
-              ) : null}
-              <NativeText variant="caption">{progress.note}</NativeText>
+              {imagingProgressCaptions(progress).map((line) => (
+                <NativeText key={line} variant="caption">
+                  {line}
+                </NativeText>
+              ))}
             </>
           ) : null}
           <NativeText variant="h2">Preparation</NativeText>

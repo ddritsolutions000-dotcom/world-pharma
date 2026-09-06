@@ -8,24 +8,7 @@ import { PrismaService } from '../app/prisma.service';
 import { ProblemFilter } from '../common/problem.filter';
 import { OrganizationService } from '../partner/organization.service';
 import { applyTestIsolation } from '../test/isolate-runtime';
-
-async function signIn(
-  app: INestApplication,
-  email: string,
-  audience: 'admin' | 'customer' | 'doctor' = 'customer',
-) {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { signIn, signInAdmin, signInCustomer, provisionSuperAdmin } from '../test/sign-in';
 
 describe('application audience and partner isolation (e2e)', () => {
   let app: INestApplication;
@@ -76,15 +59,16 @@ describe('application audience and partner isolation (e2e)', () => {
   }
 
   it('keeps customer, vendor, doctor, affiliate, and company scopes from crossing', async () => {
-    const globalAdmin = await signIn(app, `topo-ga-${Date.now()}@example.com`, 'admin');
-    await attachRole(globalAdmin.personId, 'super_admin', { scope: 'platform' });
+    const globalAdmin = await provisionSuperAdmin(app, prisma, 'topo-ga');
 
-    const customer = await signIn(app, `topo-cus-${Date.now()}@example.com`);
-    const vendorA = await signIn(app, `topo-va-${Date.now()}@example.com`);
-    const vendorB = await signIn(app, `topo-vb-${Date.now()}@example.com`);
+    const customer = await signIn(app, `topo-cus-${Date.now()}@example.com`, 'customer');
+    const vendorA = await signIn(app, `topo-va-${Date.now()}@example.com`, 'customer');
+    const vendorB = await signIn(app, `topo-vb-${Date.now()}@example.com`, 'customer');
     const doctor = await signIn(app, `topo-doc-${Date.now()}@example.com`, 'doctor');
-    const affiliate = await signIn(app, `topo-aff-${Date.now()}@example.com`);
-    const countryOps = await signIn(app, `topo-ops-${Date.now()}@example.com`, 'admin');
+    const affiliate = await signIn(app, `topo-aff-${Date.now()}@example.com`, 'customer');
+    const countryOpsEmail = `topo-ops-${Date.now()}@example.com`;
+    const countryOpsCustomer = await signInCustomer(app, countryOpsEmail);
+    let countryOps = countryOpsCustomer;
 
     const orgA = await orgs.create({
       countryCode: 'XX',
@@ -126,6 +110,7 @@ describe('application audience and partner isolation (e2e)', () => {
         scope: 'country',
         countryId: country.id,
       });
+      countryOps = await signInAdmin(app, countryOpsEmail, countryOps.personId);
     }
 
     const auth = (token: string) => ({ Authorization: `Bearer ${token}` });

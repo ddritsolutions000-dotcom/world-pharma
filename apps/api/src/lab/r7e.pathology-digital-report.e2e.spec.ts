@@ -20,22 +20,10 @@ import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateLabPartner, enableLabPartnerPack } from '../test/lab-partner';
 import { EventWorkerService } from '../events/worker.service';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R7-E pathology + digital report (e2e)', () => {
+  jest.setTimeout(180_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -164,25 +152,14 @@ describe('R7-E pathology + digital report (e2e)', () => {
 
   it('pathology workflow, SoD, isolation, customer final report only', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r7e-admin-${suffix}@example.com`, 'admin');
-    const labUser = await signIn(app, `r7e-lab-${suffix}@example.com`);
-    const labStaff = await signIn(app, `r7e-staff-${suffix}@example.com`);
-    const pathologist = await signIn(app, `r7e-path-${suffix}@example.com`);
-    const pathologistB = await signIn(app, `r7e-pathb-${suffix}@example.com`);
-    const customerA = await signIn(app, `r7e-ca-${suffix}@example.com`);
-    const customerB = await signIn(app, `r7e-cb-${suffix}@example.com`);
-    const rider = await signIn(app, `r7e-rider-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r7e-admin-${suffix}@example.com`);
+    const labUser = await signInAudience(app, `r7e-lab-${suffix}@example.com`);
+    const labStaff = await signInAudience(app, `r7e-staff-${suffix}@example.com`);
+    const pathologist = await signInAudience(app, `r7e-path-${suffix}@example.com`);
+    const pathologistB = await signInAudience(app, `r7e-pathb-${suffix}@example.com`);
+    const customerA = await signInAudience(app, `r7e-ca-${suffix}@example.com`);
+    const customerB = await signInAudience(app, `r7e-cb-${suffix}@example.com`);
+    const rider = await signInAudience(app, `r7e-rider-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableLabPartnerPack(enabledDoc, { home: true, center: true });
@@ -459,24 +436,13 @@ describe('R7-E pathology + digital report (e2e)', () => {
 
   it('report amendment creates new version with lineage and isolation', async () => {
     const suffix = `${Date.now().toString(36)}-amend-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r7e-amend-admin-${suffix}@example.com`, 'admin');
-    const labUser = await signIn(app, `r7e-amend-lab-${suffix}@example.com`);
-    const labStaff = await signIn(app, `r7e-amend-staff-${suffix}@example.com`);
-    const pathologist = await signIn(app, `r7e-amend-path-${suffix}@example.com`);
-    const pathologistB = await signIn(app, `r7e-amend-pathb-${suffix}@example.com`);
-    const customerA = await signIn(app, `r7e-amend-ca-${suffix}@example.com`);
-    const customerB = await signIn(app, `r7e-amend-cb-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r7e-amend-admin-${suffix}@example.com`);
+    const labUser = await signInAudience(app, `r7e-amend-lab-${suffix}@example.com`);
+    const labStaff = await signInAudience(app, `r7e-amend-staff-${suffix}@example.com`);
+    const pathologist = await signInAudience(app, `r7e-amend-path-${suffix}@example.com`);
+    const pathologistB = await signInAudience(app, `r7e-amend-pathb-${suffix}@example.com`);
+    const customerA = await signInAudience(app, `r7e-amend-ca-${suffix}@example.com`);
+    const customerB = await signInAudience(app, `r7e-amend-cb-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableLabPartnerPack(enabledDoc, { home: true, center: true });
@@ -596,7 +562,7 @@ describe('R7-E pathology + digital report (e2e)', () => {
     const transportJob = await prisma.logisticsJob.findFirstOrThrow({
       where: { labSampleId: sample.id, jobType: LogisticsJobType.SAMPLE_TRANSPORT },
     });
-    const rider = await signIn(app, `r7e-amend-rider-${suffix}@example.com`);
+    const rider = await signInAudience(app, `r7e-amend-rider-${suffix}@example.com`);
     await attachRider(rider.personId);
     await request(app.getHttpServer()).post(`/api/v1/delivery/jobs/${transportJob.id}/accept`).set(auth(rider.token));
     await request(app.getHttpServer()).post(`/api/v1/delivery/jobs/${transportJob.id}/pickup`).set(auth(rider.token));

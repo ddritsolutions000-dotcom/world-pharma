@@ -15,7 +15,6 @@ import {
   SessionExpiredState,
   Text,
 } from '@world-pharma/ui-kit/web';
-import { CustomerShell } from './customer-shell';
 import {
   CareNavApiError,
   completeCareNavIntake,
@@ -48,8 +47,7 @@ import {
   urgencyLabel,
   type CareNavViewError,
 } from './care-nav-utils';
-
-const DEFAULT_COUNTRY = 'XX';
+import { useSelectedCountry } from './use-selected-country';
 
 type FlowStep =
   | 'entry'
@@ -296,7 +294,7 @@ function HandoffSuccessPanel({ handoff }: { handoff: CareNavHandoffResponse }) {
 
 export function CareNavigationScreen() {
   const { session, getAccessToken, signOut, expire } = useSession();
-  const [countryCode] = useState(DEFAULT_COUNTRY);
+  const { country: countryCode } = useSelectedCountry();
   const [step, setStep] = useState<FlowStep>('entry');
   const [sessionRow, setSessionRow] = useState<CareNavSession | null>(null);
   const [assessment, setAssessment] = useState<CareNavAssessment | null>(null);
@@ -562,9 +560,7 @@ export function CareNavigationScreen() {
 
   if (session.status !== 'authenticated') {
     return (
-      <CustomerShell apiReachable={true} countryLabel={countryCode}>
-        <EmptyState title="Sign in required" description="Sign in with OTP to use care navigation." />
-      </CustomerShell>
+      <EmptyState title="Sign in required" description="Sign in with OTP to use care navigation." />
     );
   }
 
@@ -573,7 +569,7 @@ export function CareNavigationScreen() {
   }
 
   return (
-    <CustomerShell apiReachable={true} countryLabel={countryCode}>
+    <>
       <Link href="/health">
         <Button variant="tertiary" size="sm">
           Back to Health
@@ -717,6 +713,6 @@ export function CareNavigationScreen() {
           action={{ label: 'Start again', onClick: resetFlow }}
         />
       ) : null}
-    </CustomerShell>
+    </>
   );
 }

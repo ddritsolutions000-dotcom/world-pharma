@@ -1,0 +1,17 @@
+.wp-portal-site {
+  min-height: 100dvh;
+  background: var(--wp-color-background-primary);
+  color: var(--wp-color-text-primary);
+}
+
+.shell-main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--wp-space-4);
+}
+
+.wp-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wp-space-4);
+}

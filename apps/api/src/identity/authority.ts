@@ -46,6 +46,7 @@ export const COMPANY_ONLY_PERMISSIONS = [
   'finance:reconcile',
   'finance:admin',
   'doctor:review',
+  'lab:review',
   'consent:manage',
   'clinical:audit:read',
   'clinical:access:evaluate',
@@ -57,6 +58,7 @@ export const COMPANY_ONLY_PERMISSIONS = [
   'cms:publish',
   'support:read',
   'support:manage',
+  'user:reveal_pii',
   'crm:read',
   'crm:write',
   'campaign:read',
@@ -105,6 +107,32 @@ export const SENSITIVE_CLINICAL_PERMISSIONS = [
 ] as const;
 
 export const DUAL_CONTROL_COMPANY_ROLES = ['super_admin', 'global_admin'] as const;
+
+/** Permissions that may be temporarily elevated via break-glass. Must exist in the RBAC catalog. */
+export const BREAK_GLASS_ELIGIBLE_PERMISSIONS = [
+  'identity:audit_read',
+  'finance:read',
+  'payment:read',
+  'order:read',
+  'clinical:audit:read',
+  'kyc:document_read',
+  'crm:read',
+  'support:read',
+  'prescription:read',
+  'care_nav:audit:read',
+] as const;
+
+export function isBreakGlassEligiblePermission(code: string): boolean {
+  return (BREAK_GLASS_ELIGIBLE_PERMISSIONS as readonly string[]).includes(code);
+}
+
+export function isValidPermissionCode(code: string): boolean {
+  const parts = code.split(':');
+  if (parts.length < 2 || parts.length > 3) {
+    return false;
+  }
+  return parts.every((part) => /^[a-z][a-z0-9_]*$/.test(part));
+}
 
 const COMPANY_ROLE_SET = new Set<string>(COMPANY_ROLE_CODES);
 const ORG_ROLE_SET = new Set<string>(ORG_ROLE_CODES);
@@ -219,6 +247,8 @@ export function permissionsForCompanyRole(roleCode: string, allPermissions: stri
       'kyc:review',
       'kyc:document_read',
       'identity:audit_read',
+      'doctor:review',
+      'lab:review',
       'consent:manage',
       'clinical:audit:read',
       'care_nav:audit:read',
@@ -263,6 +293,7 @@ export function permissionsForCompanyRole(roleCode: string, allPermissions: stri
       'appointment:read',
       'appointment:manage',
       'doctor:review',
+      'lab:review',
       'care_nav:audit:read',
       'prescription:read',
       'cms:read',
@@ -287,6 +318,7 @@ export function permissionsForCompanyRole(roleCode: string, allPermissions: stri
   if (roleCode === 'company_support') {
     return [
       'user:read',
+      'user:reveal_pii',
       'order:read',
       'appointment:read',
       'logistics:read',

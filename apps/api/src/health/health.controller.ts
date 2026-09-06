@@ -8,9 +8,11 @@ import { RequireAudiences } from '../identity/require-audiences';
 import { PolicyResolver } from '../policy/resolver';
 import { PrismaService } from '../app/prisma.service';
 import { HealthArtifactService } from './health-artifact.service';
+import { HealthDashboardService } from './health-dashboard.service';
 import { HealthTimelineService } from './health-timeline.service';
 import { HealthUploadService } from './health-upload.service';
 import { HEALTH_UPLOAD_ARTIFACT_TYPES } from './health-upload.constants';
+import { HealthSubjectService } from './health-subject.service';
 
 @Controller('health')
 @UseGuards(JwtAuthGuard, AudienceGuard)
@@ -18,11 +20,27 @@ import { HEALTH_UPLOAD_ARTIFACT_TYPES } from './health-upload.constants';
 export class HealthController {
   constructor(
     private readonly timeline: HealthTimelineService,
+    private readonly dashboard: HealthDashboardService,
     private readonly artifacts: HealthArtifactService,
     private readonly uploads: HealthUploadService,
     private readonly policy: PolicyResolver,
     private readonly prisma: PrismaService,
+    private readonly subjects: HealthSubjectService,
   ) {}
+
+  @Get('dashboard')
+  async dashboardSummary(
+    @CurrentPrincipal() principal: Principal,
+    @Query('country_code') countryCode: string | undefined,
+    @Query('family_member_id') familyMemberId?: string,
+  ) {
+    const country = await this.resolveCountry(countryCode);
+    const subject = await this.subjects.resolve(principal, country.isoAlpha2, familyMemberId);
+    if (subject.kind === 'family_member') {
+      await this.subjects.auditSubjectAccess(principal.personId, subject, 'dashboard_read');
+    }
+    return this.dashboard.build(principal, country.id, country.isoAlpha2, subject);
+  }
 
   @Get('timeline')
   async listTimeline(
@@ -31,9 +49,14 @@ export class HealthController {
     @Query('cursor') cursor: string | undefined,
     @Query('limit') limitRaw: string | undefined,
     @Query('types') typesRaw: string | undefined,
+    @Query('family_member_id') familyMemberId?: string,
   ) {
     const country = await this.resolveCountry(countryCode);
     await this.assertHealthTimelineEnabled(country.isoAlpha2);
+    const subject = await this.subjects.resolve(principal, country.isoAlpha2, familyMemberId);
+    if (subject.kind === 'family_member') {
+      await this.subjects.auditSubjectAccess(principal.personId, subject, 'timeline_read');
+    }
     const types = this.parseTypes(typesRaw);
     const limit = limitRaw ? Number(limitRaw) : undefined;
     return this.timeline.listForPatient({
@@ -42,6 +65,7 @@ export class HealthController {
       types,
       cursor,
       limit: Number.isFinite(limit) ? limit : undefined,
+      subjectFamilyMemberId: subject.familyMemberId,
     });
   }
 

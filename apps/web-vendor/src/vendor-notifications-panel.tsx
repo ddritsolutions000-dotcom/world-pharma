@@ -8,17 +8,18 @@ import {
   FormField,
   Heading,
   LoadingState,
-  Table,
   Text,
 } from '@world-pharma/ui-kit/web';
 import {
   VendorApiError,
   fetchVendorNotificationInbox,
   fetchVendorNotificationPreferences,
+  markVendorNotificationRead,
   updateVendorNotificationPreferences,
   type VendorInboxItem,
   type VendorNotificationPreferences,
 } from './vendor-api';
+import { vendorInboxNavigate } from './vendor-inbox';
 
 export function VendorNotificationsPanel({
   token,
@@ -86,12 +87,27 @@ export function VendorNotificationsPanel({
 
   const toggles: Array<{ key: keyof VendorNotificationPreferences; label: string }> = [
     { key: 'email_enabled', label: 'Email' },
+    { key: 'push_enabled', label: 'Push' },
+    { key: 'sms_enabled', label: 'SMS' },
     { key: 'order_updates', label: 'Order updates' },
     { key: 'settlement_updates', label: 'Settlement updates' },
     { key: 'support_updates', label: 'Support updates' },
     { key: 'delivery_updates', label: 'Delivery updates' },
+    { key: 'appointment_updates', label: 'Appointment updates' },
     { key: 'marketing', label: 'Marketing' },
   ];
+
+  const markRead = async (id: string) => {
+    setBusy(true);
+    try {
+      await markVendorNotificationRead(token, id);
+      await load();
+    } catch (err) {
+      onError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="wp-stack">
@@ -125,16 +141,25 @@ export function VendorNotificationsPanel({
         {!inbox.length ? (
           <EmptyState title="Inbox empty" description="Support acknowledgements and gated seller notices appear here." />
         ) : (
-          <Table
-            caption="Notification inbox"
-            columns={['When', 'Title', 'Body', 'Ref']}
-            rows={inbox.map((row) => [
-              String(row.created_at).slice(0, 19),
-              row.title,
-              row.body,
-              row.reference_type ?? '—',
-            ])}
-          />
+          inbox.map((row) => (
+            <Card key={row.id} className={row.read ? '' : 'vws-inbox-unread'}>
+              <Text>{row.title}</Text>
+              <Text tone="secondary">{row.body}</Text>
+              <Text size="caption" tone="secondary">
+                {String(row.created_at).slice(0, 19)} · {row.reference_type ?? 'notice'}
+              </Text>
+              <div className="wp-toolbar">
+                {!row.read ? (
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => void markRead(row.id)}>
+                    Mark read
+                  </Button>
+                ) : null}
+                <Button size="sm" variant="secondary" onClick={() => vendorInboxNavigate(row)}>
+                  Open
+                </Button>
+              </div>
+            </Card>
+          ))
         )}
         <Button size="sm" variant="secondary" disabled={busy} onClick={() => void load()}>
           Refresh

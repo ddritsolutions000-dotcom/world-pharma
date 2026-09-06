@@ -8,21 +8,31 @@ import { CrmCustomerList } from './crm-customer-list';
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
-  useSearchParams: () => new URLSearchParams('country=XX'),
+  useSearchParams: () => new URLSearchParams('country=IN'),
 }));
+
+const mockUseSession = jest.fn();
+
+jest.mock('@world-pharma/shell-web', () => {
+  const actual = jest.requireActual('@world-pharma/shell-web');
+  return {
+    ...actual,
+    useSession: () => mockUseSession(),
+  };
+});
 
 const sampleCustomer = {
   person_id: '22222222-2222-4222-8222-222222222222',
   status: 'ACTIVE',
   account_status: null,
   preferred_locale: 'en',
-  country_code: 'XX',
+  country_code: 'IN',
   identifiers: [{ type: 'EMAIL', masked_value: 'r***@example.com', verified: true }],
 };
 
 const sample360 = {
   person_id: sampleCustomer.person_id,
-  country_code: 'XX',
+  country_code: 'IN',
   profile: sampleCustomer,
   orders: [
     {
@@ -42,7 +52,27 @@ const sample360 = {
   support_tickets: [],
   marketing_preferences: { marketing_allowed: false, email_allowed: false },
   refill_requests: [],
+  rx_subscriptions: [],
+  loyalty: [],
+  product_reviews: [],
 };
+
+function mockSession() {
+  mockUseSession.mockReturnValue({
+    getAccessToken: () => 'test-token',
+    session: {
+      audience: 'admin',
+      permissions: ['crm:read'],
+      countryCode: 'IN',
+      status: 'authenticated',
+    },
+    signInWithOtp: jest.fn(),
+    verifyOtpChallenge: jest.fn(),
+    expire: jest.fn(),
+    signOut: jest.fn(),
+    setCountryCode: jest.fn(),
+  });
+}
 
 function wrap(ui: React.ReactElement) {
   return render(
@@ -61,6 +91,7 @@ describe('crm-api helpers', () => {
 
 describe('CrmCustomerList', () => {
   beforeEach(() => {
+    mockSession();
     (global.fetch as jest.Mock).mockImplementation(async () => ({
       ok: true,
       json: async () => ({ data: [sampleCustomer] }),
@@ -84,19 +115,20 @@ describe('CrmCustomerList', () => {
     expect(await screen.findByText(/You do not have access/i)).toBeInTheDocument();
   });
 
-  it('shows network error on 500', async () => {
+  it('shows load error on HTTP 500', async () => {
     (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 500,
       json: async () => ({ detail: 'server_error' }),
     });
     wrap(<CrmCustomerList />);
-    expect(await screen.findByText(/Connection problem/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Could not load this area/i })).toBeInTheDocument();
   });
 });
 
 describe('CrmCustomerDetail', () => {
   beforeEach(() => {
+    mockSession();
     (global.fetch as jest.Mock).mockImplementation(async () => ({
       ok: true,
       json: async () => sample360,
@@ -112,6 +144,7 @@ describe('CrmCustomerDetail', () => {
     expect(await screen.findByRole('heading', { name: 'Customer 360' })).toBeInTheDocument();
     expect(await screen.findByText(/ORD-001/)).toBeInTheDocument();
     expect(screen.getByText(/Marketing allowed:/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Loyalty' })).toBeInTheDocument();
   });
 
   it('shows not found on 404', async () => {

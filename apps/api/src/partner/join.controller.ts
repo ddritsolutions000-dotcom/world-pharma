@@ -8,6 +8,7 @@ import { RequireAudiences } from '../identity/require-audiences';
 import { PolicyResolver } from '../policy/resolver';
 import { KycService } from './kyc.service';
 import { PartnerService } from './partner.service';
+import { VendorActivationReadinessService } from './vendor-activation-readiness.service';
 
 @Controller('join')
 export class JoinController {
@@ -15,6 +16,7 @@ export class JoinController {
     private readonly partners: PartnerService,
     private readonly kyc: KycService,
     private readonly policy: PolicyResolver,
+    private readonly readiness: VendorActivationReadinessService,
   ) {}
 
   @Get('public')
@@ -33,6 +35,7 @@ export class JoinController {
         enabled: row.enabled,
         join_public: row.join_public,
         required_documents: row.required_documents ?? [],
+        required_fields: row.required_fields ?? [],
       }));
     return {
       public: types.length > 0,
@@ -82,6 +85,20 @@ export class JoinController {
     return this.partners.submitApplication(principal.personId, id);
   }
 
+  @Post('applications/:id/fields')
+  @UseGuards(JwtAuthGuard, AudienceGuard)
+  @RequireAudiences('partner_applicant', 'customer')
+  updateFields(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') id: string,
+    @Body() body: { fields?: Record<string, unknown> },
+  ) {
+    if (!body.fields || typeof body.fields !== 'object') {
+      throw Errors.validation('fields object is required.');
+    }
+    return this.partners.updateApplicationFields(principal.personId, id, body.fields);
+  }
+
   @Get('applications/:id/required-documents')
   @UseGuards(JwtAuthGuard, AudienceGuard)
   @RequireAudiences('partner_applicant', 'customer')
@@ -92,7 +109,8 @@ export class JoinController {
   ) {
     const app = await this.partners.getApplicationForPerson(principal.personId, id);
     const docs = await this.kyc.requiredDocuments(countryCode, app.partner_type_code);
-    return { document_types: docs };
+    const fields = await this.kyc.requiredFields(countryCode, app.partner_type_code);
+    return { document_types: docs, required_fields: fields };
   }
 
   @Post('applications/:id/kyc/open')
@@ -113,6 +131,14 @@ export class JoinController {
   @RequireAudiences('partner_applicant', 'customer')
   listDocuments(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
     return this.kyc.listDocumentsForApplication(id, principal.personId);
+  }
+
+  @Get('applications/:id/onboarding')
+  @UseGuards(JwtAuthGuard, AudienceGuard)
+  @RequireAudiences('partner_applicant', 'customer')
+  async onboarding(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    await this.partners.getApplicationForPerson(principal.personId, id);
+    return this.readiness.evaluateByApplicationId(id);
   }
 
   @Post('applications/:id/documents')

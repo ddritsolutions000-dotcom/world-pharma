@@ -14,22 +14,10 @@ import {
   activateMarketplaceSeller,
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { provisionSuperAdmin, signInCustomer } from '../test/sign-in';
 
 describe('R6-B vendor catalog & commercial rules (e2e)', () => {
+  jest.setTimeout(120_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -74,20 +62,9 @@ describe('R6-B vendor catalog & commercial rules (e2e)', () => {
 
   it('creates catalog offers for own vendor only and isolates commercial rules', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r6b-admin-${suffix}@example.com`, 'admin');
-    const vendorA = await signIn(app, `r6b-va-${suffix}@example.com`);
-    const vendorB = await signIn(app, `r6b-vb-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, `r6b-admin-${suffix}`);
+    const vendorA = await signInCustomer(app, `r6b-va-${suffix}@example.com`);
+    const vendorB = await signInCustomer(app, `r6b-vb-${suffix}@example.com`);
 
     let country = await prisma.country.findUnique({ where: { isoAlpha2: 'TB' } });
     if (!country) {

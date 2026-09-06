@@ -19,22 +19,10 @@ import { PolicyCache } from '../policy/cache';
 import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { activateLabPartner, enableLabPartnerPack } from '../test/lab-partner';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('R7-F physical report + sandbox finance (e2e)', () => {
+  jest.setTimeout(180_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -161,24 +149,13 @@ describe('R7-F physical report + sandbox finance (e2e)', () => {
 
   it('physical report lifecycle, finance facts, isolation, rider minimum PII', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r7f-admin-${suffix}@example.com`, 'admin');
-    const labUser = await signIn(app, `r7f-lab-${suffix}@example.com`);
-    const labStaff = await signIn(app, `r7f-staff-${suffix}@example.com`);
-    const pathologist = await signIn(app, `r7f-path-${suffix}@example.com`);
-    const customerA = await signIn(app, `r7f-ca-${suffix}@example.com`);
-    const customerB = await signIn(app, `r7f-cb-${suffix}@example.com`);
-    const rider = await signIn(app, `r7f-rider-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `r7f-admin-${suffix}@example.com`);
+    const labUser = await signInAudience(app, `r7f-lab-${suffix}@example.com`);
+    const labStaff = await signInAudience(app, `r7f-staff-${suffix}@example.com`);
+    const pathologist = await signInAudience(app, `r7f-path-${suffix}@example.com`);
+    const customerA = await signInAudience(app, `r7f-ca-${suffix}@example.com`);
+    const customerB = await signInAudience(app, `r7f-cb-${suffix}@example.com`);
+    const rider = await signInAudience(app, `r7f-rider-${suffix}@example.com`);
 
     const enabledDoc = emptyPolicyDocument();
     enableLabPartnerPack(enabledDoc, { home: true, center: true, physicalReport: true });
@@ -454,7 +431,7 @@ describe('R7-F physical report + sandbox finance (e2e)', () => {
 
   it('fails closed when physical_report_delivery pack disabled', async () => {
     const suffix = `gate-${Date.now().toString(36)}`;
-    const customer = await signIn(app, `r7f-gate-${suffix}@example.com`);
+    const customer = await signInAudience(app, `r7f-gate-${suffix}@example.com`);
     const doc = emptyPolicyDocument();
     enableLabPartnerPack(doc, { home: true, physicalReport: false });
     await publishPack(doc, suffix);

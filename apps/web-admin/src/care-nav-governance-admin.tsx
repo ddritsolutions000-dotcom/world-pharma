@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { adminApiRoot, classifyAdminViewState } from './admin-http';
+import { AdminViewLoadError } from './admin-request-error';
 import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
@@ -12,12 +13,12 @@ import {
   Input,
   ErrorState,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Select,
   Table,
   Text,
 } from '@world-pharma/ui-kit/web';
+import { MARKET_COUNTRY_CODES, workingCountry } from './working-country';
 
 class AdminApiError extends Error {
   status: number;
@@ -33,12 +34,11 @@ async function adminCall<T = unknown>(
   token: string,
   init?: RequestInit,
 ): Promise<T> {
-  const base = apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
+  const base = adminApiRoot();
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
     },
@@ -63,7 +63,7 @@ function cell(value: unknown): string {
 }
 
 export function CareNavGovernance() {
-  const { getAccessToken } = useSession();
+  const { getAccessToken, session } = useSession();
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [viewState, setViewState] = useState<ViewState>('idle');
@@ -72,7 +72,7 @@ export function CareNavGovernance() {
   const [detailState, setDetailState] = useState<ViewState>('idle');
   const [overrideAction, setOverrideAction] = useState<'REMATCH' | 'TERMINATE'>('REMATCH');
   const [overrideReason, setOverrideReason] = useState('');
-  const [countryCode, setCountryCode] = useState('XX');
+  const [countryCode, setCountryCode] = useState(() => workingCountry(session.countryCode));
   const [confirmOverride, setConfirmOverride] = useState(false);
   const [overrideState, setOverrideState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [overrideMessage, setOverrideMessage] = useState('');
@@ -90,7 +90,7 @@ export function CareNavGovernance() {
           `/api/v1/admin/care-nav/sessions${qs}`,
           token,
         );
-        setRows((prev) => (cursor ? [...prev, ...(body.data ?? [])] : body.data ?? []));
+        setRows((prev) => (cursor ? [...prev, ...(body.data ?? [])] : (body.data ?? [])));
         setNextCursor(body.next_cursor ?? null);
         setViewState('idle');
       } catch (err) {
@@ -100,7 +100,7 @@ export function CareNavGovernance() {
             return;
           }
         }
-        setViewState('network');
+        setViewState(classifyAdminViewState(err));
       }
     },
     [getAccessToken],
@@ -141,6 +141,15 @@ export function CareNavGovernance() {
   useEffect(() => {
     void loadList();
   }, [loadList]);
+
+  useEffect(() => {
+    if (rows.length && !selectedSessionId) {
+      const first = rows[0]?.id;
+      if (typeof first === 'string' && first) {
+        setSelectedSessionId(first);
+      }
+    }
+  }, [rows, selectedSessionId]);
 
   const submitOverride = async () => {
     const token = getAccessToken();
@@ -193,9 +202,7 @@ export function CareNavGovernance() {
 
       {viewState === 'loading' && rows.length === 0 ? <LoadingState label="Loading care navigation sessions" /> : null}
       {viewState === 'forbidden' ? <PermissionDeniedState /> : null}
-      {viewState === 'network' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void loadList() }} />
-      ) : null}
+      <AdminViewLoadError viewState={viewState} onRetry={() => void loadList()} />
 
       {viewState === 'idle' && rows.length === 0 ? (
         <EmptyState
@@ -220,9 +227,24 @@ export function CareNavGovernance() {
 
       <Card>
         <Heading level={3}>Session audit detail</Heading>
-        <FormField label="Session ID">
+        <FormField label="Session">
           {({ id }) => (
-            <Input id={id} value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)} />
+            <Select
+              id={id}
+              value={selectedSessionId}
+              onChange={(event) => setSelectedSessionId(event.target.value)}
+              disabled={rows.length === 0}
+            >
+              {rows.length === 0 ? <option value="">No sessions loaded</option> : null}
+              {rows.map((row, index) => {
+                const sid = typeof row.id === 'string' ? row.id : '';
+                return (
+                  <option key={sid || `session-${index}`} value={sid}>
+                    {cell(row.status)} · {cell(row.urgency)} · {sid.slice(0, 8)}
+                  </option>
+                );
+              })}
+            </Select>
           )}
         </FormField>
         <Button variant="secondary" onClick={() => void loadDetail(selectedSessionId)}>
@@ -231,9 +253,7 @@ export function CareNavGovernance() {
 
         {detailState === 'loading' ? <LoadingState label="Loading session detail" /> : null}
         {detailState === 'forbidden' ? <PermissionDeniedState /> : null}
-        {detailState === 'network' ? (
-          <NetworkErrorState action={{ label: 'Retry', onClick: () => void loadDetail(selectedSessionId) }} />
-        ) : null}
+        <AdminViewLoadError viewState={detailState} onRetry={() => void loadDetail(selectedSessionId)} />
         {detailState === 'error' ? (
           <Text tone="secondary">Session not found or malformed identifier.</Text>
         ) : null}
@@ -270,8 +290,20 @@ export function CareNavGovernance() {
         <Text tone="secondary">
           Override requires explicit reason and confirmation. Red-flag safety cannot be bypassed for customer booking.
         </Text>
-        <FormField label="Country code">
-          {({ id }) => <Input id={id} value={countryCode} onChange={(event) => setCountryCode(event.target.value)} />}
+        <FormField label="Country">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={workingCountry(countryCode)}
+              onChange={(event) => setCountryCode(workingCountry(event.target.value))}
+            >
+              {MARKET_COUNTRY_CODES.map((iso) => (
+                <option key={iso} value={iso}>
+                  {iso}
+                </option>
+              ))}
+            </Select>
+          )}
         </FormField>
         <FormField label="Action">
           {({ id }) => (

@@ -1,20 +1,18 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useCountries, useSession } from '@world-pharma/shell-web';
+import { useSession, showDevTools } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
   FormField,
-  Heading,
   LoadingState,
   NetworkErrorState,
   PermissionDeniedState,
   SessionExpiredState,
   Text,
 } from '@world-pharma/ui-kit/web';
-import { CustomerShell } from './customer-shell';
+import { fetchAddresses, type CustomerAddress } from './account-api';
 import {
   checkImagingEligibility,
   createImagingBooking,
@@ -25,6 +23,9 @@ import {
   payImagingBooking,
   type ImagingCatalogItem,
 } from './imaging-api';
+import { formatMoney } from './format-money';
+import { useSelectedCountry } from './use-selected-country';
+import { MgBtn, MgCard, MgBackLink, Page, PageIntro, ServiceHero } from './ui/mg-ui';
 
 function newIdempotencyKey(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -33,18 +34,15 @@ function newIdempotencyKey(prefix: string) {
 const PREP_INSTRUCTIONS = [
   'Arrive 15 minutes before your scheduled slot with your booking reference.',
   'Wear comfortable clothing without metal where possible.',
-  'Follow any fasting or contrast instructions provided by the imaging center separately.',
-];
+  'Follow any fasting or contrast instructions from the imaging center.',
+] as const;
 
 export function ImagingDetailScreen({ slug }: { slug: string }) {
   const { session, getAccessToken, signOut, expire } = useSession();
-  const { countries } = useCountries();
+  const { country: selectedCountry } = useSelectedCountry();
   const country =
-    (typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('country')
-      : null) ??
-    countries[0]?.iso_alpha2 ??
-    'XX';
+    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('country') : null) ??
+    selectedCountry;
 
   const [item, setItem] = useState<ImagingCatalogItem | null>(null);
   const [locations, setLocations] = useState<Array<{ id: string; name: string; city: string | null }>>([]);
@@ -61,7 +59,6 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<'network' | 'forbidden' | 'notfound' | 'generic' | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [successId, setSuccessId] = useState<string | null>(null);
 
   const offer = item?.offers[0] ?? null;
 
@@ -94,9 +91,7 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
 
   const load = useCallback(async () => {
     const token = getAccessToken();
-    if (!token) {
-      return;
-    }
+    if (!token) return;
     setLoading(true);
     setError(null);
     try {
@@ -114,9 +109,7 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
           }),
         ]);
         setLocations(locs.data);
-        if (locs.data[0]) {
-          setLocationId(locs.data[0].id);
-        }
+        if (locs.data[0]) setLocationId(locs.data[0].id);
         setSlots(slotRes.data);
         if (slotRes.data[0]) {
           setSlotStarts(slotRes.data[0].starts_at);
@@ -134,16 +127,12 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
   }, [country, getAccessToken, handleErr, slug]);
 
   useEffect(() => {
-    if (session.status === 'authenticated') {
-      void load();
-    }
+    if (session.status === 'authenticated') void load();
   }, [load, session.status]);
 
   useEffect(() => {
     const token = getAccessToken();
-    if (!token || !offer) {
-      return;
-    }
+    if (!token || !offer) return;
     void checkImagingEligibility(token, {
       imaging_org_id: offer.seller_org_id,
       offer_id: offer.id,
@@ -155,26 +144,18 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
         setEligibilityReason(elig.blocked_reason);
         setReferralRequired(elig.referral_required);
       })
-      .catch(() => {
-        setEligibilityOk(false);
-      });
+      .catch(() => setEligibilityOk(false));
   }, [country, getAccessToken, offer, referralRef]);
 
   const canSubmit = useMemo(() => {
-    if (!offer || !slotStarts || !locationId || !prepAck || eligibilityOk !== true) {
-      return false;
-    }
-    if (referralRequired && !referralRef.trim()) {
-      return false;
-    }
+    if (!offer || !slotStarts || !locationId || !prepAck || eligibilityOk !== true) return false;
+    if (referralRequired && !referralRef.trim()) return false;
     return true;
   }, [eligibilityOk, locationId, offer, prepAck, referralRef, referralRequired, slotStarts]);
 
   async function bookAndPay(scenario: 'success' | 'failed') {
     const token = getAccessToken();
-    if (!token || !offer) {
-      return;
-    }
+    if (!token || !offer) return;
     setBusy(true);
     setFormError(null);
     try {
@@ -190,12 +171,10 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
       });
       const paid = await payImagingBooking(token, booking.id, newIdempotencyKey('img-pay'), scenario);
       if (paid.status === 'CAPTURED') {
-        setSuccessId(booking.id);
         window.location.href = `/radiology/bookings/${booking.id}`;
         return;
       }
-      setFormError(`Sandbox payment ended as ${paid.status}. Booking ${booking.id} was not confirmed.`);
-      setSuccessId(booking.id);
+      setFormError(`Payment ended as ${paid.status}. Booking ${booking.id} was not confirmed.`);
     } catch (err) {
       handleErr(err);
     } finally {
@@ -207,137 +186,144 @@ export function ImagingDetailScreen({ slug }: { slug: string }) {
     return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
   }
 
+  if (session.status !== 'authenticated') {
+    return (
+      <Page>
+        <MgBackLink href="/radiology">← All imaging studies</MgBackLink>
+        <ServiceHero
+          kicker="Partner imaging"
+          title="Book imaging study"
+          subtitle="Sign in to view details and schedule at a partner center."
+          tone="scan"
+          compact
+        />
+        <PageIntro>
+          <p>Commercial imaging listings — not a diagnosis or referral. Always follow your physician&apos;s advice.</p>
+        </PageIntro>
+        <EmptyState
+          title="Sign in required"
+          description="Login to view imaging study details and book an appointment."
+          action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }}
+        />
+      </Page>
+    );
+  }
+
   return (
-    <CustomerShell apiReachable={true} countryLabel={country}>
-      <Button variant="tertiary" size="sm" onClick={() => (window.location.href = '/radiology')}>
-        Back to imaging catalog
-      </Button>
-      {loading ? <LoadingState label="Loading imaging study details…" /> : null}
+    <Page>
+      <MgBackLink href="/radiology">← All imaging studies</MgBackLink>
+      {loading ? <LoadingState label="Loading imaging study" /> : null}
       {error === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} /> : null}
       {error === 'forbidden' ? <PermissionDeniedState /> : null}
       {error === 'notfound' ? (
-        <EmptyState title="Study not found" description="This imaging study is unpublished or not bookable here." />
+        <EmptyState title="Study not found" description="This imaging study is not available in your area." />
       ) : null}
       {error === 'generic' ? <EmptyState title="Unable to load" description="Try again shortly." /> : null}
       {!loading && !error && item && offer ? (
         <>
-          <Heading level={2}>{item.title}</Heading>
-          <Text tone="secondary">{item.description || 'Commercial catalog description only.'}</Text>
-          <Text size="caption">{item.note}</Text>
-          <Card>
-            <Text>{offer.seller_display_name}</Text>
-            <Text>
-              {offer.price ? `${offer.currency} ${offer.price.sell_minor}` : 'Price unavailable'}
-            </Text>
-            <Text size="caption">Sandbox payment only. Imaging acquisition remains OFF (R8-C+).</Text>
-          </Card>
+          <ServiceHero
+            kicker="Partner imaging"
+            title={item.title}
+            subtitle={item.description || 'Center visit · digital report when published.'}
+            tone="scan"
+            compact
+          />
+          <MgCard>
+            <p className="mg-list-meta">{offer.seller_display_name}</p>
+            <p className="mg-lab-price">
+              {offer.price ? formatMoney(offer.price.sell_minor, offer.currency) : 'Price on request'}
+            </p>
+            <p className="mg-lab-badge">Partner imaging center</p>
+            {item.note ? <p className="mg-text-muted">{item.note}</p> : null}
+          </MgCard>
 
-          <Heading level={3}>Preparation</Heading>
-          <Card>
-            <ul>
+          <MgCard>
+            <h2 className="mg-section-title">Before your visit</h2>
+            <ul className="mg-prose">
               {PREP_INSTRUCTIONS.map((line) => (
-                <li key={line}>
-                  <Text size="caption">{line}</Text>
-                </li>
+                <li key={line}>{line}</li>
               ))}
             </ul>
-            <Text size="caption">Commercial preparation summary only. Not a clinical order.</Text>
-          </Card>
+            <p className="mg-text-muted">Commercial preparation summary — not a clinical order.</p>
+          </MgCard>
 
-          <Heading level={3}>Eligibility</Heading>
-          {eligibilityOk === false ? (
-            <EmptyState
-              title="Not eligible to book"
-              description={eligibilityReason ?? 'Imaging booking is unavailable for this center.'}
-            />
-          ) : null}
-          {eligibilityOk === true ? <Text size="caption">Eligible for center booking in {country}.</Text> : null}
-          {referralRequired ? (
-            <FormField label="Referral reference (required by country pack)">
+          <MgCard>
+            <h2 className="mg-section-title">Book appointment</h2>
+            {eligibilityOk === false ? (
+              <EmptyState
+                title="Not eligible to book"
+                description={eligibilityReason ?? 'Imaging booking is unavailable for this center.'}
+              />
+            ) : null}
+            {eligibilityOk === true ? <p className="mg-text-muted">Eligible for center booking in {country}.</p> : null}
+            {referralRequired ? (
+              <FormField label="Referral reference (required)">
+                {({ id }) => (
+                  <input
+                    id={id}
+                    className="mg-input"
+                    value={referralRef}
+                    onChange={(e) => setReferralRef(e.target.value)}
+                    aria-required="true"
+                  />
+                )}
+              </FormField>
+            ) : null}
+            <FormField label="Imaging center">
               {({ id }) => (
-                <input
-                  id={id}
-                  className="wp-input"
-                  value={referralRef}
-                  onChange={(e) => setReferralRef(e.target.value)}
-                  aria-required="true"
-                />
+                <select id={id} className="mg-select" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                  {!locations.length ? <option value="">No locations</option> : null}
+                  {locations.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name}
+                      {row.city ? ` · ${row.city}` : ''}
+                    </option>
+                  ))}
+                </select>
               )}
             </FormField>
-          ) : null}
-
-          <Heading level={3}>Imaging center location</Heading>
-          <FormField label="Center location">
-            {({ id }) => (
-              <select
-                id={id}
-                className="wp-input"
-                value={locationId}
-                onChange={(e) => setLocationId(e.target.value)}
-              >
-                {!locations.length ? <option value="">No active IMAGING locations</option> : null}
-                {locations.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.name}
-                    {row.city ? ` · ${row.city}` : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FormField>
-
-          <Heading level={3}>Appointment slot</Heading>
-          <FormField label="Preferred slot">
-            {({ id }) => (
-              <select
-                id={id}
-                className="wp-input"
-                value={slotStarts}
-                onChange={(e) => {
-                  const pick = slots.find((s) => s.starts_at === e.target.value);
-                  setSlotStarts(e.target.value);
-                  setSlotEnds(pick?.ends_at ?? '');
-                }}
-              >
-                {!slots.length ? <option value="">No slots</option> : null}
-                {slots.map((slot) => (
-                  <option key={slot.starts_at} value={slot.starts_at}>
-                    {new Date(slot.starts_at).toLocaleString()}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FormField>
-
-          <Heading level={3}>Review & pay</Heading>
-          <FormField label="Preparation acknowledgement">
-            {({ id }) => (
-              <label htmlFor={id}>
-                <input
+            <FormField label="Preferred slot">
+              {({ id }) => (
+                <select
                   id={id}
-                  type="checkbox"
-                  checked={prepAck}
-                  onChange={(e) => setPrepAck(e.target.checked)}
-                />{' '}
-                I have read the preparation information above.
-              </label>
-            )}
-          </FormField>
-          {formError ? <Text>{formError}</Text> : null}
-          {busy ? <LoadingState label="Confirming sandbox imaging booking…" /> : null}
-          <Button disabled={!canSubmit || busy} onClick={() => void bookAndPay('success')}>
-            Book & pay (sandbox success)
-          </Button>
-          <Button variant="secondary" disabled={!canSubmit || busy} onClick={() => void bookAndPay('failed')}>
-            Simulate sandbox payment failure
-          </Button>
-          {successId ? (
-            <Button variant="tertiary" onClick={() => (window.location.href = `/radiology/bookings/${successId}`)}>
-              Open booking
-            </Button>
-          ) : null}
+                  className="mg-select"
+                  value={slotStarts}
+                  onChange={(e) => {
+                    const pick = slots.find((s) => s.starts_at === e.target.value);
+                    setSlotStarts(e.target.value);
+                    setSlotEnds(pick?.ends_at ?? '');
+                  }}
+                >
+                  {!slots.length ? <option value="">No slots</option> : null}
+                  {slots.map((slot) => (
+                    <option key={slot.starts_at} value={slot.starts_at}>
+                      {new Date(slot.starts_at).toLocaleString()}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </FormField>
+            <label className="mg-field">
+              <span className="mg-field-label">Preparation acknowledgement</span>
+              <input type="checkbox" checked={prepAck} onChange={(e) => setPrepAck(e.target.checked)} /> I have read
+              the preparation information above.
+            </label>
+            {formError ? <Text tone="secondary">{formError}</Text> : null}
+            {busy ? <LoadingState label="Confirming booking" /> : null}
+            <MgBtn block disabled={!canSubmit || busy} onClick={() => void bookAndPay('success')}>
+              Book &amp; pay
+            </MgBtn>
+            {showDevTools() ? (
+              <MgBtn variant="ghost" disabled={!canSubmit || busy} onClick={() => void bookAndPay('failed')}>
+                Dev: simulate failure
+              </MgBtn>
+            ) : null}
+          </MgCard>
+          <p className="mg-auth-alt">
+            View bookings in <Link href="/radiology/bookings">My imaging bookings</Link>
+          </p>
         </>
       ) : null}
-    </CustomerShell>
+    </Page>
   );
 }

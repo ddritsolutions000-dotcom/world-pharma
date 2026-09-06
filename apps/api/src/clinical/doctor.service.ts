@@ -14,6 +14,7 @@ import { PartnerService } from '../partner/partner.service';
 import { PolicyResolver } from '../policy/resolver';
 import { maskCredentialNumber } from './mask';
 import { ScheduleService } from './schedule.service';
+import { NotificationService } from '../platform/notification.service';
 
 const ALLOWED_CREDENTIAL_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 const MAX_CREDENTIAL_BYTES = 10 * 1024 * 1024;
@@ -30,6 +31,7 @@ export class DoctorService {
     private readonly scanner: MalwareScanner,
     @Inject(forwardRef(() => ScheduleService))
     private readonly schedule: ScheduleService,
+    private readonly notifications: NotificationService,
   ) {}
 
   async startOnboarding(input: { personId: string; countryCode: string; requestId?: string }) {
@@ -70,6 +72,7 @@ export class DoctorService {
       include: { role: true, organization: true },
     });
     const availability = await this.schedule.summary(personId);
+    const notificationPrefs = await this.notifications.getPreferences(personId);
     return {
       partner_id: partner.id,
       person_id: personId,
@@ -105,7 +108,15 @@ export class DoctorService {
           ends_at: row.endsAt,
         })),
       availability,
-      settings: { notifications_placeholder: true, security: 'identity-kernel' },
+      settings: {
+        notifications: {
+          email_enabled: notificationPrefs.email_enabled,
+          push_enabled: notificationPrefs.push_enabled,
+          appointment_updates: notificationPrefs.appointment_updates,
+          support_updates: notificationPrefs.support_updates,
+        },
+        security: 'identity-kernel',
+      },
     };
   }
 
@@ -341,6 +352,10 @@ export class DoctorService {
     if (!credential || credential.partnerId !== input.partnerId) {
       throw Errors.notFound('Credential not found');
     }
+    const partner = await this.prisma.partner.findUnique({
+      where: { id: input.partnerId },
+      select: { personId: true },
+    });
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.doctorCredential.update({
         where: { id: credential.id },
@@ -361,7 +376,11 @@ export class DoctorService {
         aggregateId: credential.id,
         producer: 'clinical',
         countryId: credential.countryId,
-        payload: { credential_id: credential.id, status: input.status },
+        payload: {
+          credential_id: credential.id,
+          status: input.status,
+          person_id: partner?.personId ?? null,
+        },
         correlationId: input.requestId ?? null,
         actorId: input.actorId,
         occurrenceKey: `reviewed:${credential.id}:${input.status}`,

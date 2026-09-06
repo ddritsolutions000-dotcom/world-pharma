@@ -6,8 +6,8 @@ import { ThemeProvider } from '@world-pharma/ui-kit/web';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
-    <ThemeProvider defaultTheme="light">
-      <SessionProvider>{children}</SessionProvider>
+    <ThemeProvider defaultTheme="dark">
+      <SessionProvider initialAudience="admin">{children}</SessionProvider>
     </ThemeProvider>
   );
 }

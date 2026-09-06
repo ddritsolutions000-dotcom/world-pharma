@@ -21,7 +21,11 @@ describe('PaymentRouter', () => {
   });
 
   it('fail-closes production candidate query without prerequisites', async () => {
-    const prisma = { paymentRoutingRule: { findMany: jest.fn() }, paymentGateway: { findMany: jest.fn() } };
+    const prisma = {
+      paymentRoutingRule: { findMany: jest.fn() },
+      paymentGateway: { findMany: jest.fn() },
+      r14AHumanGate: { findMany: jest.fn().mockResolvedValue([]) },
+    };
     const router = new PaymentRouter(prisma as never);
     delete process.env['PAYMENT_LIVE_ENABLED'];
     await expect(

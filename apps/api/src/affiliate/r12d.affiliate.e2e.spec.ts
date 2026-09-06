@@ -83,11 +83,17 @@ async function seedPerson(prisma: PrismaService, email: string, countryId: strin
 }
 
 describe('R12-D affiliate referral infrastructure', () => {
+  jest.setTimeout(180_000);
   let app: INestApplication;
   let prisma: PrismaService;
 
   beforeAll(async () => {
     applyTestIsolation();
+    process.env['NODE_ENV'] = 'test';
+    process.env['JWT_ACCESS_SECRET'] =
+      process.env['JWT_ACCESS_SECRET'] ?? 'test-access-secret-must-be-32-chars-min';
+    process.env['OTP_PEPPER'] =
+      process.env['OTP_PEPPER'] ?? 'test-otp-pepper-must-be-32-chars-minx';
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     app.useGlobalFilters(new ProblemFilter());

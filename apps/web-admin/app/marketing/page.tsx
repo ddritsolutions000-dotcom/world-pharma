@@ -1,10 +1,13 @@
 import { Suspense } from 'react';
+import { AdminShell } from '../../src/admin-shell';
 import { MarketingHub } from '../../src/marketing-list';
 
 export default function MarketingPage() {
   return (
-    <Suspense fallback={null}>
-      <MarketingHub />
-    </Suspense>
+    <AdminShell currentNav="marketing">
+      <Suspense fallback={null}>
+        <MarketingHub />
+      </Suspense>
+    </AdminShell>
   );
 }

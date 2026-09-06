@@ -3,9 +3,8 @@ import { OrdersAdminPanel } from '../../src/orders-admin';
 
 export default function OrdersPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="orders">
       <OrdersAdminPanel />
-    </>
+    </AdminShell>
   );
 }

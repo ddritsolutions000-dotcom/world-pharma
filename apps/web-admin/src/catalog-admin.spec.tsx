@@ -6,13 +6,14 @@ import { CatalogAdminPanel } from './catalog-admin';
 describe('CatalogAdminPanel', () => {
   it('shows catalog management copy without ERP modules', () => {
     render(
-      <ThemeProvider defaultTheme="light">
+      <ThemeProvider defaultTheme="dark">
         <SessionProvider initialAudience="admin">
           <CatalogAdminPanel />
         </SessionProvider>
       </ThemeProvider>,
     );
     expect(screen.getByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Search catalog')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /warehouse|finance|erp/i })).not.toBeInTheDocument();
   });
 });

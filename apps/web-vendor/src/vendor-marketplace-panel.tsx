@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
@@ -15,6 +16,9 @@ import {
   fetchMarketplaceEligibility,
   type MarketplaceEligibility,
 } from './vendor-api';
+import { VendorCtaLink } from './vendor-cta-link';
+import { VENDOR_JOIN_ROUTES } from './vendor-join-routes';
+import { statusBadgeClass } from './vendor-format';
 
 export function VendorMarketplaceEligibilityPanel({
   organizationId,
@@ -85,8 +89,8 @@ export function VendorMarketplaceEligibilityPanel({
       <Card>
         <Heading level={2}>Marketplace eligibility</Heading>
         <Text>
-          State <strong>{view.state}</strong> · Acceptance {view.acceptance} · live_payout=
-          {String(view.live_payout)}
+          State <span className={statusBadgeClass(view.state)}>{view.state}</span> · Acceptance {view.acceptance} ·
+          live_payout={String(view.live_payout)}
         </Text>
         <Text size="caption">
           Country {view.country_code ?? '—'} · Org {view.organization_status ?? '—'} · Pack published{' '}
@@ -99,6 +103,21 @@ export function VendorMarketplaceEligibilityPanel({
         </Text>
         {view.blocked_reason ? <Text tone="secondary">{view.blocked_reason}</Text> : null}
         {view.next_action ? <Text>{view.next_action}</Text> : null}
+        {view.state !== 'ELIGIBLE' && view.state !== 'REQUIRES_ATTESTATION' ? (
+          <Card>
+            <Heading level={3}>Not eligible yet</Heading>
+            <Text tone="secondary">
+              Complete vendor seller onboarding and company approval before catalog and order tools unlock. If you
+              have not applied yet, start a marketplace vendor application on this site.
+            </Text>
+            <div className="wp-stack" style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+              <VendorCtaLink href={VENDOR_JOIN_ROUTES.apply}>Apply as vendor seller</VendorCtaLink>
+              <Link href={VENDOR_JOIN_ROUTES.hub}>
+                <Button variant="secondary">Join program info</Button>
+              </Link>
+            </div>
+          </Card>
+        ) : null}
         {view.state === 'REQUIRES_ATTESTATION' ? (
           <Button disabled={busy} onClick={() => void attest()}>
             {busy ? 'Submitting…' : `Attest ${view.attestation_code_required}`}
@@ -106,8 +125,8 @@ export function VendorMarketplaceEligibilityPanel({
         ) : null}
         {view.state === 'ELIGIBLE' ? (
           <EmptyState
-            title="Eligible (sandbox)"
-            description="Catalog writes are unlocked for this seller. This is not production financial authorization."
+            title="Eligible for marketplace selling"
+            description="Catalog, pricing, inventory, and order fulfillment are unlocked for this seller. Bank payouts stay company-controlled until live payment rails are enabled."
           />
         ) : null}
         {formError ? <Text tone="secondary">{formError}</Text> : null}

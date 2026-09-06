@@ -1,20 +1,29 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Post, Query, StreamableFile, UseGuards } from '@nestjs/common';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
 import { RequireAudiences } from '../identity/require-audiences';
 import { InterpretationService } from './interpretation.service';
+import { ImagingDiagnosticViewerService } from './imaging-diagnostic-viewer.service';
 
 @Controller('radiologist')
 @UseGuards(JwtAuthGuard, AudienceGuard)
 @RequireAudiences('customer', 'partner_applicant')
 export class RadiologistController {
-  constructor(private readonly interpretation: InterpretationService) {}
+  constructor(
+    private readonly interpretation: InterpretationService,
+    private readonly viewer: ImagingDiagnosticViewerService,
+  ) {}
 
   @Get('organizations')
   listOrganizations(@CurrentPrincipal() principal: Principal) {
     return this.interpretation.listRadiologistOrganizations(principal);
+  }
+
+  @Get('me')
+  me(@CurrentPrincipal() principal: Principal) {
+    return { person_id: principal.personId };
   }
 
   @Get('worklist')
@@ -43,6 +52,48 @@ export class RadiologistController {
       throw Errors.validation('imaging_org_id is required');
     }
     return this.interpretation.getCaseByStudyId(principal, imagingOrgId, studyId);
+  }
+
+  @Get('studies/:id/viewer')
+  openViewer(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') studyId: string,
+    @Query('imaging_org_id') imagingOrgId: string,
+  ) {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required');
+    }
+    return this.viewer.openRadiologistViewer(principal, imagingOrgId, studyId);
+  }
+
+  @Get('studies/:id/viewer/series/:seriesId/frames/:frameIndex')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('X-Content-Type-Options', 'nosniff')
+  @Header('X-WP-Public-URL', 'false')
+  @Header('X-WP-Viewer-Mode', 'SANDBOX_DIAGNOSTIC_FRAMES')
+  async viewerFrame(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id') studyId: string,
+    @Param('seriesId') seriesId: string,
+    @Param('frameIndex') frameIndexRaw: string,
+    @Query('imaging_org_id') imagingOrgId: string,
+  ): Promise<StreamableFile> {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required');
+    }
+    const frameIndex = Number.parseInt(frameIndexRaw, 10);
+    const frame = await this.viewer.getAuthorizedFrame({
+      actor: 'radiologist',
+      principal,
+      studyId,
+      imagingOrgId,
+      seriesId,
+      frameIndex,
+    });
+    return new StreamableFile(frame.bytes, {
+      type: 'image/png',
+      disposition: 'inline',
+    });
   }
 
   @Post('reports/:id/assign')

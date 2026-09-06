@@ -138,6 +138,43 @@ export function deleteAddress(
   });
 }
 
+export type InboxItem = {
+  id: string;
+  channel: string;
+  title: string;
+  body: string;
+  read: boolean;
+  created_at: string;
+  reference_type?: string;
+  reference_id?: string;
+};
+
+export function fetchNotificationInbox(
+  opts: TokenOpts,
+): Promise<ApiCallResult<{ data: InboxItem[] }>> {
+  return call<{ data: InboxItem[] }>('api/v1/me/notifications/inbox', opts);
+}
+
+export function markNotificationRead(
+  opts: TokenOpts & { id: string },
+): Promise<ApiCallResult<{ data: InboxItem[] }>> {
+  return call<{ data: InboxItem[] }>(`api/v1/me/notifications/inbox/${opts.id}/read`, {
+    token: opts.token,
+    onUnauthorized: opts.onUnauthorized,
+    method: 'POST',
+  });
+}
+
+export function markAllNotificationsRead(
+  opts: TokenOpts,
+): Promise<ApiCallResult<{ data: InboxItem[] }>> {
+  return call<{ data: InboxItem[] }>('api/v1/me/notifications/inbox/read-all', {
+    token: opts.token,
+    onUnauthorized: opts.onUnauthorized,
+    method: 'POST',
+  });
+}
+
 export function fetchNotificationPreferences(
   opts: TokenOpts,
 ): Promise<ApiCallResult<NotificationPreferences>> {

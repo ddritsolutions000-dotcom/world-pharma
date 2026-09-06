@@ -70,6 +70,7 @@ const SYSTEM_PERMISSIONS = [
   'finance:reconcile',
   'finance:admin',
   'doctor:review',
+  'lab:review',
   'consent:manage',
   'clinical:audit:read',
   'clinical:search',
@@ -81,6 +82,7 @@ const SYSTEM_PERMISSIONS = [
   'cms:publish',
   'support:read',
   'support:manage',
+  'user:reveal_pii',
   'crm:read',
   'crm:write',
   'campaign:read',
@@ -205,6 +207,11 @@ export class RbacService implements OnModuleInit {
   async hasPermission(personId: string, permission: string): Promise<boolean> {
     const { permissions } = await this.permissionsForPerson(personId);
     return permissions.includes(permission);
+  }
+
+  async isCatalogPermission(code: string): Promise<boolean> {
+    const row = await this.prisma.permission.findUnique({ where: { code } });
+    return Boolean(row);
   }
 
   async hasCompanyAuthority(personId: string): Promise<boolean> {

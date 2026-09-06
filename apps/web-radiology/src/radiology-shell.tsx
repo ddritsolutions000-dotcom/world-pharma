@@ -1,7 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSession } from '@world-pharma/shell-web';
+import {
+  PartnerInboxPanel,
+  PartnerSupportPanel,
+  PortalAuthPage,
+  PortalBrandBar,
+  PortalKpiCards,
+  RouteBreadcrumbs,
+  buildPortalBreadcrumbs,
+  useSession,
+} from '@world-pharma/shell-web';
 import {
   Button,
   Card,
@@ -22,6 +31,8 @@ import {
   fetchImagingActivity,
   fetchImagingOffers,
   fetchImagingOrganizations,
+  fetchImagingStaffBookings,
+  fetchImagingStudies,
   fetchRadiologyMe,
   type ImagingOrganization,
 } from './radiology-api';
@@ -32,6 +43,8 @@ import { ImagingCheckInPanel } from './imaging-check-in-panel';
 import { ImagingStudiesPanel } from './imaging-studies-panel';
 import { ImagingInterpretationsPanel } from './imaging-interpretations-panel';
 import { ImagingPhysicalReportsPanel } from './imaging-physical-reports-panel';
+import { RadiologySchedulePanel } from './radiology-schedule-panel';
+import { RadiologySettingsPanel } from './radiology-settings-panel';
 
 type TabId =
   | 'dashboard'
@@ -44,6 +57,8 @@ type TabId =
   | 'studies'
   | 'interpretations'
   | 'physical-reports'
+  | 'notifications'
+  | 'support'
   | 'activity'
   | 'settings';
 
@@ -60,6 +75,8 @@ const NAV: Array<{ id: TabId; label: string }> = [
   { id: 'studies', label: 'Studies' },
   { id: 'interpretations', label: 'Interpretation' },
   { id: 'physical-reports', label: 'Physical reports' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'support', label: 'Support' },
   { id: 'activity', label: 'Activity' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -86,7 +103,13 @@ function OrgPicker({
     return (
       <EmptyState
         title="No imaging center organization"
-        description="You need an active membership on an IMAGING_CENTER organization. Lab, vendor, and clinic memberships are not shown here."
+        description="You need an active membership on an IMAGING_CENTER organization. Apply as an imaging partner, or sign in with the email your center admin invited."
+        action={{
+          label: 'Apply as imaging partner',
+          onClick: () => {
+            window.location.href = 'http://127.0.0.1:3008/imaging';
+          },
+        }}
       />
     );
   }
@@ -103,7 +126,7 @@ function OrgPicker({
             <option value="">Select organization</option>
             {organizations.map((org) => (
               <option key={org.id} value={org.id}>
-                {org.display_name || org.legal_name} ({org.role_code})
+                {org.display_name || org.legal_name} ({org.country_code})
               </option>
             ))}
           </select>
@@ -113,21 +136,8 @@ function OrgPicker({
   );
 }
 
-function LaterPhaseState({ title, phase }: { title: string; phase: string }) {
-  return (
-    <Card>
-      <EmptyState
-        title={title}
-        description={`${phase} is planned after R8-A. This navigation slot is reserved without fake booking, acquisition, or clinical data.`}
-      />
-    </Card>
-  );
-}
-
 export function RadiologyShell() {
-  const { session, signInWithOtp, signOut, expire, getAccessToken } = useSession();
-  const [email, setEmail] = useState('');
-  const [signInError, setSignInError] = useState<string | null>(null);
+  const { session, signOut, expire, getAccessToken } = useSession();
   const [organizations, setOrganizations] = useState<ImagingOrganization[]>([]);
   const [organizationId, setOrganizationId] = useState('');
   const [scopeLoading, setScopeLoading] = useState(false);
@@ -135,6 +145,8 @@ export function RadiologyShell() {
   const [viewState, setViewState] = useState<ViewState>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [offerCount, setOfferCount] = useState(0);
+  const [bookingCount, setBookingCount] = useState(0);
+  const [studyCount, setStudyCount] = useState(0);
   const [activityRows, setActivityRows] = useState<
     Array<{ id: string; type: string; outcome: string; created_at: string }>
   >([]);
@@ -197,11 +209,17 @@ export function RadiologyShell() {
       ]);
       setOrganizations(orgRes.data);
       setActorPersonId(meRes.person_id);
-      if (orgRes.data.length === 1) {
-        const only = orgRes.data[0];
-        if (only) {
-          setOrganizationId(only.id);
-        }
+      if (orgRes.data.length >= 1) {
+        setOrganizationId((current) => {
+          if (current && orgRes.data.some((org) => org.id === current)) {
+            return current;
+          }
+          const preferred =
+            orgRes.data.find((org) => org.country_code === 'IN') ??
+            orgRes.data.find((org) => org.country_code === 'XX') ??
+            orgRes.data[0];
+          return preferred!.id;
+        });
       }
       setViewState('idle');
       setErrorMessage(null);
@@ -223,14 +241,20 @@ export function RadiologyShell() {
     if (!token || !organizationId || session.status !== 'authenticated') {
       return;
     }
-    void fetchImagingOffers(token, organizationId)
-      .then((body) => setOfferCount(body.data.length))
-      .catch(() => setOfferCount(0));
+    void Promise.all([
+      fetchImagingOffers(token, organizationId).then((body) => setOfferCount(body.data.length)).catch(() => setOfferCount(0)),
+      fetchImagingStaffBookings(token, organizationId)
+        .then((body) => setBookingCount(body.data.length))
+        .catch(() => setBookingCount(0)),
+      fetchImagingStudies(token, organizationId)
+        .then((body) => setStudyCount(body.data.length))
+        .catch(() => setStudyCount(0)),
+    ]);
   }, [getAccessToken, organizationId, session.status, tab]);
 
   if (session.status === 'expired') {
     return (
-      <div className="radiology-body">
+      <div className="portal-root radiology-body" data-tone="radiology">
         <div className="shell-main">
           <SessionExpiredState action={{ label: 'Continue', onClick: () => selectTab('dashboard') }} />
         </div>
@@ -239,69 +263,53 @@ export function RadiologyShell() {
   }
 
   if (session.status !== 'authenticated') {
-    return (
-      <div className="radiology-body">
-        <div className="shell-main wp-stack">
-          <HeaderBar title="World Pharma Radiology">
-            <Text size="caption">Radiology foundation (R8-A)</Text>
-          </HeaderBar>
-          <Card>
-            <Heading level={2}>Sign in</Heading>
-            <Text tone="secondary">OTP session for imaging center staff. No PACS console.</Text>
-            <FormField label="Email">
-              {({ id }) => (
-                <Input id={id} value={email} onChange={(e) => setEmail(e.target.value)} />
-              )}
-            </FormField>
-            {signInError ? <Text tone="secondary">{signInError}</Text> : null}
-            <Button
-              onClick={() => {
-                setSignInError(null);
-                void signInWithOtp(email.trim(), 'customer').catch((err: Error) =>
-                  setSignInError(err.message),
-                );
-              }}
-            >
-              Continue with OTP
-            </Button>
-          </Card>
-        </div>
-      </div>
-    );
+    return <PortalAuthPage portalId="radiology" />;
   }
 
   const token = getAccessToken() ?? '';
 
   return (
-    <div className="radiology-body">
-      <div className="radiology-layout">
-        <Sidebar
-          items={NAV.map((item) => ({ id: item.id, label: item.label }))}
-          current={tab}
-        />
-        <div className="shell-main wp-stack">
-          <HeaderBar title="Imaging center operations">
-            <Text size="caption">
-              {selectedOrg
-                ? `${selectedOrg.display_name} · ${selectedOrg.country_code} · sandbox`
-                : 'Select an IMAGING_CENTER organization'}
-            </Text>
-            <Button size="sm" variant="secondary" onClick={() => void signOut()}>
-              Sign out
-            </Button>
-          </HeaderBar>
-          <div className="radiology-tab-row">
-            {NAV.map((item) => (
-              <Button
-                key={item.id}
-                size="sm"
-                variant={tab === item.id ? 'primary' : 'secondary'}
-                onClick={() => selectTab(item.id)}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </div>
+    <div className="portal-root radiology-body" data-tone="radiology">
+      <PortalBrandBar portalLabel="Imaging" />
+      <HeaderBar title="Imaging center operations">
+        <Text size="caption">
+          {selectedOrg
+            ? `${selectedOrg.display_name} · ${selectedOrg.country_code} · sandbox`
+            : 'Select an IMAGING_CENTER organization'}
+        </Text>
+        <Button size="sm" variant="secondary" onClick={() => void signOut()}>
+          Sign out
+        </Button>
+      </HeaderBar>
+      <div className="portal-body">
+        <aside className="portal-sidebar">
+          <Sidebar
+            items={NAV.map((item) => ({ id: item.id, label: item.label }))}
+            current={tab}
+            onSelect={(id) => {
+              if (isTabId(id)) {
+                selectTab(id);
+              }
+            }}
+          />
+        </aside>
+        <main className="portal-main wp-stack">
+          <RouteBreadcrumbs
+            items={buildPortalBreadcrumbs(
+              'Radiology',
+              tab,
+              Object.fromEntries(NAV.map((item) => [item.id, item.label])),
+            )}
+          />
+          <header className="wp-page-header">
+            <Heading level={1}>Imaging center</Heading>
+            <p className="wp-page-intro">
+              Scheduling, check-in, studies, interpretations, and report delivery for your imaging organization.
+            </p>
+          </header>
+          <p className="wp-sandbox-banner" role="status">
+            Sandbox imaging — PACS/DICOM viewers are EXTERNAL_GATED. This console is not a live radiology network.
+          </p>
 
           <OrgPicker
             organizations={organizations}
@@ -327,11 +335,29 @@ export function RadiologyShell() {
             <>
               {tab === 'dashboard' ? (
                 <Card>
-                  <Heading level={2}>Dashboard</Heading>
-                  <Text>
-                    Offers on this imaging center: {offerCount}. Sandbox acquisition is enabled (R8-C). Interpretation,
-                    reports, and production PACS/DICOM remain OFF.
+                  <Heading level={2}>Imaging snapshot</Heading>
+                  <Text tone="secondary">
+                    Queue for {selectedOrg?.display_name ?? 'your imaging center'}. Reports use sandbox metadata only.
                   </Text>
+                  <PortalKpiCards
+                    items={[
+                      { label: 'Catalog offers', value: offerCount },
+                      { label: 'Bookings', value: bookingCount },
+                      { label: 'Studies', value: studyCount },
+                    ]}
+                  />
+                  <div className="wp-quick-grid" style={{ marginTop: 16 }}>
+                    <Button onClick={() => selectTab('bookings')}>Open bookings</Button>
+                    <Button variant="secondary" onClick={() => selectTab('check-in')}>
+                      Check-in
+                    </Button>
+                    <Button variant="secondary" onClick={() => selectTab('studies')}>
+                      Studies
+                    </Button>
+                    <Button variant="secondary" onClick={() => selectTab('interpretations')}>
+                      Interpretations
+                    </Button>
+                  </div>
                 </Card>
               ) : null}
               {tab === 'organization' ? (
@@ -373,8 +399,8 @@ export function RadiologyShell() {
                   onError={handleApiError}
                 />
               ) : null}
-              {tab === 'schedule' ? (
-                <LaterPhaseState title="Equipment schedule" phase="R8-B scheduling" />
+              {tab === 'schedule' && organizationId ? (
+                <RadiologySchedulePanel organizationId={organizationId} token={token} onError={handleApiError} />
               ) : null}
               {tab === 'bookings' && organizationId ? (
                 <ImagingBookingsPanel
@@ -410,8 +436,10 @@ export function RadiologyShell() {
                 />
               ) : null}
               {tab === 'settings' ? (
-                <LaterPhaseState title="Organization settings" phase="Later imaging ops settings" />
+                <RadiologySettingsPanel organization={selectedOrg} actorPersonId={actorPersonId} />
               ) : null}
+              {tab === 'notifications' ? <PartnerInboxPanel token={token} audienceLabel="imaging operators" /> : null}
+              {tab === 'support' ? <PartnerSupportPanel token={token} audienceLabel="imaging operators" /> : null}
               {tab === 'activity' && organizationId ? (
                 <Card>
                   <Heading level={2}>Activity</Heading>
@@ -452,7 +480,7 @@ export function RadiologyShell() {
               ) : null}
             </>
           ) : null}
-        </div>
+        </main>
       </div>
     </div>
   );

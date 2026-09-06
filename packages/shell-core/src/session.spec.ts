@@ -44,4 +44,20 @@ describe('session store', () => {
     ]);
     expect(items.map((item) => item.id)).toEqual(['home']);
   });
+
+  it('keeps permissions when re-authenticating without a permissions field', () => {
+    const store = createSessionStore();
+    store.authenticate({
+      accessToken: 'a',
+      refreshToken: 'b',
+      audience: 'admin',
+      permissions: ['cms:read', 'order:read'],
+    });
+    store.authenticate({
+      accessToken: 'a2',
+      refreshToken: 'b2',
+      audience: 'admin',
+    });
+    expect(store.snapshot().permissions).toEqual(['cms:read', 'order:read']);
+  });
 });

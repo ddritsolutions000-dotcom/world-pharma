@@ -1,76 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { uuidv7 } from '@world-pharma/shared';
+import { MetricsService } from '../common/metrics.service';
 import type { EventEnvelope } from '../events/envelope';
 import { EventHandlerRegistry } from '../events/handlers';
+import { TITLE_BY_EVENT } from './notification-catalog';
 import { NotificationService } from './notification.service';
-
-type InboxCategory = 'appointment' | 'video' | 'order' | 'shipment' | 'support';
-
-const TITLE_BY_EVENT: Record<
-  string,
-  {
-    title: string;
-    category: InboxCategory;
-    pref: keyof Awaited<ReturnType<NotificationService['getPreferences']>>;
-  }
-> = {
-  APPOINTMENT_CREATED: { title: 'Appointment requested', category: 'appointment', pref: 'appointment_updates' },
-  APPOINTMENT_CONFIRMED: { title: 'Appointment confirmed', category: 'appointment', pref: 'appointment_updates' },
-  APPOINTMENT_RESCHEDULED: { title: 'Appointment rescheduled', category: 'appointment', pref: 'appointment_updates' },
-  APPOINTMENT_CANCELLED: { title: 'Appointment cancelled', category: 'appointment', pref: 'appointment_updates' },
-  APPOINTMENT_CHECKED_IN: { title: 'Checked in for appointment', category: 'appointment', pref: 'appointment_updates' },
-  VIDEO_SESSION_READY: { title: 'Video consult ready', category: 'video', pref: 'appointment_updates' },
-  VIDEO_PARTICIPANT_JOINED: { title: 'Participant joined video', category: 'video', pref: 'appointment_updates' },
-  VIDEO_SESSION_STARTED: { title: 'Video consult started', category: 'video', pref: 'appointment_updates' },
-  VIDEO_SESSION_ENDED: { title: 'Video consult ended', category: 'video', pref: 'appointment_updates' },
-  ORDER_CREATED: { title: 'Order placed', category: 'order', pref: 'order_updates' },
-  ORDER_CONFIRMED: { title: 'Order confirmed', category: 'order', pref: 'order_updates' },
-  ORDER_READY_FOR_SHIPMENT: { title: 'Order ready for shipment', category: 'order', pref: 'order_updates' },
-  ORDER_CANCELLED: { title: 'Order cancelled', category: 'order', pref: 'order_updates' },
-  SHIPMENT_CREATED: { title: 'Shipment created', category: 'shipment', pref: 'delivery_updates' },
-  SHIPMENT_IN_TRANSIT: { title: 'Shipment in transit', category: 'shipment', pref: 'delivery_updates' },
-  SHIPMENT_OUT_FOR_DELIVERY: { title: 'Out for delivery', category: 'shipment', pref: 'delivery_updates' },
-  SHIPMENT_DELIVERED: { title: 'Shipment delivered', category: 'shipment', pref: 'delivery_updates' },
-  SHIPMENT_FAILED: { title: 'Shipment failed', category: 'shipment', pref: 'delivery_updates' },
-  PRESCRIPTION_CREATED: { title: 'Prescription created', category: 'appointment', pref: 'appointment_updates' },
-  PRESCRIPTION_ISSUED: { title: 'Prescription issued', category: 'appointment', pref: 'appointment_updates' },
-  REFILL_REQUESTED: { title: 'Refill requested', category: 'appointment', pref: 'appointment_updates' },
-  REFILL_APPROVED: { title: 'Refill authorized', category: 'appointment', pref: 'appointment_updates' },
-  REFILL_REJECTED: { title: 'Refill not authorized', category: 'appointment', pref: 'appointment_updates' },
-  PRESCRIPTION_AMENDED: { title: 'Prescription updated', category: 'appointment', pref: 'appointment_updates' },
-  PRESCRIPTION_CANCELLED: { title: 'Prescription cancelled', category: 'appointment', pref: 'appointment_updates' },
-  SUPPORT_TICKET_CREATED: { title: 'Support ticket received', category: 'support', pref: 'support_updates' },
-  SUPPORT_TICKET_UPDATED: { title: 'Support ticket updated', category: 'support', pref: 'support_updates' },
-  SUPPORT_TICKET_ASSIGNED: { title: 'Support ticket assigned', category: 'support', pref: 'support_updates' },
-  SUPPORT_TICKET_CUSTOMER_REPLY: { title: 'Support reply received', category: 'support', pref: 'support_updates' },
-  SUPPORT_TICKET_AGENT_REPLY: { title: 'Support team replied', category: 'support', pref: 'support_updates' },
-  SUPPORT_TICKET_RESOLVED: { title: 'Support ticket resolved', category: 'support', pref: 'support_updates' },
-  SUPPORT_TICKET_CLOSED: { title: 'Support ticket closed', category: 'support', pref: 'support_updates' },
-  LAB_BOOKING_CREATED: { title: 'Lab booking created', category: 'order', pref: 'order_updates' },
-  LAB_BOOKING_CONFIRMED: { title: 'Lab booking confirmed', category: 'order', pref: 'order_updates' },
-  LAB_BOOKING_CANCELLED: { title: 'Lab booking cancelled', category: 'order', pref: 'order_updates' },
-  LAB_BOOKING_PAYMENT_FAILED: { title: 'Lab booking payment failed', category: 'order', pref: 'order_updates' },
-  IMAGING_BOOKING_CREATED: { title: 'Imaging booking created', category: 'order', pref: 'order_updates' },
-  IMAGING_BOOKING_CONFIRMED: { title: 'Imaging booking confirmed', category: 'order', pref: 'order_updates' },
-  IMAGING_BOOKING_CANCELLED: { title: 'Imaging booking cancelled', category: 'order', pref: 'order_updates' },
-  IMAGING_BOOKING_PAYMENT_FAILED: { title: 'Imaging booking payment failed', category: 'order', pref: 'order_updates' },
-  LAB_SAMPLE_ASSIGNED: { title: 'Lab sample collection scheduled', category: 'order', pref: 'order_updates' },
-  LAB_SAMPLE_COLLECTED: { title: 'Lab sample collected', category: 'order', pref: 'order_updates' },
-  LAB_SAMPLE_HANDED_OVER: { title: 'Lab sample handed over', category: 'order', pref: 'order_updates' },
-  LAB_SAMPLE_TRANSPORT_ENQUEUED: { title: 'Lab sample transport scheduled', category: 'order', pref: 'order_updates' },
-  LAB_SAMPLE_COLLECTION_FAILED: { title: 'Lab sample collection issue', category: 'order', pref: 'order_updates' },
-  LAB_SAMPLE_COC_UPDATED: { title: 'Lab sample status updated', category: 'order', pref: 'order_updates' },
-  LAB_REPORT_PUBLISHED: { title: 'Lab report ready', category: 'order', pref: 'order_updates' },
-  LAB_REPORT_AMENDED: { title: 'Lab report updated', category: 'order', pref: 'order_updates' },
-  IMAGING_REPORT_PUBLISHED: { title: 'Imaging report ready', category: 'order', pref: 'order_updates' },
-  IMAGING_REPORT_AMENDED: { title: 'Imaging report updated', category: 'order', pref: 'order_updates' },
-  PHYSICAL_REPORT_REQUESTED: { title: 'Physical report requested', category: 'order', pref: 'order_updates' },
-  PHYSICAL_REPORT_ACCEPTED: { title: 'Physical report accepted', category: 'order', pref: 'order_updates' },
-  PHYSICAL_REPORT_DISPATCHED: { title: 'Physical report dispatched', category: 'shipment', pref: 'delivery_updates' },
-  PHYSICAL_REPORT_DELIVERED: { title: 'Physical report delivered', category: 'shipment', pref: 'delivery_updates' },
-  PHYSICAL_REPORT_FAILED: { title: 'Physical report delivery issue', category: 'shipment', pref: 'delivery_updates' },
-  PHYSICAL_REPORT_CANCELLED: { title: 'Physical report cancelled', category: 'order', pref: 'order_updates' },
-};
 
 @Injectable()
 export class NotificationDispatchService implements OnModuleInit {
@@ -79,6 +13,7 @@ export class NotificationDispatchService implements OnModuleInit {
   constructor(
     private readonly notifications: NotificationService,
     private readonly handlers: EventHandlerRegistry,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit(): void {
@@ -87,7 +22,12 @@ export class NotificationDispatchService implements OnModuleInit {
         await this.handleDomainEvent(envelope);
       });
     }
-    this.logger.log(JSON.stringify({ event: 'notification_handlers_registered', count: Object.keys(TITLE_BY_EVENT).length }));
+    this.logger.log(
+      JSON.stringify({
+        event: 'notification_handlers_registered',
+        count: Object.keys(TITLE_BY_EVENT).length,
+      }),
+    );
   }
 
   async handleDomainEvent(envelope: EventEnvelope): Promise<void> {
@@ -95,26 +35,111 @@ export class NotificationDispatchService implements OnModuleInit {
     if (!meta) {
       return;
     }
-    const recipients = this.resolveRecipients(envelope);
-    if (!recipients.length) {
-      return;
-    }
-    for (const personId of recipients) {
-      const prefs = await this.notifications.getPreferences(personId);
-      if (!prefs[meta.pref]) {
-        continue;
+    try {
+      const recipients = this.resolveRecipients(envelope);
+      if (!recipients.length) {
+        return;
       }
-      await this.notifications.enqueueInbox(personId, {
-        id: uuidv7(),
-        channel: 'in_app',
-        title: meta.title,
-        body: 'Open the app for details. External channels remain disabled in sandbox.',
-        read: false,
-        created_at: new Date().toISOString(),
-        reference_type: meta.category,
-        reference_id: envelope.aggregateId,
-      });
+      const countryCode =
+        typeof envelope.payload?.country_code === 'string'
+          ? envelope.payload.country_code
+          : null;
+      for (const personId of recipients) {
+        const prefs = await this.notifications.getPreferences(personId);
+        if (!prefs[meta.pref]) {
+          continue;
+        }
+        const payload = envelope.payload ?? {};
+        const reference = this.resolveReference(meta.category, payload, envelope.aggregateId);
+        const occurrenceKey = `notif:${envelope.eventName}:${envelope.aggregateId}:${personId}`;
+        await this.notifications.enqueueInbox(
+          personId,
+          {
+            id: uuidv7(),
+            channel: 'in_app',
+            title: meta.title,
+            body: NotificationService.safeSandboxBody(),
+            read: false,
+            created_at: new Date().toISOString(),
+            reference_type: reference.type,
+            reference_id: reference.id,
+            event_type: envelope.eventName,
+            occurrence_key: occurrenceKey,
+            country_code: countryCode,
+            correlation_id: envelope.correlationId,
+          },
+          {
+            occurrenceKey,
+            recipientCategory: this.recipientCategory(meta.category, payload, personId),
+          },
+        );
+      }
+    } catch (err) {
+      this.metrics.increment('notification_failure_total', { event: envelope.eventName });
+      throw err;
     }
+  }
+
+  private recipientCategory(
+    category: string,
+    payload: Record<string, unknown>,
+    personId: string,
+  ): string {
+    if (Array.isArray(payload.person_ids) && payload.person_ids.includes(personId)) {
+      if (category === 'order') return 'vendor';
+      if (category === 'settlement') return 'vendor';
+      if (category === 'affiliate') return 'affiliate';
+    }
+    if (typeof payload.affiliate_person_id === 'string' && payload.affiliate_person_id === personId) {
+      return 'affiliate';
+    }
+    if (typeof payload.doctor_person_id === 'string' && payload.doctor_person_id === personId) {
+      return 'doctor';
+    }
+    if (typeof payload.lab_person_id === 'string' && payload.lab_person_id === personId) {
+      return 'lab';
+    }
+    if (typeof payload.delivery_person_id === 'string' && payload.delivery_person_id === personId) {
+      return 'delivery';
+    }
+    return 'customer';
+  }
+
+  private resolveReference(
+    category: string,
+    payload: Record<string, unknown>,
+    aggregateId: string,
+  ): { type: string; id: string } {
+    if (category === 'health_artifact' && typeof payload.artifact_id === 'string') {
+      return { type: 'health_artifact', id: payload.artifact_id };
+    }
+    if (category === 'prescription') {
+      const prescriptionId =
+        typeof payload.prescription_id === 'string' ? payload.prescription_id : aggregateId;
+      return { type: 'prescription', id: prescriptionId };
+    }
+    if (category === 'lab_booking' && typeof payload.lab_booking_id === 'string') {
+      return { type: 'lab_booking', id: payload.lab_booking_id };
+    }
+    if (category === 'imaging_booking' && typeof payload.imaging_booking_id === 'string') {
+      return { type: 'imaging_booking', id: payload.imaging_booking_id };
+    }
+    if (category === 'partner_application' && typeof payload.application_id === 'string') {
+      return { type: 'partner_application', id: payload.application_id };
+    }
+    if (category === 'settlement' && typeof payload.settlement_line_id === 'string') {
+      return { type: 'settlement_line', id: payload.settlement_line_id };
+    }
+    if (category === 'affiliate' && typeof payload.liability_id === 'string') {
+      return { type: 'affiliate', id: payload.liability_id };
+    }
+    if (category === 'affiliate' && typeof payload.order_id === 'string') {
+      return { type: 'affiliate', id: payload.order_id };
+    }
+    return {
+      type: category === 'settlement' ? 'settlement_line' : category,
+      id: aggregateId,
+    };
   }
 
   private resolveRecipients(envelope: EventEnvelope): string[] {
@@ -126,7 +151,19 @@ export class NotificationDispatchService implements OnModuleInit {
       typeof payload.patient_person_id === 'string' ? payload.patient_person_id : null,
       typeof payload.person_id === 'string' ? payload.person_id : null,
       typeof payload.buyer_person_id === 'string' ? payload.buyer_person_id : null,
+      typeof payload.doctor_person_id === 'string' ? payload.doctor_person_id : null,
+      typeof payload.applicant_person_id === 'string' ? payload.applicant_person_id : null,
+      typeof payload.lab_person_id === 'string' ? payload.lab_person_id : null,
+      typeof payload.delivery_person_id === 'string' ? payload.delivery_person_id : null,
+      typeof payload.affiliate_person_id === 'string' ? payload.affiliate_person_id : null,
     ];
+    if (Array.isArray(payload.person_ids)) {
+      for (const id of payload.person_ids) {
+        if (typeof id === 'string' && id.length >= 8) {
+          ids.add(id);
+        }
+      }
+    }
     for (const id of candidates) {
       if (id && id.length >= 8) {
         ids.add(id);

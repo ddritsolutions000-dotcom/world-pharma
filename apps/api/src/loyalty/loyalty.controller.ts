@@ -22,6 +22,15 @@ export class LoyaltySelfController {
   ledger(@CurrentPrincipal() principal: Principal, @Query('country_code') countryCode?: string) {
     return this.loyalty.listLedger(principal, countryCode ?? '');
   }
+
+  @Post('redeem-preview')
+  preview(
+    @CurrentPrincipal() principal: Principal,
+    @Body() body: { country_code?: string; points?: number; sell_minor_after_promo?: string },
+  ) {
+    const sell = BigInt(body.sell_minor_after_promo ?? '0');
+    return this.loyalty.previewRedemption(principal, body.country_code ?? '', body.points ?? 0, sell);
+  }
 }
 
 @Controller('admin/loyalty')

@@ -1,11 +1,5 @@
-import { AdminShell } from '../../src/admin-shell';
-import { VendorSupersededNotice } from '../../src/vendor-superseded-notice';
+import { redirect } from 'next/navigation';
 
-/** Superseded by apps/web-vendor — kept for admin nav compatibility. */
-export default function VendorPage() {
-  return (
-    <AdminShell>
-      <VendorSupersededNotice module="Vendor catalog" />
-    </AdminShell>
-  );
+export default function VendorRedirectPage() {
+  redirect('/partners');
 }

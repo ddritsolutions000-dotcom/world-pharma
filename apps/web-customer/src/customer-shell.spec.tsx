@@ -1,12 +1,47 @@
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { SessionProvider } from '@world-pharma/shell-web';
 import { ThemeProvider } from '@world-pharma/ui-kit/web';
-import { CustomerShell } from './customer-shell';
+import { CustomerLayout } from './customer-layout';
+
+jest.mock('next/navigation', () => ({
+  usePathname: () => '/',
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ push: jest.fn() }),
+}));
+
+jest.mock('./use-selected-country', () => ({
+  useSelectedCountry: () => ({
+    country: 'XX',
+    countries: [{ iso_alpha2: 'XX', name: 'Sandbox' }],
+    setCountry: jest.fn(),
+    countryName: 'Sandbox',
+    loading: false,
+    needsSelection: false,
+    hydrated: true,
+  }),
+  countryDisplayName: (c: { iso_alpha2: string }) => c.iso_alpha2,
+}));
+
+jest.mock('./use-serviceability', () => ({
+  useServiceability: () => ({
+    postalCode: '',
+    setPostalCode: jest.fn(),
+    serviceability: null,
+    loading: false,
+    refresh: jest.fn(),
+  }),
+}));
 
 jest.mock('./store-api', () => ({
-  fetchCatalog: async () => ({ country_enabled: false, data: [] }),
-  fetchCategories: async () => [],
+  fetchCategories: async () => [{ slug: 'vitamins', name: 'Vitamins' }],
+}));
+
+jest.mock('./account-api', () => ({
+  fetchNotificationInbox: async () => ({ ok: true, data: { data: [] } }),
+}));
+
+jest.mock('./commerce-api', () => ({
+  fetchCart: async () => ({ items: [] }),
 }));
 
 function wrap(ui: React.ReactElement, authenticated = false) {
@@ -17,30 +52,33 @@ function wrap(ui: React.ReactElement, authenticated = false) {
   );
 }
 
-describe('CustomerShell', () => {
-  it('renders a public shell without product journeys', () => {
-    wrap(<CustomerShell apiReachable={true} countryLabel="not selected" />, true);
-    expect(screen.getByRole('heading', { name: 'Customer workspace' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cart' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Account' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /pay now|complete payment/i })).not.toBeInTheDocument();
+describe('CustomerLayout', () => {
+  it('renders primary navigation links', () => {
+    wrap(
+      <CustomerLayout>
+        <p>Page content</p>
+      </CustomerLayout>,
+    );
+    expect(screen.getAllByText('Medicines').length).toBeGreaterThan(0);
+    expect(screen.getByText('Lab & doctors')).toBeInTheDocument();
+    expect(screen.getByText('Lab Tests')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Cart' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: 'Need Help' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Login' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign up' })).toBeInTheDocument();
+    expect(screen.getByText('Page content')).toBeInTheDocument();
   });
 
-  it('shows OTP sign-in when anonymous', () => {
-    wrap(<CustomerShell apiReachable={true} countryLabel="XX" />);
-    expect(screen.getByRole('button', { name: /send otp/i })).toBeInTheDocument();
-  });
-
-  it('can simulate session expiry', async () => {
-    const user = userEvent.setup();
-    wrap(<CustomerShell apiReachable={true} countryLabel="XX" />, true);
-    expect(screen.getByText(/Session: authenticated/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Simulate session expiry' }));
-    expect(screen.getByText(/Session expired/i)).toBeInTheDocument();
-  });
-
-  it('shows a network error without crashing', () => {
-    wrap(<CustomerShell apiReachable={false} countryLabel="unavailable" />, true);
-    expect(screen.getByText(/Connection problem/i)).toBeInTheDocument();
+  it('shows sign out when authenticated', () => {
+    wrap(
+      <CustomerLayout>
+        <p>Dashboard</p>
+      </CustomerLayout>,
+      true,
+    );
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Inbox' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'My account' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Sign in' })).not.toBeInTheDocument();
   });
 });

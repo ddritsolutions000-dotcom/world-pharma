@@ -659,6 +659,13 @@ export class InventoryService {
     actorPersonId: string;
     idempotencyKey: string;
     ttlSeconds?: number;
+    /** Prefer warehouse nearest to customer delivery address. */
+    destination?: {
+      postalCode?: string | null;
+      city?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    } | null;
   }) {
     return this.prisma.runWithTenant(
       workerTenantContext({
@@ -679,6 +686,12 @@ export class InventoryService {
     actorPersonId: string;
     idempotencyKey: string;
     ttlSeconds?: number;
+    destination?: {
+      postalCode?: string | null;
+      city?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    } | null;
   }) {
     const existing = await this.prisma.inventoryReservation.findUnique({
       where: { idempotencyKey: input.idempotencyKey },
@@ -690,14 +703,42 @@ export class InventoryService {
     ) {
       return existing;
     }
-    const picked = await this.prisma.$queryRaw<{ lot_id: string; location_id: string; available: number }[]>`
-      SELECT lot_id, location_id, available
-      FROM app.reservable_lot_for_checkout(
-        ${input.variantId}::uuid,
-        ${input.ownerOrgId}::uuid,
-        ${input.countryId}::uuid
-      )
-    `;
+
+    // Prefer nearest warehouse to delivery address; FEFO within that location via legacy SQL.
+    let preferredLocationId: string | undefined;
+    if (input.destination) {
+      preferredLocationId = await this.pickNearestStockedLocation({
+        variantId: input.variantId,
+        ownerOrgId: input.ownerOrgId,
+        countryId: input.countryId,
+        qty: input.qty,
+        destination: input.destination,
+      });
+    }
+
+    const picked = preferredLocationId
+      ? await this.prisma.$queryRaw<{ lot_id: string; location_id: string; available: number }[]>`
+          SELECT l.id AS lot_id, l.location_id, (b.on_hand - b.reserved - b.damaged - b.expired - b.quarantined - b.returned)::integer AS available
+          FROM inventory_lots l
+          JOIN inventory_balances b ON b.lot_id = l.id
+          WHERE l.variant_id = ${input.variantId}::uuid
+            AND l.owner_org_id = ${input.ownerOrgId}::uuid
+            AND l.country_id = ${input.countryId}::uuid
+            AND l.location_id = ${preferredLocationId}::uuid
+            AND l.status = 'ACTIVE'
+            AND (b.on_hand - b.reserved - b.damaged - b.expired - b.quarantined - b.returned) > 0
+            AND (l.expires_on IS NULL OR l.expires_on >= CURRENT_DATE)
+          ORDER BY l.expires_on NULLS FIRST, l.created_at ASC
+          LIMIT 1
+        `
+      : await this.prisma.$queryRaw<{ lot_id: string; location_id: string; available: number }[]>`
+          SELECT lot_id, location_id, available
+          FROM app.reservable_lot_for_checkout(
+            ${input.variantId}::uuid,
+            ${input.ownerOrgId}::uuid,
+            ${input.countryId}::uuid
+          )
+        `;
     const lot = picked[0];
     if (!lot?.lot_id || !lot.location_id || Number(lot.available) < input.qty) {
       throw Errors.conflict('Insufficient available quantity.');
@@ -721,6 +762,53 @@ export class InventoryService {
         idempotencyKey: input.idempotencyKey,
       },
     );
+  }
+
+  /** Rank stocked warehouses by postal/city/haversine to the customer destination. */
+  private async pickNearestStockedLocation(input: {
+    variantId: string;
+    ownerOrgId: string;
+    countryId: string;
+    qty: number;
+    destination: {
+      postalCode?: string | null;
+      city?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    };
+  }): Promise<string | undefined> {
+    const stocked = await this.prisma.$queryRaw<{ location_id: string; available: number }[]>`
+      SELECT l.location_id, SUM(b.on_hand - b.reserved - b.damaged - b.expired - b.quarantined - b.returned)::integer AS available
+      FROM inventory_lots l
+      JOIN inventory_balances b ON b.lot_id = l.id
+      WHERE l.variant_id = ${input.variantId}::uuid
+        AND l.owner_org_id = ${input.ownerOrgId}::uuid
+        AND l.country_id = ${input.countryId}::uuid
+        AND l.status = 'ACTIVE'
+        AND (b.on_hand - b.reserved - b.damaged - b.expired - b.quarantined - b.returned) > 0
+        AND (l.expires_on IS NULL OR l.expires_on >= CURRENT_DATE)
+      GROUP BY l.location_id
+      HAVING SUM(b.on_hand - b.reserved - b.damaged - b.expired - b.quarantined - b.returned) >= ${input.qty}
+    `;
+    if (!stocked.length) {
+      return undefined;
+    }
+    const locations = await this.prisma.location.findMany({
+      where: { id: { in: stocked.map((s) => s.location_id) } },
+      select: { id: true, postalCode: true, city: true, latitude: true, longitude: true },
+    });
+    const { rankByNearestDestination } = await import('../logistics/geo');
+    const ranked = rankByNearestDestination(
+      locations.map((loc) => ({
+        id: loc.id,
+        postalCode: loc.postalCode,
+        city: loc.city,
+        latitude: loc.latitude != null ? Number(loc.latitude) : null,
+        longitude: loc.longitude != null ? Number(loc.longitude) : null,
+      })),
+      input.destination,
+    );
+    return ranked[0]?.id;
   }
 
   private commitCheckoutReservation(
@@ -814,20 +902,29 @@ export class InventoryService {
     });
   }
 
-  async releaseByIds(ids: string[], actorPersonId: string): Promise<void> {
+  async releaseByIds(ids: string[], actorPersonId: string, countryId: string): Promise<void> {
     for (const id of ids) {
       const reservation = await this.prisma.inventoryReservation.findUnique({ where: { id } });
       if (!reservation || reservation.status !== InventoryReservationStatus.OPEN) {
         continue;
       }
-      await this.prisma.$transaction(async (tx) =>
-        this.releaseReservation(
-          tx,
-          reservation,
-          `checkout-release:${id}`,
-          actorPersonId,
-          InventoryReservationStatus.RELEASED,
-        ),
+      await this.prisma.runWithTenant(
+        workerTenantContext({
+          organizationId: reservation.ownerOrgId,
+          countryId,
+          personId: actorPersonId,
+        }),
+        () =>
+          this.prisma.$transaction(async (tx) =>
+            this.releaseReservation(
+              tx,
+              reservation,
+              `checkout-release:${id}`,
+              actorPersonId,
+              InventoryReservationStatus.RELEASED,
+            ),
+          ),
+        { fresh: true },
       );
     }
   }
@@ -848,6 +945,25 @@ export class InventoryService {
         this.releaseReservation(innerTx, reservation, idempotencyKey, actorPersonId, status),
       input,
     );
+  }
+
+  /** Fail closed before payment capture when checkout inventory holds are missing or expired. */
+  async assertCheckoutHoldsActive(input: { skipInventoryHold: boolean; reservationIds: string[] }): Promise<void> {
+    if (input.skipInventoryHold || !input.reservationIds.length) {
+      return;
+    }
+    const holds = await this.prisma.inventoryReservation.findMany({
+      where: { id: { in: input.reservationIds } },
+    });
+    const openCount = holds.filter((row) => row.status === InventoryReservationStatus.OPEN).length;
+    if (openCount !== input.reservationIds.length) {
+      throw Errors.problem(
+        409,
+        'RESERVATION_EXPIRED',
+        'Reservation expired',
+        'Checkout inventory hold expired or is unavailable. Refresh checkout and try again.',
+      );
+    }
   }
 
   async consumeCheckoutReservations(
@@ -913,6 +1029,64 @@ export class InventoryService {
       });
     }
     return consumed;
+  }
+
+  async consumeReservation(principal: Principal, reservationId: string, idempotencyKey: string) {
+    const reservation = await this.prisma.inventoryReservation.findUnique({ where: { id: reservationId } });
+    if (!reservation) {
+      throw Errors.notFound('Reservation not found.');
+    }
+    await assertInventoryOwner(this.prisma, principal, reservation.ownerOrgId, reservation.locationId);
+    if (reservation.status === InventoryReservationStatus.CONSUMED) {
+      return reservation;
+    }
+    if (reservation.status !== InventoryReservationStatus.OPEN) {
+      throw Errors.conflict('Reservation is not open.');
+    }
+    if (!reservation.lotId) {
+      throw Errors.conflict('Reservation has no lot to consume.');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await this.apply(tx, {
+        lotId: reservation.lotId!,
+        type: InventoryMovementType.PICK,
+        qty: reservation.qty,
+        reasonCode: 'consume',
+        actorPersonId: principal.personId,
+        idempotencyKey,
+        delta: { reserved: -reservation.qty, onHand: -reservation.qty },
+      });
+      return tx.inventoryReservation.update({
+        where: { id: reservation.id },
+        data: { status: InventoryReservationStatus.CONSUMED },
+      });
+    });
+  }
+
+  async restoreOrderAllocation(
+    tx: Tx,
+    orderId: string,
+    items: Array<{ orderItemId: string; lotId: string | null; qty: number }>,
+    actorPersonId: string,
+    reasonCode: 'order_cancel_restock' | 'order_return_restock' = 'order_cancel_restock',
+  ): Promise<void> {
+    const keyPrefix = reasonCode === 'order_return_restock' ? 'order-return-restock' : 'order-restock';
+    for (const item of items) {
+      if (!item.lotId || item.qty <= 0) {
+        continue;
+      }
+      await this.apply(tx, {
+        lotId: item.lotId,
+        type: InventoryMovementType.ADJUSTMENT,
+        qty: item.qty,
+        reasonCode,
+        actorPersonId,
+        idempotencyKey: `${keyPrefix}:${orderId}:${item.orderItemId}`,
+        refType: 'Order',
+        refId: orderId,
+        delta: { onHand: item.qty },
+      });
+    }
   }
 
   /**
@@ -1233,14 +1407,12 @@ export class InventoryService {
   }
 
   async availabilityForOffers(countryId: string, offers: { variantId: string; sellerOrgId: string }[]) {
-    const inStock = new Set<string>();
+    const availability = new Map<string, number>();
     for (const offer of offers) {
       const qty = await this.availableUnits(offer.variantId, offer.sellerOrgId, countryId);
-      if (qty > 0) {
-        inStock.add(offer.variantId);
-      }
+      availability.set(`${offer.variantId}:${offer.sellerOrgId}`, qty);
     }
-    return inStock;
+    return availability;
   }
 
   private async apply(

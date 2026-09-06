@@ -6,7 +6,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "noEmit": true,
-    "types": ["react", "react-dom", "node"],
+    "types": ["react", "react-dom", "node", "jest"],
     "allowJs": true,
     "incremental": true,
     "plugins": [{ "name": "next" }],

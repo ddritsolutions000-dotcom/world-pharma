@@ -1,8 +1,10 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Header, Param, Query, StreamableFile } from '@nestjs/common';
 import { PrismaService, runWithTenant } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
 import { resolveCountryByCode } from './cms-country';
+import { CmsAssetService } from './cms-asset.service';
+import { helpMediaPath } from './cms-public-media';
 import { CmsSearchService } from './cms-search.service';
 
 @Controller('help')
@@ -10,6 +12,7 @@ export class HelpCenterController {
   constructor(
     private readonly search: CmsSearchService,
     private readonly prisma: PrismaService,
+    private readonly assets: CmsAssetService,
   ) {}
 
   @Get('categories')
@@ -69,8 +72,24 @@ export class HelpCenterController {
   @Get('banners')
   async banners(@Query('country_code') countryCode?: string, @Query('locale') locale = 'en') {
     const country = await resolveCountryByCode(this.prisma, countryCode);
-    return runWithTenant(workerTenantContext({ countryId: country.id }), async () => ({
-      data: await this.search.listBanners(country.id, locale),
-    }));
+    return runWithTenant(workerTenantContext({ countryId: country.id }), async () => {
+      const rows = await this.search.listBanners(country.id, locale);
+      return {
+        data: rows.map((row) => ({
+          ...row,
+          image_url: row.asset_id ? helpMediaPath(row.asset_id, country.isoAlpha2) : null,
+        })),
+      };
+    });
+  }
+
+  @Get('media/:assetId')
+  @Header('Cache-Control', 'public, max-age=120')
+  async media(@Param('assetId') assetId: string, @Query('country_code') countryCode?: string) {
+    const file = await this.assets.servePublished(assetId, countryCode);
+    return new StreamableFile(file.bytes, {
+      type: file.contentType,
+      disposition: 'inline',
+    });
   }
 }

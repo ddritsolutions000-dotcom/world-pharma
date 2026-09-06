@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
+import { AdminEntitySearchService } from './admin-entity-search.service';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
 import { RequireAudiences } from '../identity/require-audiences';
@@ -43,7 +44,22 @@ export class AdminSearchController {
     private readonly prisma: PrismaService,
     private readonly jobs: SearchIndexJobService,
     private readonly securityEvents: SecurityEventsService,
+    private readonly entitySearch: AdminEntitySearchService,
   ) {}
+
+  @Get('entities')
+  @RequireAudiences('admin')
+  async searchEntities(
+    @CurrentPrincipal() principal: Principal,
+    @Query('q') query?: string,
+    @Query('country_code') countryCode?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!query?.trim()) {
+      throw Errors.validation('q is required');
+    }
+    return this.entitySearch.search(principal, query, countryCode, limit ? Number(limit) : undefined);
+  }
 
   @Post('reindex')
   @RequireAudiences('admin')

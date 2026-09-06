@@ -3,9 +3,8 @@ import { InventoryAdminPanel } from '../../src/inventory-admin';
 
 export default function InventoryPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="inventory">
       <InventoryAdminPanel />
-    </>
+    </AdminShell>
   );
 }

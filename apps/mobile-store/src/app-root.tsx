@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SafeAreaView, View } from 'react-native';
-import { createSessionStore, requestOtp, verifyOtp } from '@world-pharma/shell-core';
+import { createSessionStore } from '@world-pharma/shell-core';
 import {
   NativeButton,
   NativeCard,
   NativeEmptyState,
   NativeInput,
+  NativeListRow,
+  NativeListSection,
   NativeLoadingState,
   NativeNetworkErrorState,
-  NativePermissionDeniedState,
+  NativeOtpSignIn,
+  NativePageHeader,
   NativeSessionExpiredState,
   NativeText,
+  OpsKpiRow,
+  OpsShell,
+  OpsWorkCard,
+  OpsAccessGate,
 } from '@world-pharma/ui-kit/native';
 import {
   StoreApiError,
@@ -36,6 +43,8 @@ import {
   fetchOrganizations,
   fetchStoreSupportTickets,
   createStoreSupportTicket,
+  fetchStoreNotificationInbox,
+  markStoreNotificationRead,
   mapDispensingLines,
   newIdempotencyKey,
   postGrn,
@@ -49,27 +58,27 @@ import {
   type DispensingLot,
   type MapDispenseLineInput,
   type StoreSupportTicket,
+  type StoreInboxItem,
 } from './store-api';
+import { dispensingStatusLabel, storeOrderNextAction, storeOrderNextActionLabel, storeOrderStatusLabel } from './store-status-labels';
 
 type MainTab = 'dashboard' | 'inventory' | 'orders' | 'rx' | 'more';
-type MoreScreen = 'menu' | 'exceptions' | 'grn' | 'adjust' | 'support';
+type MoreScreen = 'menu' | 'exceptions' | 'grn' | 'adjust' | 'support' | 'inbox';
 type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'expired';
 
+const STAFF_EMAIL = 'sandbox-store@dev.local';
+
 const MAIN_TABS: Array<{ id: MainTab; label: string }> = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'inventory', label: 'Inventory' },
-  { id: 'orders', label: 'Orders' },
-  { id: 'rx', label: 'Rx desk' },
+  { id: 'dashboard', label: 'Floor' },
+  { id: 'inventory', label: 'Stock' },
+  { id: 'orders', label: 'Pick' },
+  { id: 'rx', label: 'Rx' },
   { id: 'more', label: 'More' },
 ];
 
 export function App() {
   const store = useMemo(() => createSessionStore(), []);
   const [session, setSession] = useState(store.snapshot());
-  const [email, setEmail] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [signInBusy, setSignInBusy] = useState(false);
 
   const [organizations, setOrganizations] = useState<Array<{ id: string; display_name: string }>>([]);
   const [locations, setLocations] = useState<Array<{ id: string; name: string }>>([]);
@@ -82,7 +91,9 @@ export function App() {
   const [moreScreen, setMoreScreen] = useState<MoreScreen>('menu');
   const [viewState, setViewState] = useState<ViewState>('idle');
   const [summary, setSummary] = useState<string | null>(null);
+  const [dashKpi, setDashKpi] = useState({ queue: 0, expiring: 0, pick: 0, pack: 0 });
   const [rows, setRows] = useState<string[]>([]);
+  const [orderQueue, setOrderQueue] = useState<Array<{ id: string; order_number: string; status: string }>>([]);
 
   const [catalogOffers, setCatalogOffers] = useState<CatalogOffer[]>([]);
   const [offerIndex, setOfferIndex] = useState(0);
@@ -100,11 +111,13 @@ export function App() {
   const [eligibleLots, setEligibleLots] = useState<DispensingLot[]>([]);
   const [mapLineIndex, setMapLineIndex] = useState(0);
   const [supportTickets, setSupportTickets] = useState<StoreSupportTicket[]>([]);
+  const [inbox, setInbox] = useState<StoreInboxItem[]>([]);
   const [supportSubject, setSupportSubject] = useState('');
   const [supportBody, setSupportBody] = useState('');
   const [supportReferenceType, setSupportReferenceType] = useState('order');
   const [supportReferenceId, setSupportReferenceId] = useState('');
   const [supportMessage, setSupportMessage] = useState<string | null>(null);
+  const [denyDetail, setDenyDetail] = useState<string | null>(null);
 
   const token = store.getAccessToken();
   const scoped = Boolean(token && organizationId && locationId);
@@ -114,6 +127,7 @@ export function App() {
     (err: unknown) => {
       if (err instanceof StoreApiError) {
         if (err.status === 403) {
+          setDenyDetail(err.message);
           setViewState('forbidden');
           return;
         }
@@ -136,23 +150,45 @@ export function App() {
     setViewState('loading');
     try {
       const orgs = await fetchOrganizations(token);
-      setOrganizations(orgs.data);
-      if (orgs.data.length) {
-        const oid = orgs.data[orgIndex]?.id ?? orgs.data[0]!.id;
-        setOrganizationId(oid);
-        const locs = await fetchLocations(token, oid);
-        setLocations(locs.data);
-        if (locs.data.length) {
-          setLocationId(locs.data[locIndex]?.id ?? locs.data[0]!.id);
-        }
+      const usable: Array<{ id: string; display_name: string }> = [];
+      let pickedOrgId = '';
+      let pickedLocs: Array<{ id: string; name: string }> = [];
+      for (const org of orgs.data) {
         try {
-          const offers = await fetchCatalogOffers(token, oid);
+          const locs = await fetchLocations(token, org.id);
+          if (locs.data.length) {
+            usable.push(org);
+            if (!pickedOrgId) {
+              pickedOrgId = org.id;
+              pickedLocs = locs.data.map((row) => ({ id: row.id, name: row.name }));
+            }
+          }
+        } catch {
+          /* Staff may belong to a catalog vendor org that is not a pharmacy floor. */
+        }
+      }
+      setOrganizations(usable);
+      if (pickedOrgId) {
+        const idx = Math.max(0, usable.findIndex((row) => row.id === pickedOrgId));
+        setOrgIndex(idx);
+        setOrganizationId(pickedOrgId);
+        setLocations(pickedLocs);
+        setLocIndex(0);
+        setLocationId(pickedLocs[0]?.id ?? '');
+        try {
+          const offers = await fetchCatalogOffers(token, pickedOrgId);
           setCatalogOffers(Array.isArray(offers) ? offers : []);
           setOfferIndex(0);
         } catch {
           setCatalogOffers([]);
         }
+      } else {
+        setOrganizationId('');
+        setLocationId('');
+        setLocations([]);
+        setCatalogOffers([]);
       }
+      setDenyDetail(null);
       setViewState('idle');
     } catch (err) {
       handleError(err);
@@ -176,9 +212,12 @@ export function App() {
     try {
       if (tab === 'dashboard') {
         const dash = await fetchDashboard(token, organizationId, locationId);
-        setSummary(
-          `Queue ${String(dash.queue_count ?? 0)} · Expiring ${String(dash.expiring_lots ?? 0)} · Pick ${String(dash.open_pick_tasks ?? 0)} · Pack ${String(dash.open_pack_tasks ?? 0)}`,
-        );
+        const queue = Number(dash.queue_count ?? 0);
+        const expiring = Number(dash.expiring_lots ?? 0);
+        const pick = Number(dash.open_pick_tasks ?? 0);
+        const pack = Number(dash.open_pack_tasks ?? 0);
+        setDashKpi({ queue, expiring, pick, pack });
+        setSummary(`Queue ${queue} · Expiring ${expiring} · Pick ${pick} · Pack ${pack}`);
         setRows([]);
       } else if (tab === 'inventory') {
         const lots = await fetchLots(token, organizationId, locationId);
@@ -186,14 +225,15 @@ export function App() {
         setSummary(null);
       } else if (tab === 'orders') {
         const orders = await fetchOrders(token, organizationId, locationId);
-        setRows(orders.data.map((o) => `${o.order_number} — ${o.status}`));
-        setSummary(null);
+        setOrderQueue(orders.data);
+        setRows([]);
+        setSummary(`${orders.data.length} order(s)`);
       } else if (tab === 'rx') {
         const queue = await fetchDispensingCases(token, organizationId, locationId);
         setDispensingCases(queue.cases ?? []);
         setRows(
           (queue.cases ?? []).map(
-            (c) => `${c.status} · Rx ${c.prescription_id.slice(0, 8)} · v${c.version_number ?? '—'}`,
+            (c) => `${dispensingStatusLabel(c.status)} · Rx ${c.prescription_id.slice(0, 8)} · v${c.version_number ?? '—'}`,
           ),
         );
         setSummary(`${queue.cases?.length ?? 0} dispensing case(s)`);
@@ -223,8 +263,8 @@ export function App() {
       } else if (tab === 'more' && moreScreen === 'exceptions') {
         const ex = await fetchExceptions(token, organizationId, locationId);
         setRows([
-          ...ex.pick_tasks.map((t) => `Pick ${t.order_number} ${t.status}`),
-          ...ex.pack_tasks.map((t) => `Pack ${t.order_number} ${t.status}${t.exception ? ` ${t.exception}` : ''}`),
+          ...ex.pick_tasks.map((t) => `Pick ${t.order_number} ${storeOrderStatusLabel(t.status)}`),
+          ...ex.pack_tasks.map((t) => `Pack ${t.order_number} ${storeOrderStatusLabel(t.status)}${t.exception ? ` ${t.exception}` : ''}`),
         ]);
         setSummary(null);
       }
@@ -254,6 +294,26 @@ export function App() {
     }
   }, [token, handleError]);
 
+  const loadInbox = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    setViewState('loading');
+    try {
+      const res = await fetchStoreNotificationInbox(token);
+      setInbox(res.data ?? []);
+      setViewState('idle');
+    } catch (err) {
+      handleError(err);
+    }
+  }, [token, handleError]);
+
+  useEffect(() => {
+    if (scoped && tab === 'more' && moreScreen === 'inbox') {
+      void loadInbox();
+    }
+  }, [scoped, tab, moreScreen, loadInbox]);
+
   useEffect(() => {
     if (scoped && tab === 'more' && moreScreen === 'support') {
       void loadSupport();
@@ -273,59 +333,23 @@ export function App() {
     }
   };
 
-  const sendOtp = async () => {
-    setSignInBusy(true);
-    try {
-      const result = await requestOtp(email, 'LOGIN');
-      setChallengeId(result.challengeId);
-      if (result.devCode) {
-        setOtpCode(result.devCode);
-      }
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
-    }
-  };
-
-  const verifySignIn = async () => {
-    if (!challengeId) {
-      await sendOtp();
-      return;
-    }
-    setSignInBusy(true);
-    try {
-      const result = await verifyOtp(challengeId, otpCode, 'customer');
-      store.authenticate({
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        audience: 'customer',
-      });
-      setSession(store.snapshot());
-      setViewState('idle');
-    } catch {
-      setViewState('network');
-    } finally {
-      setSignInBusy(false);
-    }
-  };
-
   if (session.status !== 'authenticated') {
     return (
-      <SafeAreaView style={{ flex: 1 }}>
-        <View style={{ flex: 1, padding: 16, gap: 12 }}>
-          <NativeText variant="h1">Store mobile</NativeText>
-          <NativeCard>
-            <NativeInput label="Email" value={email} onChangeText={setEmail} />
-            {challengeId ? <NativeInput label="One-time code" value={otpCode} onChangeText={setOtpCode} /> : null}
-            <NativeButton
-              label={signInBusy ? 'Please wait…' : challengeId ? 'Verify & sign in' : 'Send OTP'}
-              onPress={() => void (challengeId ? verifySignIn() : sendOtp())}
-            />
-          </NativeCard>
-          {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => setViewState('idle')} /> : null}
-        </View>
-      </SafeAreaView>
+      <NativeOtpSignIn
+        portalTitle="World Pharma Pharmacy"
+        portalDescription="Store operations console — pick, pack, inventory, and Rx desk for assigned pharmacies."
+        audience="customer"
+        staffEmail={STAFF_EMAIL}
+        onAuthenticated={({ accessToken, refreshToken }) => {
+          store.authenticate({
+            accessToken,
+            refreshToken,
+            audience: 'customer',
+          });
+          setSession(store.snapshot());
+          setViewState('idle');
+        }}
+      />
     );
   }
 
@@ -346,10 +370,18 @@ export function App() {
   const locLabel = locations[locIndex]?.name ?? locations[0]?.name ?? '—';
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
-      <View style={{ flex: 1, padding: 16, gap: 12 }}>
-        <NativeText variant="h1">Store mobile</NativeText>
-
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#07111A' }}>
+      <OpsShell
+        product="Pharmacy WMS"
+        accent="#2F855A"
+        status={locLabel}
+        tabs={MAIN_TABS}
+        active={tab}
+        onSelect={(id) => {
+          setTab(id as MainTab);
+          setMoreScreen('menu');
+        }}
+      >
         {organizations.length ? (
           <NativeCard>
             <NativeText>{`Org: ${orgLabel}`}</NativeText>
@@ -381,32 +413,86 @@ export function App() {
           <NativeEmptyState title="No store access" description="Organization membership required." />
         )}
 
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {MAIN_TABS.map((item) => (
-            <NativeButton
-              key={item.id}
-              label={item.label}
-              variant={tab === item.id ? 'primary' : 'secondary'}
-              onPress={() => {
-                setTab(item.id);
-                setMoreScreen('menu');
-              }}
-            />
-          ))}
-        </View>
-
         {viewState === 'loading' ? (
-          <NativeLoadingState title={tab === 'rx' ? 'Loading dispensing queue' : 'Loading'} />
+          <NativeLoadingState mode="dark" title={tab === 'rx' ? 'Loading dispensing queue' : 'Loading'} />
         ) : null}
-        {viewState === 'forbidden' ? <NativePermissionDeniedState /> : null}
-        {viewState === 'network' ? <NativeNetworkErrorState onRetry={() => void loadTab()} /> : null}
+        {viewState === 'forbidden' ? (
+          <OpsAccessGate
+            detail={denyDetail}
+            staffEmail={STAFF_EMAIL}
+            onRetry={() => void loadScope()}
+            onSignOut={() => {
+              store.signOut();
+              setSession(store.snapshot());
+              setViewState('idle');
+              setDenyDetail(null);
+            }}
+          />
+        ) : null}
+        {viewState === 'network' ? <NativeNetworkErrorState mode="dark" onRetry={() => void loadTab()} /> : null}
 
-        {viewState === 'idle' && tab === 'dashboard' && summary ? <NativeText>{summary}</NativeText> : null}
-        {viewState === 'idle' && (tab === 'inventory' || tab === 'orders') && !rows.length && scoped ? (
+        {viewState === 'idle' && tab === 'dashboard' ? (
+          <>
+            <OpsKpiRow
+              items={[
+                { label: 'Queue', value: dashKpi.queue },
+                { label: 'Expiring', value: dashKpi.expiring },
+                { label: 'Pick', value: dashKpi.pick },
+                { label: 'Pack', value: dashKpi.pack },
+              ]}
+            />
+            {summary ? (
+              <NativeCard>
+                <NativeText>{summary}</NativeText>
+              </NativeCard>
+            ) : null}
+          </>
+        ) : null}
+        {viewState === 'idle' && tab === 'orders' && !orderQueue.length && scoped ? (
+          <NativeEmptyState title="No orders" description="Allocated store orders appear here." />
+        ) : null}
+        {viewState === 'idle' && tab === 'inventory' && !rows.length && scoped ? (
           <NativeEmptyState title="Nothing here" description="No data for this view." />
         ) : null}
-        {viewState === 'idle' && (tab === 'inventory' || tab === 'orders' || (tab === 'more' && moreScreen === 'exceptions'))
-          ? rows.map((row) => <NativeText key={row}>{row}</NativeText>)
+        {viewState === 'idle' && (tab === 'inventory' || (tab === 'more' && moreScreen === 'exceptions'))
+          ? rows.map((row) => (
+              <NativeCard key={row}>
+                <NativeText>{row}</NativeText>
+              </NativeCard>
+            ))
+          : null}
+
+        {viewState === 'idle' && tab === 'orders' && scoped && orderQueue.length
+          ? orderQueue.map((order) => {
+              const next = storeOrderNextAction(order.status);
+              const label = storeOrderNextActionLabel(order.status);
+              return (
+                <OpsWorkCard
+                  key={order.id}
+                  kicker="ORDER"
+                  title={order.order_number}
+                  meta={storeOrderStatusLabel(order.status)}
+                  status={label ?? storeOrderStatusLabel(order.status)}
+                  actionLabel={label ?? undefined}
+                  onAction={
+                    next && label
+                      ? () =>
+                          void runMutation(async () => {
+                            if (next === 'pick/start') {
+                              await startPick(token!, organizationId, locationId, order.id);
+                            } else if (next === 'pick/complete') {
+                              await completePick(token!, organizationId, locationId, order.id);
+                            } else if (next === 'pack/complete') {
+                              await completePack(token!, organizationId, locationId, order.id);
+                            } else {
+                              await readyOrder(token!, organizationId, locationId, order.id);
+                            }
+                          })
+                      : undefined
+                  }
+                />
+              );
+            })
           : null}
 
         {viewState === 'idle' && tab === 'rx' && scoped ? (
@@ -603,11 +689,15 @@ export function App() {
         ) : null}
 
         {viewState === 'idle' && tab === 'more' && moreScreen === 'menu' ? (
-          <NativeCard>
-            <NativeButton label="Exceptions" variant="secondary" onPress={() => setMoreScreen('exceptions')} />
-            <NativeButton label="Receive stock (GRN)" variant="secondary" onPress={() => setMoreScreen('grn')} />
-            <NativeButton label="Adjust lot" variant="secondary" onPress={() => setMoreScreen('adjust')} />
-            <NativeButton label="Get help" variant="secondary" onPress={() => setMoreScreen('support')} />
+          <>
+            <NativePageHeader title="More" subtitle="Inbox, stock, and help for this store." />
+            <NativeListSection title="Operations">
+              <NativeListRow label="Inbox" hint="Order and ops notices" onPress={() => setMoreScreen('inbox')} />
+              <NativeListRow label="Exceptions" hint="Pick and pack issues" onPress={() => setMoreScreen('exceptions')} />
+              <NativeListRow label="Receive stock (GRN)" onPress={() => setMoreScreen('grn')} />
+              <NativeListRow label="Adjust lot" onPress={() => setMoreScreen('adjust')} />
+              <NativeListRow label="Get help" hint="Support tickets" onPress={() => setMoreScreen('support')} />
+            </NativeListSection>
             <NativeButton
               label="Sign out"
               variant="secondary"
@@ -616,6 +706,37 @@ export function App() {
                 setSession(store.snapshot());
               }}
             />
+          </>
+        ) : null}
+
+        {tab === 'more' && moreScreen === 'inbox' && scoped ? (
+          <NativeCard>
+            <NativeButton label="Back" variant="secondary" onPress={() => setMoreScreen('menu')} />
+            <NativeText variant="h2">Store inbox</NativeText>
+            {inbox.length ? (
+              inbox.map((row) => (
+                <View key={row.id} style={{ gap: 6, marginTop: 8 }}>
+                  <NativeText>{row.title}</NativeText>
+                  <NativeText variant="caption">{row.body}</NativeText>
+                  {!row.read ? (
+                    <NativeButton
+                      label="Mark as read"
+                      variant="secondary"
+                      onPress={() =>
+                        void runMutation(async () => {
+                          await markStoreNotificationRead(token!, row.id);
+                          await loadInbox();
+                        })
+                      }
+                    />
+                  ) : (
+                    <NativeText variant="caption">Read</NativeText>
+                  )}
+                </View>
+              ))
+            ) : (
+              <NativeEmptyState title="Inbox empty" description="Order and ops notices appear here." />
+            )}
           </NativeCard>
         ) : null}
 
@@ -738,57 +859,7 @@ export function App() {
             />
           </NativeCard>
         ) : null}
-
-        {viewState === 'idle' && tab === 'orders' && scoped && rows.length ? (
-          <NativeCard>
-            <NativeText variant="h2">Order actions</NativeText>
-            <NativeText variant="caption">Uses first order in queue</NativeText>
-            <NativeButton
-              label="Start pick"
-              variant="secondary"
-              onPress={() =>
-                void runMutation(async () => {
-                  const orders = await fetchOrders(token!, organizationId, locationId);
-                  const id = orders.data[0]?.id;
-                  if (id) await startPick(token!, organizationId, locationId, id);
-                })
-              }
-            />
-            <NativeButton
-              label="Complete pick"
-              variant="secondary"
-              onPress={() =>
-                void runMutation(async () => {
-                  const orders = await fetchOrders(token!, organizationId, locationId);
-                  const id = orders.data[0]?.id;
-                  if (id) await completePick(token!, organizationId, locationId, id);
-                })
-              }
-            />
-            <NativeButton
-              label="Complete pack"
-              variant="secondary"
-              onPress={() =>
-                void runMutation(async () => {
-                  const orders = await fetchOrders(token!, organizationId, locationId);
-                  const id = orders.data[0]?.id;
-                  if (id) await completePack(token!, organizationId, locationId, id);
-                })
-              }
-            />
-            <NativeButton
-              label="Ready to ship"
-              onPress={() =>
-                void runMutation(async () => {
-                  const orders = await fetchOrders(token!, organizationId, locationId);
-                  const id = orders.data[0]?.id;
-                  if (id) await readyOrder(token!, organizationId, locationId, id);
-                })
-              }
-            />
-          </NativeCard>
-        ) : null}
-      </View>
+      </OpsShell>
     </SafeAreaView>
   );
 }

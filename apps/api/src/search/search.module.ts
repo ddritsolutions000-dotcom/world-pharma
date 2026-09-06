@@ -10,6 +10,7 @@ import { ClinicalSearchIndexService } from './clinical-search-index.service';
 import { ProviderSearchService } from './provider-search.service';
 import { SearchIndexDispatchService } from './search-index-dispatch.service';
 import { SearchIndexJobService } from './search-index-job.service';
+import { AdminEntitySearchService } from './admin-entity-search.service';
 import { SearchIndexResolverService } from './search-index-resolver.service';
 
 @Module({
@@ -22,6 +23,7 @@ import { SearchIndexResolverService } from './search-index-resolver.service';
     SearchIndexJobService,
     SearchIndexResolverService,
     SearchIndexDispatchService,
+    AdminEntitySearchService,
   ],
   exports: [SearchIndexJobService, ProviderSearchService, ClinicalSearchIndexService],
 })

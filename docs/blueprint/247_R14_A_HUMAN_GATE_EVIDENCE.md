@@ -1,12 +1,13 @@
 # 247 — R14-A human gate evidence (intake record)
 
-**CR:** `CR-R14-A-HUMAN-GATE-EVIDENCE-247` · **Updates:** `247-UPDATE` · `249` · `252` · `257` · `260` · `262` · `263` · `265` · `266` · **`267`** · **`281`** · **`301`**  
+**CR:** `CR-R14-A-HUMAN-GATE-EVIDENCE-247` · **Updates:** `247-UPDATE` · `249` · `252` · `257` · `260` · `262` · `263` · `265` · `266` · **`267`** · **`281`** · **`301`** · **`325`** · **`326`**  
 **Verdict:** **`R14_A_GATE_EVIDENCE_INCOMPLETE`**  
-**Date:** 30 August 2026 (intake) · **Last verified:** 30 August 2026 (CR-281 evidence close intake)  
+**Date:** 30 August 2026 (intake) · **Last verified:** 31 August 2026 (CR-325 collection reconciliation)  
 **Purpose:** Authoritative, safe project record for R14-A human/legal/commercial prerequisites  
 **Prior gate audits:** [245](245_PRE_R14_A_GATE_VERIFICATION.md) · [246](246_PRE_R14_A_GATE_REVERIFICATION.md) · [248](248_PRE_R14_A_GATE_REVERIFICATION.md) · [251](251_PRE_R14_A_FINAL_GATE_VERIFICATION.md) · [256](256_PRE_R14_A_FINAL_GATE_VERIFICATION.md) (**R14_A_GATES_BLOCKED**) · [257](257_R14_A_HUMAN_GATE_EVIDENCE.md) · [258](258_R14_A_GATE_BLOCKER_RESOLUTION.md) · [260](260_R14_A_GATE_INTAKE.md) · [262](262_R14_A_HUMAN_GATE_RESOLUTION.md) (CR-262 resolution)  
 **Plan:** [242](242_R14_IMPLEMENTATION_PLAN.md) · **Plan audit:** [243](243_POST_R14_PLAN_AUDIT.md)  
-**Canonical roadmap:** [93](93_GLOBAL_IMPLEMENTATION_ROADMAP.md)
+**Canonical roadmap:** [93](93_GLOBAL_IMPLEMENTATION_ROADMAP.md)  
+**Owner fill surface:** [R14_A_OWNER_GATE_CHECKLIST.md](R14_A_OWNER_GATE_CHECKLIST.md) — enter values there; this book remains the evidence log and stays `NOT EVIDENCED` until genuine input exists.
 
 Documentation/evidence intake only. **No source, schema, migration, API, UI, config, routing, adapter, webhook, or country-pack changes were made.**
 
@@ -28,7 +29,15 @@ Documentation/evidence intake only. **No source, schema, migration, API, UI, con
 
 **Gates evidenced:** **0 / 7**
 
-**Book 35 updates:** **None** — no `DECIDED` rows applied; no authoritative human decisions were supplied through CR-265, CR-266, CR-267, CR-281, or **CR-301**.
+**Book 35 updates:** **None** — no `DECIDED` rows applied; no authoritative human decisions were supplied through CR-265, CR-266, CR-267, CR-281, CR-301, CR-325, or **CR-326** (DEV config placeholders are not evidence).
+
+### Evidence collection (CR-325)
+
+**CR-325-R14-A-HUMAN-GATE-COLLECTION** required reconciliation of owner-provided real evidence against Book 263’s seven gates. **CR body contained collection rules only; no gate decision values.** Independent re-scan of Book 35/38, [263](263_R14_A_HUMAN_APPROVAL_HANDOFF.md), payment source, `package.json`, `.env.example`, and repo artifacts found **no new evidence**. All seven gates remain **`NOT EVIDENCED`**. Full record: [325](325_R14_A_HUMAN_GATE_COLLECTION.md). **`PAYMENT_LIVE_ENABLED` unchanged (fail-closed). CR-244 not executed.**
+
+### Engineering config store (CR-326) — not evidence
+
+**CR-326-R14-A-ENGINEERING-CONFIG** added a DEV/DEMO configuration table and admin workflow. Seeded `DEV_PLACEHOLDER_*` / `ZZ` values are **explicitly PLACEHOLDER**. They **do not** close any gate in this book. **`R14_A_ENGINEERING_CONFIG_READY` ≠ `R14_A_LIVE_PRODUCTION_READY`.** Full record: [326](326_R14_A_ENGINEERING_CONFIG.md).
 
 ### Evidence intake (CR-301)
 

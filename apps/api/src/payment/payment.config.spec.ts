@@ -86,6 +86,11 @@ describe('payment.config', () => {
     expect(() =>
       assertLiveProductionPrerequisites('test', { gatewayCode: 'STRIPE_LIVE', countryIso2: 'US' }),
     ).toThrow(ProblemException);
+    try {
+      assertLiveProductionPrerequisites('test', { gatewayCode: 'STRIPE_LIVE', countryIso2: 'US' });
+    } catch (err) {
+      expect((err as ProblemException).code).toBe('HUMAN_GATES_NOT_PRODUCTION_READY');
+    }
   });
 
   it('blocks payment submit in production without live enablement', () => {

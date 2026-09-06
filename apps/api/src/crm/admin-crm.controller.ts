@@ -65,6 +65,20 @@ export class AdminCrmController {
     return this.customer360.listCustomerTickets(principal, personId, countryCode ?? '');
   }
 
+  @Post('customers/:personId/reveal-identifiers')
+  @RequireAudiences('admin')
+  @RequirePermissions('user:reveal_pii')
+  revealIdentifiers(
+    @CurrentPrincipal() principal: Principal,
+    @Param('personId') personId: string,
+    @Body() body: { country_code?: string; reason?: string },
+  ) {
+    return this.customer360.revealIdentifiers(principal, personId, {
+      country_code: body.country_code ?? '',
+      reason: body.reason ?? '',
+    });
+  }
+
   @Post('conversion-events')
   @RequireAudiences('admin')
   @RequirePermissions('crm:write')

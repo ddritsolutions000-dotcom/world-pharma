@@ -4,6 +4,7 @@ import {
   CatalogLifecycle,
   CheckoutStatus,
   ConversionEventKind,
+  OfferOwnership,
   OfferStatus,
   Prisma,
   RegulatedClass,
@@ -13,17 +14,24 @@ import {
 import { uuidv7 } from '@world-pharma/shared';
 import { PrismaService, runWithTenant } from '../app/prisma.service';
 import { RedisService } from '../app/redis.service';
+import { MarketplaceEligibilityService } from '../catalog/marketplace-eligibility.service';
 import { PricingService } from '../catalog/pricing.service';
 import { Errors } from '../common/problem';
 import { OutboxService } from '../events/outbox.service';
 import type { Principal } from '../identity/current-principal';
 import { InventoryService } from '../inventory/inventory.service';
+import { ServiceabilityZoneService } from '../logistics/serviceability-zone.service';
 import { PolicyResolver } from '../policy/resolver';
 import { PromoEvaluatorService } from '../promo/promo-evaluator.service';
 import { AffiliateAttributionService } from '../affiliate/affiliate-attribution.service';
 import { PersonalizationService } from '../personalization/personalization.service';
 import { ConversionEventService } from '../crm/conversion-event.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
+import { CarePlanService } from '../care-plan/care-plan.service';
+import { RxFulfillmentSafetyGate } from '../clinical/rx-fulfillment-safety-gate';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
+import { computeCommerceFees } from './commerce-fees';
+import { computeAffiliateCommissionPreview } from '../affiliate/affiliate-commission';
 
 const QUOTE_TTL_MS = 15 * 60 * 1000;
 const MAX_LINES = 50;
@@ -42,6 +50,11 @@ export class CartService {
     private readonly affiliateAttribution: AffiliateAttributionService,
     private readonly personalization: PersonalizationService,
     private readonly conversionEvents: ConversionEventService,
+    private readonly loyalty: LoyaltyService,
+    private readonly carePlans: CarePlanService,
+    private readonly serviceability: ServiceabilityZoneService,
+    private readonly marketplace: MarketplaceEligibilityService,
+    private readonly rxFulfillmentSafety: RxFulfillmentSafetyGate,
   ) {}
 
   getCart(principal: Principal, countryCode: string) {
@@ -288,10 +301,18 @@ export class CartService {
     });
   }
 
-  listAddresses(principal: Principal) {
-    return this.prisma.customerAddress.findMany({
+  async listAddresses(principal: Principal) {
+    const rows = await this.prisma.customerAddress.findMany({
       where: { customerPersonId: principal.personId },
-      orderBy: { createdAt: 'desc' },
+      include: { country: { select: { isoAlpha2: true } } },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
+    return rows.map((row) => {
+      const { country, ...rest } = row;
+      return {
+        ...rest,
+        country_code: country.isoAlpha2,
+      };
     });
   }
 
@@ -388,13 +409,20 @@ export class CartService {
     return { ok: true };
   }
 
-  startCheckout(principal: Principal, countryCode: string, idempotencyKey: string, affiliateCode?: string) {
+  startCheckout(
+    principal: Principal,
+    countryCode: string,
+    idempotencyKey: string,
+    affiliateCode?: string,
+    clickId?: string,
+  ) {
     return this.idempotent(principal.personId, idempotencyKey, 'POST', '/me/checkout/sessions', async () => {
       const country = await this.requireCountry(countryCode);
-      const resolvedAffiliate = await this.affiliateAttribution.resolveCheckoutCode(
-        affiliateCode ?? null,
-        country.id,
-      );
+      const resolvedAffiliate = await this.affiliateAttribution.resolveCheckoutAttribution({
+        affiliateCode: affiliateCode ?? null,
+        clickId,
+        countryId: country.id,
+      });
       const cart = await this.ensureCart(principal.personId, country.id);
       const count = await this.prisma.cartItem.count({ where: { cartId: cart.id, deletedAt: null } });
       if (!count || !cart.sellerOrgId) {
@@ -475,7 +503,13 @@ export class CartService {
     return this.presentSession(session.id, undefined, principal.personId);
   }
 
-  quoteSession(principal: Principal, sessionId: string, idempotencyKey: string, revalidate: boolean) {
+  quoteSession(
+    principal: Principal,
+    sessionId: string,
+    idempotencyKey: string,
+    revalidate: boolean,
+    loyaltyPoints = 0,
+  ) {
     return this.idempotent(
       principal.personId,
       idempotencyKey,
@@ -487,16 +521,45 @@ export class CartService {
         if (session.status === CheckoutStatus.EXPIRED || session.status === CheckoutStatus.CANCELLED) {
           throw Errors.problem(409, 'CHECKOUT_EXPIRED', 'Checkout expired', 'Start a new checkout session.');
         }
-        if (session.reservationIds.length) {
-          await this.inventory.releaseByIds(session.reservationIds, principal.personId);
-        }
         const cart = await this.prisma.cart.findUniqueOrThrow({
           where: { id: session.cartId },
           include: { items: { where: { deletedAt: null } } },
         });
-        const built = await this.buildQuote(cart, session.promoCode, session.affiliateCode);
+        if (session.addressId) {
+          const address = await this.prisma.customerAddress.findUnique({ where: { id: session.addressId } });
+          const country = await this.prisma.country.findUniqueOrThrow({ where: { id: session.countryId } });
+          if (address) {
+            await this.assertCheckoutFulfillment(
+              country.isoAlpha2,
+              address.postalCode ?? '',
+              session.sellerOrgId!,
+              cart,
+            );
+          }
+        }
+        if (session.reservationIds.length) {
+          await this.inventory.releaseByIds(session.reservationIds, principal.personId, session.countryId);
+        }
+        const built = await this.buildQuote(
+          cart,
+          session.promoCode,
+          session.affiliateCode,
+          principal,
+          loyaltyPoints,
+        );
         const reservationIds: string[] = [];
         const skipHold = session.skipInventoryHold || cart.skipInventoryHold;
+        const destinationAddress = session.addressId
+          ? await this.prisma.customerAddress.findUnique({ where: { id: session.addressId } })
+          : null;
+        const destination = destinationAddress
+          ? {
+              postalCode: destinationAddress.postalCode,
+              city: destinationAddress.city,
+              latitude: null as number | null,
+              longitude: null as number | null,
+            }
+          : null;
         // ED-R5D-01 Option B: Rx handoff skips soft reserve (stock already PICK'd at R5-C).
         if (!skipHold) {
           for (const line of built.lines) {
@@ -508,6 +571,7 @@ export class CartService {
               actorPersonId: principal.personId,
               idempotencyKey: `checkout:${session.id}:${line.offer_id}:${built.fingerprint}`,
               ttlSeconds: 900,
+              destination,
             });
             reservationIds.push(reservation.id);
           }
@@ -552,11 +616,14 @@ export class CartService {
               currency: built.currency,
               sellMinor: BigInt(built.sell_minor),
               discountMinor: BigInt(built.discount_minor),
-              taxMinor: 0n,
-              shippingMinor: 0n,
+              taxMinor: BigInt(built.tax_minor),
+              shippingMinor: BigInt(built.shipping_minor),
               totalMinor: BigInt(built.total_minor),
               taxStatus: TaxQuoteStatus.UNKNOWN,
-              shippingStatus: ShippingQuoteStatus.UNAVAILABLE,
+              shippingStatus:
+                built.shipping_status === 'QUOTED'
+                  ? ShippingQuoteStatus.QUOTED
+                  : ShippingQuoteStatus.UNAVAILABLE,
               payload: quotePayload as unknown as Prisma.InputJsonValue,
               expiresAt: new Date(Date.now() + QUOTE_TTL_MS),
             },
@@ -603,7 +670,7 @@ export class CartService {
       where: { id: session.cartId },
       include: { items: { where: { deletedAt: null } } },
     });
-    const built = await this.buildQuote(cart, session.promoCode, session.affiliateCode);
+    const built = await this.buildQuote(cart, session.promoCode, session.affiliateCode, principal, 0);
     if (built.fingerprint !== fingerprint) {
       await this.prisma.checkoutSession.update({
         where: { id: session.id },
@@ -623,6 +690,34 @@ export class CartService {
     );
   }
 
+  private async assertCheckoutFulfillment(
+    countryIso2: string,
+    postalCode: string,
+    sellerOrgId: string,
+    cart: { countryId: string; items: { offerId: string }[] },
+  ) {
+    await this.serviceability.assertMedicineDelivery(countryIso2, postalCode);
+    if (!cart.items.length) {
+      return;
+    }
+    const offer = await this.loadSellableOffer(cart.items[0]!.offerId, cart.countryId);
+    if (
+      offer.ownership === OfferOwnership.VENDOR_OWNED ||
+      offer.ownership === OfferOwnership.MARKETPLACE
+    ) {
+      const purchasable = await this.marketplace.isCustomerPurchasableSeller(sellerOrgId);
+      if (!purchasable) {
+        const view = await this.marketplace.evaluate(sellerOrgId);
+        throw Errors.problem(
+          422,
+          'SELLER_NOT_SERVICEABLE',
+          'Seller not serviceable',
+          view.blocked_reason ?? view.next_action ?? 'This seller cannot fulfill orders to your address.',
+        );
+      }
+    }
+  }
+
   private async buildQuote(
     cart: {
       countryId: string;
@@ -631,6 +726,8 @@ export class CartService {
     },
     promoCode: string | null,
     affiliateCode: string | null,
+    principal?: Principal,
+    loyaltyPoints = 0,
   ) {
     if (!cart.items.length) {
       throw Errors.validation('Cart is empty.');
@@ -664,6 +761,32 @@ export class CartService {
       if (assortment?.rxRequired && !item.prescriptionCaseId) {
         throw Errors.problem(422, 'RX_REQUIRED', 'Prescription required', 'Attach a prescription case before checkout.');
       }
+      if (assortment?.rxRequired && item.prescriptionCaseId) {
+        if (!principal) {
+          throw Errors.problem(401, 'UNAUTHORIZED', 'Unauthorized', 'Authentication is required for Rx checkout.');
+        }
+        const gate = await this.rxFulfillmentSafety.evaluateCommerceAttach({
+          customerPersonId: principal.personId,
+          countryId: cart.countryId,
+          prescriptionCaseId: item.prescriptionCaseId,
+          catalogVariantId: item.variantId,
+          qty: item.qty,
+        });
+        await this.rxFulfillmentSafety.auditGateDecision({
+          actorPersonId: principal.personId,
+          countryId: cart.countryId,
+          decision: gate,
+          context: 'commerce_attach',
+        });
+        if (gate.decision !== 'ELIGIBLE' && gate.decision !== 'AUTO_EXECUTE') {
+          throw Errors.problem(
+            422,
+            gate.reason_code,
+            gate.decision === 'REVIEW_REQUIRED' ? 'Review required' : 'Prescription blocked',
+            gate.customer_message,
+          );
+        }
+      }
       if (assortment?.maxQtyPerOrder && item.qty > assortment.maxQtyPerOrder) {
         throw Errors.problem(422, 'QTY_MAX', 'Quantity limit', 'Quantity exceeds the country order cap.');
       }
@@ -685,28 +808,109 @@ export class CartService {
       });
     }
     const promo = await this.computePromo(promoCode, country.id, sell);
-    const discount = promo ? BigInt(promo.discount_minor) : 0n;
-    const fingerprint = `${lines.map((line) => `${line.offer_id}:${line.qty}:${line.price_version_id}`).join('|')}|${promo?.code ?? ''}|${affiliateCode ?? ''}`;
+    const promoDiscount = promo ? BigInt(promo.discount_minor) : 0n;
+    const sellAfterPromo = sell - promoDiscount;
+    const care = await this.carePlans.quoteBenefit(principal, country.isoAlpha2, sellAfterPromo > 0n ? sellAfterPromo : 0n);
+    const sellAfterCare = sellAfterPromo - care.discount_minor;
+    let loyaltyRedeem: { points_applied: number; discount_minor: string } | null = null;
+    if (principal && loyaltyPoints > 0) {
+      const preview = await this.loyalty.previewRedemption(
+        principal,
+        country.isoAlpha2,
+        loyaltyPoints,
+        sellAfterCare > 0n ? sellAfterCare : 0n,
+      );
+      if (preview.allowed && preview.points_applied > 0) {
+        loyaltyRedeem = {
+          points_applied: preview.points_applied,
+          discount_minor: preview.discount_minor,
+        };
+      }
+    }
+    const discount = promoDiscount + care.discount_minor + BigInt(loyaltyRedeem?.discount_minor ?? '0');
+    const resolved = await this.policy.resolvePublished(country.isoAlpha2);
+    const commerce = resolved?.document.commerce ?? {
+      platform_fee_bps: 0,
+      platform_fee_flat_minor: 0,
+      delivery_fee_minor: 0,
+      packaging_fee_minor: 0,
+      handling_fee_minor: 0,
+      payment_convenience_fee_minor: 0,
+      free_delivery_threshold_minor: null,
+      carrier_cost_estimate_minor: 0,
+      affiliate_commission_bps: 0,
+    };
+    const fees = computeCommerceFees({
+      sell_minor: sell,
+      discount_minor: discount,
+      platform_fee_bps: commerce.platform_fee_bps,
+      platform_fee_flat_minor: commerce.platform_fee_flat_minor,
+      delivery_fee_minor: care.free_delivery ? 0 : commerce.delivery_fee_minor,
+      packaging_fee_minor: commerce.packaging_fee_minor,
+      handling_fee_minor: commerce.handling_fee_minor,
+      payment_convenience_fee_minor: commerce.payment_convenience_fee_minor,
+      free_delivery_threshold_minor: care.free_delivery ? 0 : commerce.free_delivery_threshold_minor,
+      carrier_cost_estimate_minor: commerce.carrier_cost_estimate_minor,
+    });
+    const fingerprint = `${lines.map((line) => `${line.offer_id}:${line.qty}:${line.price_version_id}`).join('|')}|${promo?.code ?? ''}|${affiliateCode ?? ''}|loy:${loyaltyRedeem?.points_applied ?? 0}|care:${care.plan?.id ?? ''}`;
+    const resolvedAffiliate = affiliateCode
+      ? await this.affiliateAttribution.resolveCheckoutCode(affiliateCode, country.id)
+      : null;
+    const hasActiveCode = resolvedAffiliate
+      ? await this.affiliateAttribution.hasActiveManagedCode(resolvedAffiliate, country.id)
+      : false;
+    const selfReferral = resolvedAffiliate
+      ? await this.affiliateAttribution.isSelfReferral(resolvedAffiliate, country.id, principal?.personId)
+      : false;
+    const affiliateClinicalAllowed =
+      resolved?.document.partner_types?.AFFILIATE?.clinical_categories === true;
+    const affiliatePreview = computeAffiliateCommissionPreview({
+      baseMinor: sellAfterCare > 0n ? sellAfterCare : 0n,
+      commissionBps: commerce.affiliate_commission_bps ?? 0,
+      clinical,
+      clinicalCategoriesAllowed: affiliateClinicalAllowed,
+      hasActiveCode: hasActiveCode && Boolean(resolvedAffiliate),
+      selfReferral,
+    });
     return {
       currency,
       sell_minor: sell.toString(),
-      discount_minor: discount.toString(),
-      tax_minor: '0',
-      shipping_minor: '0',
-      total_minor: (sell - discount).toString(),
+      discount_minor: fees.discount_minor,
+      loyalty: loyaltyRedeem,
+      care_plan: care.plan
+        ? {
+            plan_code: care.plan.id,
+            name: care.plan.name,
+            discount_bps: care.plan.discount_bps,
+            discount_minor: care.discount_minor.toString(),
+            free_delivery: care.free_delivery,
+          }
+        : null,
+      subtotal_minor: fees.subtotal_minor,
+      platform_fee_minor: fees.platform_fee_minor,
+      packaging_fee_minor: fees.packaging_fee_minor,
+      handling_fee_minor: fees.handling_fee_minor,
+      payment_convenience_fee_minor: fees.payment_convenience_fee_minor,
+      delivery_fee_minor: fees.delivery_fee_minor,
+      carrier_actual_cost_minor: fees.carrier_actual_cost_minor,
+      delivery_subsidy_minor: fees.delivery_subsidy_minor,
+      tax_minor: fees.tax_minor,
+      shipping_minor: fees.shipping_minor,
+      total_minor: fees.total_minor,
       tax_status: 'UNKNOWN',
-      shipping_status: 'UNAVAILABLE',
-      shipping_quoted: false,
+      shipping_status: fees.shipping_status,
+      shipping_quoted: fees.shipping_quoted,
       tax_quoted: false,
       settlement: false,
       lines,
       promo,
       affiliate: {
-        code: affiliateCode,
-        preview_minor: '0',
-        clinical_blocked: true,
-        payable: false,
+        code: resolvedAffiliate,
+        preview_minor: affiliatePreview.preview_minor,
+        clinical_blocked: affiliatePreview.clinical_blocked,
+        payable: affiliatePreview.payable,
         clinical,
+        self_referral: selfReferral,
       },
       fingerprint,
     };
@@ -732,14 +936,43 @@ export class CartService {
       include: {
         items: {
           where: { deletedAt: null },
-          include: { offer: { include: { variant: { include: { item: { include: { translations: true } } } } } } },
+          include: {
+            offer: {
+              include: {
+                variant: {
+                  include: {
+                    item: { include: { translations: true, countries: true } },
+                  },
+                },
+              },
+            },
+          },
         },
         country: true,
       },
     });
+    const sellerOrgIds = new Set<string>();
+    if (cart.sellerOrgId) {
+      sellerOrgIds.add(cart.sellerOrgId);
+    }
+    for (const item of cart.items) {
+      sellerOrgIds.add(item.offer.sellerOrgId);
+    }
+    const orgRows =
+      sellerOrgIds.size > 0
+        ? await runWithTenant(workerTenantContext({ countryId: cart.countryId }), () =>
+            this.prisma.organization.findMany({
+              where: { id: { in: [...sellerOrgIds] } },
+              select: { id: true, displayName: true },
+            }),
+          )
+        : [];
+    const sellerNames = new Map(orgRows.map((row) => [row.id, row.displayName]));
+    const sellerDisplayName = cart.sellerOrgId ? sellerNames.get(cart.sellerOrgId) ?? null : null;
     const items = [];
     for (const item of cart.items) {
       const quoted = await this.pricing.quote(item.offerId, BigInt(item.qty)).catch(() => null);
+      const assortment = item.offer.variant.item.countries.find((row) => row.countryId === cart.countryId);
       items.push({
         id: item.id,
         offer_id: item.offerId,
@@ -748,6 +981,8 @@ export class CartService {
         sku: item.offer.variant.skuCode,
         title: item.offer.variant.item.translations[0]?.title ?? item.offer.variant.skuCode,
         seller_org_id: item.offer.sellerOrgId,
+        seller_display_name: sellerNames.get(item.offer.sellerOrgId) ?? null,
+        rx_required: assortment?.rxRequired ?? false,
         currency: quoted?.currency ?? item.offer.currency,
         sell_minor: quoted?.totals.sell_minor ?? null,
       });
@@ -757,6 +992,8 @@ export class CartService {
       country_id: cart.countryId,
       country_code: cart.country.isoAlpha2,
       seller_org_id: cart.sellerOrgId,
+      seller_display_name: sellerDisplayName,
+      single_seller_cart: true,
       status: cart.status,
       skip_inventory_hold: cart.skipInventoryHold,
       dispensing_case_id: cart.dispensingCaseId,
@@ -777,11 +1014,25 @@ export class CartService {
       throw Errors.forbidden('You cannot access another customer’s checkout.');
     }
     const quote = session.quotes[0];
+    const seller = session.sellerOrgId
+      ? await runWithTenant(workerTenantContext({ countryId: session.countryId }), () =>
+          this.prisma.organization.findUnique({
+            where: { id: session.sellerOrgId! },
+            select: { displayName: true },
+          }),
+        )
+      : null;
+    const payload = quote?.payload as
+      | { affiliate?: { code?: string; preview_minor?: string; clinical_blocked?: boolean; payable?: boolean } }
+      | null
+      | undefined;
     return {
       id: session.id,
       status: session.status,
       cart_id: session.cartId,
       seller_org_id: session.sellerOrgId,
+      seller_display_name: seller?.displayName ?? null,
+      single_seller_checkout: true,
       skip_inventory_hold: session.skipInventoryHold,
       dispensing_case_id: session.dispensingCaseId,
       dispense_event_id: session.dispenseEventId,
@@ -789,6 +1040,7 @@ export class CartService {
       address: session.address,
       payments_enabled: false,
       payment_message: 'Payment stays policy-gated. Use POST /pay with Idempotency-Key when the country pack enables sandbox payments.',
+      affiliate: payload?.affiliate ?? (session.affiliateCode ? { code: session.affiliateCode } : null),
       quote: quote
         ? {
             id: quote.id,
@@ -841,6 +1093,20 @@ export class CartService {
     const assortment = offer.variant.item.countries.find((row) => row.countryId === countryId);
     if (!assortment?.available) {
       throw Errors.serviceDisabled('Product is not available in this country.');
+    }
+    if (
+      offer.ownership === OfferOwnership.VENDOR_OWNED ||
+      offer.ownership === OfferOwnership.MARKETPLACE
+    ) {
+      const purchasable = await this.marketplace.isCustomerPurchasableSeller(offer.sellerOrgId);
+      if (!purchasable) {
+        throw Errors.problem(
+          409,
+          'OFFER_EXPIRED',
+          'Offer unavailable',
+          'Seller is not eligible for marketplace orders.',
+        );
+      }
     }
     return offer;
   }
@@ -905,7 +1171,7 @@ export class CartService {
       return;
     }
     if (session.reservationIds.length) {
-      await this.inventory.releaseByIds(session.reservationIds, session.customerPersonId);
+      await this.inventory.releaseByIds(session.reservationIds, session.customerPersonId, session.countryId);
     }
     await this.prisma.$transaction(async (tx) => {
       await tx.checkoutSession.update({

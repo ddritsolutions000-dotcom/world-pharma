@@ -427,3 +427,22 @@ export function createStoreSupportTicket(
     body: JSON.stringify(body),
   });
 }
+
+export type StoreInboxItem = {
+  id: string;
+  channel: string;
+  title: string;
+  body: string;
+  read: boolean;
+  created_at: string;
+  reference_type?: string;
+  reference_id?: string;
+};
+
+export function fetchStoreNotificationInbox(token: string) {
+  return call<{ data: StoreInboxItem[] }>('/api/v1/me/notifications/inbox', token);
+}
+
+export function markStoreNotificationRead(token: string, id: string) {
+  return call<{ data: StoreInboxItem[] }>(`/api/v1/me/notifications/inbox/${id}/read`, token, { method: 'POST' });
+}

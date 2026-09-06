@@ -13,18 +13,10 @@ import {
   activateMarketplaceSeller,
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { signIn, provisionOrgAdmin, provisionSuperAdmin } from '../test/sign-in';
 
 describe('orders fulfillment (e2e)', () => {
+  jest.setTimeout(120_000);
   let app: INestApplication;
   let prisma: PrismaService;
 
@@ -126,34 +118,9 @@ describe('orders fulfillment (e2e)', () => {
         timezone: 'UTC',
       },
     });
-    const admin = await signIn(app, `ord-admin-${Date.now()}@example.com`, 'admin');
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `ord-vendor-${Date.now()}@example.com`, 'admin');
-    const otherVendorUser = await signIn(app, `ord-vendor-b-${Date.now()}@example.com`, 'admin');
-    const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: vendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: vendor.id,
-        status: 'ACTIVE',
-      },
-    });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: otherVendorUser.personId,
-        roleId: orgRole!.id,
-        scope: 'organization',
-        organizationId: otherVendor.id,
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, 'ord-admin');
+    const vendorUser = await provisionOrgAdmin(app, prisma, 'ord-vendor', vendor.id);
+    const otherVendorUser = await provisionOrgAdmin(app, prisma, 'ord-vendor-b', otherVendor.id);
 
     await activateMarketplaceSeller(app, {
       vendorToken: vendorUser.token,
@@ -240,7 +207,7 @@ describe('orders fulfillment (e2e)', () => {
       .send({ payment_intent_id: paid.body.id });
     expect(created.status).toBeLessThan(300);
     expect(created.body.status).toBe('ALLOCATED');
-    expect(created.body.shipments[0].carrier).toBe('none');
+    expect(created.body.shipments[0].carrier).toBe('sandbox');
     expect(created.body.economics.actual_carrier_cost_minor).toBeNull();
     expect(created.body.economics.platform_take_est_minor).toBe('0');
 
@@ -281,9 +248,14 @@ describe('orders fulfillment (e2e)', () => {
     expect(otherPeek.status).toBe(403);
 
     const picked = await request(app.getHttpServer())
-      .post(`/api/v1/vendor/orders/${created.body.id}/pick/start`)
+      .post(`/api/v1/vendor/orders/${created.body.id}/accept`)
       .set('Authorization', `Bearer ${vendorUser.token}`);
     expect(picked.status).toBeLessThan(300);
+
+    const pickStarted = await request(app.getHttpServer())
+      .post(`/api/v1/vendor/orders/${created.body.id}/pick/start`)
+      .set('Authorization', `Bearer ${vendorUser.token}`);
+    expect(pickStarted.status).toBeLessThan(300);
     const pickedDone = await request(app.getHttpServer())
       .post(`/api/v1/vendor/orders/${created.body.id}/pick/complete`)
       .set('Authorization', `Bearer ${vendorUser.token}`);

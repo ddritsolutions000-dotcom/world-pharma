@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { PolicyResolver } from '../policy/resolver';
+import { readLogisticsEnvironment } from './carrier.config';
+import { assertProductionLogisticsAvailable } from './production-logistics-gate';
 
 export type RouteInput = {
   countryIso2: string;
@@ -12,6 +14,7 @@ export type RouteInput = {
   temperature: string;
   serviceLevel: string;
   excludeCarrierId?: string | null;
+  preferredCarrierCode?: string | null;
 };
 
 @Injectable()
@@ -22,6 +25,15 @@ export class CarrierRouter {
   ) {}
 
   async choose(input: RouteInput) {
+    if (readLogisticsEnvironment() === 'production') {
+      await assertProductionLogisticsAvailable(this.prisma, { countryCode: input.countryIso2 });
+      throw Errors.problem(
+        503,
+        'NO_PRODUCTION_CARRIER_ADAPTER',
+        'Production carrier unavailable',
+        'No live carrier adapter is registered. Production booking cannot use MockCarrierAdapter.',
+      );
+    }
     const pack = await this.policy.resolvePublished(input.countryIso2);
     if (!pack) {
       throw Errors.problem(
@@ -78,7 +90,18 @@ export class CarrierRouter {
       return cov && caps.has('create_shipment');
     });
     ranked.sort((a, b) => (a.accounts[0]?.priority ?? 100) - (b.accounts[0]?.priority ?? 100));
-    const chosen = ranked[0];
+    const preferredCode = input.preferredCarrierCode?.trim().toUpperCase();
+    const chosen = preferredCode
+      ? ranked.find((carrier) => carrier.code === preferredCode)
+      : ranked[0];
+    if (preferredCode && !chosen) {
+      throw Errors.problem(
+        409,
+        'CARRIER_UNAVAILABLE',
+        'Carrier unavailable',
+        `Carrier ${preferredCode} is not eligible for this shipment in sandbox.`,
+      );
+    }
     if (!chosen) {
       throw Errors.problem(409, 'NO_CARRIER', 'No carrier', 'No sandbox carrier matches this shipment.');
     }
@@ -86,7 +109,7 @@ export class CarrierRouter {
       carrierId: chosen.id,
       carrierCode: chosen.code,
       accountId: chosen.accounts[0]?.id ?? null,
-      reason: 'priority_sandbox',
+      reason: preferredCode ? 'admin_selected' : 'priority_sandbox',
       candidates: ranked.map((c) => c.code),
     };
   }

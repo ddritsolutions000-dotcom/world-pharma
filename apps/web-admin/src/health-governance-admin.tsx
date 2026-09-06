@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { AdminViewLoadError } from './admin-request-error';
+import { adminApiRoot, classifyAdminViewState } from './admin-http';
 import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
@@ -11,8 +12,9 @@ import {
   Heading,
   Input,
   LoadingState,
-  NetworkErrorState,
+  ErrorState,
   PermissionDeniedState,
+  Select,
   Table,
   Text,
 } from '@world-pharma/ui-kit/web';
@@ -31,12 +33,11 @@ async function adminCall<T = unknown>(
   token: string,
   init?: RequestInit,
 ): Promise<T> {
-  const base = apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
+  const base = adminApiRoot();
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
     },
@@ -48,7 +49,7 @@ async function adminCall<T = unknown>(
   return body as T;
 }
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
 
 function cell(value: unknown): string {
   if (value == null || value === '') {
@@ -88,7 +89,7 @@ function MetadataListPanel(props: {
           `${props.endpoint}${qs}`,
           token,
         );
-        setRows((prev) => (cursor ? [...prev, ...(body.data ?? [])] : body.data ?? []));
+        setRows((prev) => (cursor ? [...prev, ...(body.data ?? [])] : (body.data ?? [])));
         setNextCursor(body.next_cursor ?? null);
         setViewState('idle');
       } catch (err) {
@@ -98,11 +99,11 @@ function MetadataListPanel(props: {
             return;
           }
           if (err.status === 401) {
-            setViewState('network');
+            setViewState(classifyAdminViewState(err));
             return;
           }
         }
-        setViewState('network');
+        setViewState(classifyAdminViewState(err));
       }
     },
     [getAccessToken, props.endpoint],
@@ -122,9 +123,7 @@ function MetadataListPanel(props: {
 
       {viewState === 'loading' && rows.length === 0 ? <LoadingState label="Loading" /> : null}
       {viewState === 'forbidden' ? <PermissionDeniedState /> : null}
-      {viewState === 'network' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
-      ) : null}
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
 
       {viewState === 'idle' && rows.length === 0 ? (
         <EmptyState title={props.emptyTitle} description={props.emptyDescription} />
@@ -210,13 +209,17 @@ export function BreakGlassGovernance() {
         token,
       );
       setRows(body.data ?? []);
+      setSelectedGrantId((current) => {
+        const ids = (body.data ?? []).map((row) => String(row.id ?? ''));
+        return current && ids.includes(current) ? current : ids[0] ?? '';
+      });
       setViewState('idle');
     } catch (err) {
       if (err instanceof AdminApiError && err.status === 403) {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [getAccessToken]);
 
@@ -261,9 +264,7 @@ export function BreakGlassGovernance() {
 
       {viewState === 'loading' ? <LoadingState label="Loading break-glass queue" /> : null}
       {viewState === 'forbidden' ? <PermissionDeniedState /> : null}
-      {viewState === 'network' ? (
-        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
-      ) : null}
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
 
       {viewState === 'idle' && rows.length === 0 ? (
         <EmptyState title="No active break-glass grants" description="Open grants appear in this queue." />
@@ -279,9 +280,24 @@ export function BreakGlassGovernance() {
 
       <Card>
         <Heading level={3}>Mark reviewed</Heading>
-        <FormField label="Grant ID">
+        <FormField label="Grant">
           {({ id }) => (
-            <Input id={id} value={selectedGrantId} onChange={(e) => setSelectedGrantId(e.target.value)} />
+            <Select
+              id={id}
+              value={selectedGrantId}
+              onChange={(e) => setSelectedGrantId(e.target.value)}
+              disabled={rows.length === 0}
+            >
+              {rows.length === 0 ? <option value="">No grants loaded</option> : null}
+              {rows.map((row, index) => {
+                const gid = String(row.id ?? '');
+                return (
+                  <option key={gid || `grant-${index}`} value={gid}>
+                    {cell(row.review_status)} · {cell(row.patient_person_id).slice(0, 8)} · {gid.slice(0, 8)}
+                  </option>
+                );
+              })}
+            </Select>
           )}
         </FormField>
         <FormField label="Review notes (optional)">
@@ -304,7 +320,11 @@ export function BreakGlassGovernance() {
         )}
         {reviewState === 'done' ? <Text tone="secondary">Review recorded.</Text> : null}
         {reviewState === 'error' ? (
-          <NetworkErrorState action={{ label: 'Retry review', onClick: () => void submitReview() }} />
+          <ErrorState
+            title="Could not save review"
+            description="Retry the review. This is not a connection problem unless the API is down."
+            action={{ label: 'Retry review', onClick: () => void submitReview() }}
+          />
         ) : null}
       </Card>
     </section>

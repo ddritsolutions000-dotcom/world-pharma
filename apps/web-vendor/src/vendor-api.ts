@@ -1,6 +1,6 @@
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { vendorApiRoot } from './vendor-http';
 
-const base = () => apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
+const base = () => vendorApiRoot();
 
 export class VendorApiError extends Error {
   status: number;
@@ -49,10 +49,14 @@ export type VendorOffer = {
   seller_org_id?: string;
   country_code?: string;
   currency?: string;
+  cost_minor?: string | number;
   sell_minor?: string | number;
   status?: string;
   title?: string;
   sku?: string;
+  catalog_ready?: boolean;
+  inventory_ready?: boolean;
+  blockers?: string[];
 };
 
 export type VendorLot = {
@@ -105,6 +109,8 @@ export type VendorOrder = {
   total_minor?: string;
   goods_minor?: string;
   rx_origin?: boolean;
+  rx_fulfillment_status?: string | null;
+  vendor_accepted?: boolean;
   created_at?: string;
 };
 
@@ -161,6 +167,8 @@ export type VendorOrderDetail = VendorOrder & {
     carrier?: string;
   }>;
   returns?: Array<{ id: string; reason: string; created_at: string }>;
+  payment_status?: string | null;
+  after_sales_status?: string | null;
   exceptions?: string[];
   message?: string;
 };
@@ -169,6 +177,24 @@ export type VendorShipment = {
   id: string;
   status: string;
   tracking_number?: string | null;
+};
+
+export type VendorShipmentDetail = VendorShipment & {
+  carrier?: string;
+  sandbox?: boolean;
+  label?: string | null;
+  quoted_cost_minor?: string | null;
+  actual_cost_minor?: string | null;
+  currency?: string | null;
+  timeline?: Array<{ status: string; occurred_at?: string }>;
+  message?: string;
+  pod?: {
+    delivered?: boolean;
+    otp_recorded?: boolean;
+    photo_attached?: boolean;
+    signature_attached?: boolean;
+    note?: string;
+  };
 };
 
 export type VendorSettlement = {
@@ -236,6 +262,20 @@ export function fetchVendorOrder(token: string, orderId: string) {
   return call<VendorOrderDetail>(`/api/v1/vendor/orders/${encodeURIComponent(orderId)}`, token);
 }
 
+export function vendorOrderAccept(token: string, orderId: string) {
+  return call<VendorOrderDetail>(`/api/v1/vendor/orders/${encodeURIComponent(orderId)}/accept`, token, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function vendorOrderReject(token: string, orderId: string, reason: string, idempotencyKey: string) {
+  return call<VendorOrderDetail>(`/api/v1/vendor/orders/${encodeURIComponent(orderId)}/reject`, token, {
+    method: 'POST',
+    body: JSON.stringify({ reason, idempotency_key: idempotencyKey }),
+  });
+}
+
 export function vendorOrderFulfill(
   token: string,
   orderId: string,
@@ -255,6 +295,10 @@ export function fetchVendorShipments(token: string, sellerOrgId: string) {
   );
 }
 
+export function fetchVendorShipment(token: string, shipmentId: string) {
+  return call<VendorShipmentDetail>(`/api/v1/vendor/shipments/${encodeURIComponent(shipmentId)}`, token);
+}
+
 export function fetchVendorSettlements(token: string, sellerOrgId: string) {
   return call<{ data: VendorSettlement[] }>(
     `/api/v1/vendor/settlements?seller_org_id=${encodeURIComponent(sellerOrgId)}`,
@@ -264,6 +308,141 @@ export function fetchVendorSettlements(token: string, sellerOrgId: string) {
 
 export function fetchVendorSettlement(token: string, lineId: string) {
   return call<VendorSettlementDetail>(`/api/v1/vendor/settlements/${encodeURIComponent(lineId)}`, token);
+}
+
+export type VendorPayable = {
+  id: string;
+  order_id: string;
+  order_number: string;
+  order_date: string;
+  order_status: string;
+  gross_minor: string;
+  fee_minor: string;
+  refund_minor: string;
+  payable_minor: string;
+  currency: string;
+  status: string;
+  settlement_line_id?: string | null;
+  settlement_batch_id?: string | null;
+  settlement_status?: string | null;
+  sandbox?: boolean;
+  live_payout?: boolean;
+};
+
+export type VendorFinanceSummary = {
+  currency: string;
+  total_payable_minor: string;
+  pending_payable_minor: string;
+  settled_payable_minor: string;
+  settlement_line_count: number;
+  settlement_batched_minor: string;
+  sandbox: boolean;
+  live_payout: boolean;
+  message?: string;
+};
+
+export function fetchVendorPayables(token: string, sellerOrgId: string) {
+  return call<{ data: VendorPayable[] }>(
+    `/api/v1/vendor/payables?seller_org_id=${encodeURIComponent(sellerOrgId)}`,
+    token,
+  );
+}
+
+export function fetchVendorFinanceSummary(token: string, sellerOrgId: string) {
+  return call<VendorFinanceSummary>(
+    `/api/v1/vendor/finance/summary?seller_org_id=${encodeURIComponent(sellerOrgId)}`,
+    token,
+  );
+}
+
+export type VendorTeamMember = {
+  id: string;
+  person_id: string;
+  display_name: string;
+  role_code: string;
+  role_name: string;
+  permissions: string[];
+  status: string;
+  created_at: string;
+  is_self: boolean;
+};
+
+export function fetchVendorTeamMembers(token: string, sellerOrgId: string) {
+  return call<{ data: VendorTeamMember[] }>(
+    `/api/v1/vendor/team/members?seller_org_id=${encodeURIComponent(sellerOrgId)}`,
+    token,
+  );
+}
+
+export function inviteVendorTeamMember(
+  token: string,
+  body: { seller_org_id: string; role_code: string; country_code: string; email?: string },
+) {
+  return call<{ invitation_id: string; invite_token: string; intended_role_code: string }>(
+    '/api/v1/vendor/team/invitations',
+    token,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
+export function removeVendorTeamMember(token: string, sellerOrgId: string, membershipId: string) {
+  return call<{ removed: boolean }>(
+    `/api/v1/vendor/team/members/${encodeURIComponent(membershipId)}?seller_org_id=${encodeURIComponent(sellerOrgId)}`,
+    token,
+    { method: 'DELETE' },
+  );
+}
+
+export type VendorReturnRow = {
+  id: string;
+  order_id: string;
+  order_number: string;
+  order_status: string;
+  reason: string;
+  status: string;
+  note?: string | null;
+  created_at: string;
+  currency: string;
+  total_minor: string;
+  payment_status?: string | null;
+  refund_status?: string | null;
+  vendor_action_required: boolean;
+  pickup_slot_start?: string | null;
+  pickup_slot_end?: string | null;
+  shipment_id?: string | null;
+  tracking_number?: string | null;
+};
+
+export function fetchVendorReturns(token: string, sellerOrgId: string, status?: string) {
+  const query = new URLSearchParams({ seller_org_id: sellerOrgId });
+  if (status) {
+    query.set('status', status);
+  }
+  return call<{ data: VendorReturnRow[] }>(`/api/v1/vendor/returns?${query.toString()}`, token);
+}
+
+export function approveVendorReturn(token: string, orderId: string, returnId: string) {
+  return call<VendorOrderDetail>(
+    `/api/v1/vendor/returns/${encodeURIComponent(orderId)}/${encodeURIComponent(returnId)}/approve`,
+    token,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export function receiveVendorReturn(token: string, orderId: string, returnId: string) {
+  return call<VendorOrderDetail>(
+    `/api/v1/vendor/returns/${encodeURIComponent(orderId)}/${encodeURIComponent(returnId)}/receive`,
+    token,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export function rejectVendorReturn(token: string, orderId: string, returnId: string, reason: string) {
+  return call<VendorOrderDetail>(
+    `/api/v1/vendor/returns/${encodeURIComponent(orderId)}/${encodeURIComponent(returnId)}/reject`,
+    token,
+    { method: 'POST', body: JSON.stringify({ reason }) },
+  );
 }
 
 export type VendorSupportTicket = {
@@ -337,6 +516,43 @@ export function updateVendorNotificationPreferences(
 
 export function fetchVendorNotificationInbox(token: string) {
   return call<{ data: VendorInboxItem[] }>('/api/v1/me/notifications/inbox', token);
+}
+
+export function markVendorNotificationRead(token: string, inboxId: string) {
+  return call<{ data: VendorInboxItem }>(
+    `/api/v1/me/notifications/inbox/${encodeURIComponent(inboxId)}/read`,
+    token,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export type SupportTicketMessage = {
+  id: string;
+  body: string;
+  author_person_id: string;
+  created_at: string;
+};
+
+export type SupportTicketDetail = VendorSupportTicket & {
+  messages: SupportTicketMessage[];
+};
+
+export function fetchSupportTicket(token: string, ticketId: string) {
+  return call<SupportTicketDetail>(`/api/v1/support/tickets/${encodeURIComponent(ticketId)}`, token);
+}
+
+export function replySupportTicket(token: string, ticketId: string, body: string) {
+  return call<SupportTicketDetail>(`/api/v1/support/tickets/${encodeURIComponent(ticketId)}/messages`, token, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
+}
+
+export function closeSupportTicket(token: string, ticketId: string) {
+  return call<SupportTicketDetail>(`/api/v1/support/tickets/${encodeURIComponent(ticketId)}/close`, token, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }
 
 export type MarketplaceEligibility = {

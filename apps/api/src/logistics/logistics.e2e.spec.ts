@@ -17,15 +17,7 @@ import { signCarrierPayload } from './hmac';
 import { LogisticsService } from './logistics.service';
 import { EventWorkerService } from '../events/worker.service';
 
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({ challenge_id: requested.body.challenge_id, code: requested.body.dev_code, audience });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { bootstrapSuperAdminByEmail, signIn as signInAudience } from '../test/sign-in';
 
 describe('logistics mock carrier (e2e)', () => {
   jest.setTimeout(120_000);
@@ -132,13 +124,9 @@ describe('logistics mock carrier (e2e)', () => {
         timezone: 'UTC',
       },
     });
-    const admin = await signIn(app, `log-admin-${Date.now()}@example.com`, 'admin');
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: { id: uuidv7(), personId: admin.personId, roleId: role!.id, scope: 'platform', status: 'ACTIVE' },
-    });
-    const vendorUser = await signIn(app, `log-vendor-${Date.now()}@example.com`, 'admin');
-    const otherVendorUser = await signIn(app, `log-vendor-b-${Date.now()}@example.com`, 'admin');
+    const admin = await bootstrapSuperAdminByEmail(app, prisma, `log-admin-${Date.now()}@example.com`);
+    const vendorUser = await signInAudience(app, `log-vendor-${Date.now()}@example.com`, 'customer');
+    const otherVendorUser = await signInAudience(app, `log-vendor-b-${Date.now()}@example.com`, 'customer');
     const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
     await prisma.membership.create({
       data: {
@@ -218,8 +206,8 @@ describe('logistics mock carrier (e2e)', () => {
       data: { id: uuidv7(), lotId: lot.id, onHand: 40, available: 40 },
     });
 
-    const customer = await signIn(app, `log-cust-${Date.now()}@example.com`, 'customer');
-    const other = await signIn(app, `log-cust-b-${Date.now()}@example.com`, 'customer');
+    const customer = await signInAudience(app, `log-cust-${Date.now()}@example.com`, 'customer');
+    const other = await signInAudience(app, `log-cust-b-${Date.now()}@example.com`, 'customer');
 
     const deniedIntl = await request(app.getHttpServer()).get(
       '/api/v1/shipping/quotes?country=LQ&origin=LQ&dest=ZZ&currency=XXX',
@@ -247,6 +235,9 @@ describe('logistics mock carrier (e2e)', () => {
       .set('Idempotency-Key', `log-ord-${Date.now()}`)
       .send({ payment_intent_id: paid.body.id });
     await request(app.getHttpServer())
+      .post(`/api/v1/vendor/orders/${created.body.id}/accept`)
+      .set('Authorization', `Bearer ${vendorUser.token}`);
+    await request(app.getHttpServer())
       .post(`/api/v1/vendor/orders/${created.body.id}/pick/start`)
       .set('Authorization', `Bearer ${vendorUser.token}`);
     await request(app.getHttpServer())
@@ -259,7 +250,13 @@ describe('logistics mock carrier (e2e)', () => {
     const shipment = await prisma.shipment.findFirstOrThrow({ where: { orderId: created.body.id } });
     expect(shipment.status === ShipmentStatus.LABEL_CREATED || shipment.status === ShipmentStatus.BOOKED).toBe(true);
     expect(shipment.trackingNumber).toBeTruthy();
-    expect(['MOCK', 'MOCK_B']).toContain((shipment.routingJson as { carrierCode?: string } | null)?.carrierCode ?? 'MOCK');
+    expect(['MOCK', 'MOCK_B', 'DHL', 'INDIA_POST', 'BLUEDART', 'DELHIVERY']).toContain(
+      (shipment.routingJson as { carrierCode?: string } | null)?.carrierCode ?? 'MOCK',
+    );
+    const bookedCarrier = shipment.carrierId
+      ? await prisma.carrier.findUnique({ where: { id: shipment.carrierId } })
+      : null;
+    expect(bookedCarrier?.environment).toBe('sandbox');
 
     const dupBook = await Promise.all([
       request(app.getHttpServer())
@@ -386,6 +383,9 @@ describe('logistics mock carrier (e2e)', () => {
       .set('Idempotency-Key', `log-ord2-${Date.now()}`)
       .send({ payment_intent_id: paid2.body.id });
     await request(app.getHttpServer())
+      .post(`/api/v1/vendor/orders/${created2.body.id}/accept`)
+      .set('Authorization', `Bearer ${vendorUser.token}`);
+    await request(app.getHttpServer())
       .post(`/api/v1/vendor/orders/${created2.body.id}/pick/start`)
       .set('Authorization', `Bearer ${vendorUser.token}`);
     await request(app.getHttpServer())
@@ -430,7 +430,7 @@ describe('logistics mock carrier (e2e)', () => {
       .send({});
     expect(rto.body.disposition).toBe('QUARANTINE');
 
-    const noPerm = await signIn(app, `log-noperm-${Date.now()}@example.com`, 'admin');
+    const noPerm = await signInAudience(app, `log-noperm-${Date.now()}@example.com`, 'customer');
     const denied = await request(app.getHttpServer())
       .get('/api/v1/admin/shipments')
       .set('Authorization', `Bearer ${noPerm.token}`);

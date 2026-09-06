@@ -10,6 +10,7 @@ import {
   Text,
 } from '@world-pharma/ui-kit/web';
 import { fetchLabCollections, type LabCollectionRow } from './lab-api';
+import { labCollectionModeLabel, labOpsStatusLabel } from './lab-ops-labels';
 
 export function LabCollectionsPanel({
   organizationId,
@@ -60,24 +61,42 @@ export function LabCollectionsPanel({
           description="Samples appear after customer bookings are confirmed and collection is enqueued."
         />
       ) : null}
-      {rows.map((row) => (
-        <Card key={row.id}>
-          <Text>
-            {row.test_title} · {row.status}
-          </Text>
-          <Text size="caption">
-            {row.collection_mode}
-            {row.slot_starts_at ? ` · ${new Date(row.slot_starts_at).toLocaleString()}` : ''}
-            {row.assignee_person_id ? ` · assignee ${row.assignee_person_id.slice(0, 8)}…` : ' · unassigned'}
-          </Text>
-          <Button size="sm" variant="secondary" onClick={() => setSelectedId(row.id)}>
-            Custody history
-          </Button>
-        </Card>
-      ))}
+      {rows.length ? (
+        <table className="wp-data-table">
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Status</th>
+              <th>Mode</th>
+              <th>Slot</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id} className={selectedId === row.id ? 'is-selected' : undefined}>
+                <td>{row.test_title}</td>
+                <td>
+                  <span className="wp-status">{labOpsStatusLabel(row.status)}</span>
+                </td>
+                <td>{labCollectionModeLabel(row.collection_mode)}</td>
+                <td>{row.slot_starts_at ? new Date(row.slot_starts_at).toLocaleString() : '—'}</td>
+                <td>
+                  <Button size="sm" variant="secondary" onClick={() => setSelectedId(row.id)}>
+                    Custody
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
       {selected ? (
         <Card>
-          <Heading level={3}>Custody timeline</Heading>
+          <Heading level={3}>Custody timeline · {selected.test_title}</Heading>
+          <Text size="caption">
+            Assignee {selected.assignee_person_id ? `${selected.assignee_person_id.slice(0, 8)}…` : 'unassigned'}
+          </Text>
           <Button size="sm" variant="tertiary" onClick={() => setSelectedId(null)}>
             Close
           </Button>
@@ -88,7 +107,8 @@ export function LabCollectionsPanel({
               {selected.custody_timeline.map((event) => (
                 <li key={event.id}>
                   <Text size="caption">
-                    {event.created_at} · {event.from_status ?? '—'} → {event.to_status} · {event.action_code}
+                    {event.created_at} · {labOpsStatusLabel(event.from_status)} → {labOpsStatusLabel(event.to_status)} ·{' '}
+                    {event.action_code}
                   </Text>
                 </li>
               ))}

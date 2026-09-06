@@ -5,6 +5,7 @@ export type SandboxScenario =
   | 'success'
   | 'authorize'
   | 'requires_action'
+  | 'upi_collect'
   | 'failure'
   | 'timeout'
   | 'unknown'
@@ -13,8 +14,9 @@ export type SandboxScenario =
   | 'pre_submit_permanent';
 
 export type GatewayNextAction = {
-  type: 'redirect' | 'challenge' | 'frictionless';
+  type: 'redirect' | 'challenge' | 'frictionless' | 'upi_collect';
   url?: string;
+  vpa?: string;
   sandbox: true;
 };
 

@@ -4,11 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
   FormField,
-  Heading,
   Input,
   LoadingState,
   NetworkErrorState,
@@ -17,6 +14,21 @@ import {
   Text,
 } from '@world-pharma/ui-kit/web';
 import { fetchProfile, updateProfile, type CustomerProfile } from './account-api';
+import { AccountHubNav } from './ui/account-hub-nav';
+import { MgBtn, MgCard, Page } from './ui/mg-ui';
+
+const PROFILE_MENU = [
+  { href: '/orders', label: 'My orders', icon: '📦' },
+  { href: '/appointments', label: 'My appointments', icon: '🩺' },
+  { href: '/health', label: 'Medical records', icon: '📁' },
+  { href: '/lab/bookings', label: 'My lab tests', icon: '🧪' },
+  { href: '/radiology/bookings', label: 'Imaging reports', icon: '🩻' },
+  { href: '/account/addresses', label: 'Saved addresses', icon: '📍' },
+  { href: '/account/loyalty', label: 'Rewards', icon: '⭐' },
+  { href: '/care-plan', label: 'Care plans', icon: '💚' },
+  { href: '/account/preferences', label: 'Settings', icon: '⚙️' },
+  { href: '/account/support', label: 'Help & support', icon: '💬' },
+] as const;
 
 export function AccountScreen() {
   const { session, getAccessToken, signOut, expire } = useSession();
@@ -43,8 +55,6 @@ export function AccountScreen() {
           setError(null);
         } else if (result.kind === 'forbidden') {
           setError('forbidden');
-        } else if (result.kind === 'unauthorized') {
-          return;
         } else {
           setError('network');
         }
@@ -61,7 +71,25 @@ export function AccountScreen() {
   }
 
   if (session.status !== 'authenticated') {
-    return <EmptyState title="Sign in required" description="Sign in with OTP to manage your account." />;
+    return (
+      <Page>
+        <section className="mg-service-hero mg-service-hero--compact" aria-label="Account">
+          <p className="mg-service-kicker">World-Pharma™ account</p>
+          <h1 className="mg-service-title">My Account</h1>
+          <p className="mg-service-sub">Sign in to manage profile, orders, and health records.</p>
+        </section>
+        <MgCard className="mg-signin-card">
+          <EmptyState
+            title="Sign in required"
+            description="Use our secure OTP login or create a new account."
+            action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }}
+          />
+          <p className="mg-auth-alt">
+            New here? <Link href="/signup">Create an account</Link>
+          </p>
+        </MgCard>
+      </Page>
+    );
   }
 
   if (session.audience !== 'customer') {
@@ -108,44 +136,51 @@ export function AccountScreen() {
   }
 
   const email = profile.identifiers.find((row) => row.type === 'EMAIL')?.value ?? '—';
+  const displayName = email.includes('@') ? email.split('@')[0] : email;
+  const initials = displayName
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
-    <section>
-      <Heading level={1}>Account</Heading>
-      <Text tone="secondary">Manage profile and linked account settings.</Text>
-      <Card>
-        <Text>Person ID {profile.person_id}</Text>
-        <Text>Email {email}</Text>
-        <Text>Status {profile.status}</Text>
-        <Text size="caption">Last login {profile.last_login_at ?? '—'}</Text>
-      </Card>
-      <FormField label="Preferred locale">
-        {({ id }) => <Input id={id} value={locale} onChange={(e) => setLocale(e.target.value)} />}
-      </FormField>
-      <Button disabled={saving} onClick={() => void saveProfile()}>
-        {saving ? 'Saving…' : 'Save profile'}
-      </Button>
-      {message ? <Text>{message}</Text> : null}
-      <nav className="wp-stack" aria-label="Account sections">
-        <Link href="/account/privacy">
-          <Button variant="tertiary">Privacy &amp; security</Button>
-        </Link>
-        <Link href="/account/consent">
-          <Button variant="tertiary">Consent management</Button>
-        </Link>
-        <Link href="/account/addresses">
-          <Button variant="tertiary">Addresses</Button>
-        </Link>
-        <Link href="/account/wishlist">
-          <Button variant="tertiary">Wishlist</Button>
-        </Link>
-        <Link href="/account/preferences">
-          <Button variant="tertiary">Notification preferences</Button>
-        </Link>
-        <Link href="/account/support">
-          <Button variant="tertiary">Support</Button>
-        </Link>
-      </nav>
-    </section>
+    <Page>
+      <AccountHubNav />
+      <section className="wp-profile-hero" aria-label="Profile">
+        <div className="wp-profile-avatar" aria-hidden>
+          {initials || 'WP'}
+        </div>
+        <div>
+          <h1 className="wp-profile-name">{displayName}</h1>
+          <p className="wp-profile-email">{email}</p>
+          <p className="wp-profile-meta">{profile.status === 'ACTIVE' ? 'Active account' : profile.status}</p>
+        </div>
+      </section>
+
+      <ul className="wp-profile-menu">
+        {PROFILE_MENU.map((item) => (
+          <li key={item.href}>
+            <Link href={item.href} className="wp-profile-menu-row">
+              <span className="wp-profile-menu-icon" aria-hidden>
+                {item.icon}
+              </span>
+              <span className="wp-profile-menu-label">{item.label}</span>
+              <span className="wp-profile-menu-chevron" aria-hidden>
+                ›
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+
+      <MgCard>
+        <FormField label="Preferred locale">
+          {({ id }) => <Input id={id} value={locale} onChange={(e) => setLocale(e.target.value)} />}
+        </FormField>
+        <MgBtn onClick={() => void saveProfile()}>{saving ? 'Saving…' : 'Save profile'}</MgBtn>
+        {message ? <Text>{message}</Text> : null}
+      </MgCard>
+      <MgBtn variant="secondary" onClick={() => signOut()}>
+        Logout
+      </MgBtn>
+    </Page>
   );
 }

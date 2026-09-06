@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@world-pharma/ui-kit/web';
 import { FinanceAdminPanel } from './finance-admin';
@@ -180,9 +180,12 @@ describe('FinanceAdminPanel break queue', () => {
     });
     const user = userEvent.setup();
     wrap(<FinanceAdminPanel />);
-    await user.selectOptions(screen.getByLabelText(/Source/i), 'PAYOUT');
+    await user.selectOptions(screen.getByLabelText(/^Source$/i), 'PAYOUT');
     await user.click(screen.getByRole('button', { name: /Load break queue/i }));
-    expect(await screen.findByText(/UNKNOWN/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('source_kind=PAYOUT'), expect.any(Object));
+    });
+    expect(await screen.findByText('UNKNOWN')).toBeInTheDocument();
   });
 
   it('H: paginates break list client-side', async () => {

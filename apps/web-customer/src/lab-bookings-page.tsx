@@ -13,23 +13,31 @@ import {
   SessionExpiredState,
   Text,
 } from '@world-pharma/ui-kit/web';
-import { CustomerShell } from './customer-shell';
 import {
   cancelLabBooking,
   fetchLabBooking,
   fetchLabBookingCollection,
   fetchLabReport,
+  fetchLabReportStatus,
   fetchPhysicalReportEligibility,
   fetchPhysicalReportStatus,
   requestPhysicalReport,
   cancelPhysicalReport,
   fetchLabBookings,
+  payLabBooking,
   LabCustomerApiError,
   type LabBooking,
   type LabBookingCollection,
   type PhysicalReportEligibility,
   type PhysicalReportStatus,
 } from './lab-api';
+import { LAB_TRACK_STEPS, labBookingStatusLabel, labLifecycleSummary, labTrackStepIndex } from './lab-status-labels';
+import { formatMoney } from './format-money';
+import { MgBackLink, MgBtn, MgCard, Page, PageIntro, ServiceHero } from './ui/mg-ui';
+
+function newIdempotencyKey(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export function LabBookingsScreen() {
   const { session, getAccessToken, signOut, expire } = useSession();
@@ -78,39 +86,70 @@ export function LabBookingsScreen() {
     return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
   }
 
+  if (session.status !== 'authenticated') {
+    return (
+      <Page>
+        <ServiceHero
+          kicker="Diagnostics"
+          title="Lab bookings"
+          subtitle="Track sample collection and view reports."
+          tone="lab"
+          compact
+        />
+        <EmptyState title="Sign in required" description="Login to view your lab bookings." action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }} />
+        <MgBtn href="/lab" variant="secondary">Browse lab tests</MgBtn>
+      </Page>
+    );
+  }
+
   return (
-    <CustomerShell apiReachable={true} countryLabel="session">
-      <Heading level={2}>Lab bookings</Heading>
-      <Text tone="secondary">Your diagnostics bookings. Collection status appears after payment confirmation.</Text>
-      <Button onClick={() => (window.location.href = '/lab')}>Browse lab tests</Button>
-      {loading ? <LoadingState label="Loading lab bookings…" /> : null}
+    <Page>
+      <ServiceHero
+        kicker="Diagnostics"
+        title="Lab bookings"
+        subtitle="Diagnostics bookings — collection status after payment."
+        tone="lab"
+        compact
+      />
+      <PageIntro>
+        <p>Home collection and center visits. Final reports unlock in booking details when the lab publishes results.</p>
+      </PageIntro>
+      <MgBtn href="/lab" variant="secondary">Browse lab tests</MgBtn>
+      {loading ? <LoadingState label="Loading lab bookings" /> : null}
       {error === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} /> : null}
       {error === 'forbidden' ? <PermissionDeniedState /> : null}
       {!loading && !error && rows.length === 0 ? (
-        <EmptyState title="No lab bookings" description="Book a lab test to see status here." />
+        <EmptyState title="No lab bookings" description="Book a lab test to see status here." action={{ label: 'Book a test', onClick: () => (window.location.href = '/lab') }} />
       ) : null}
-      {rows.map((row) => (
-        <Card key={row.id}>
-          <Text>{row.lines[0]?.title ?? 'Lab booking'}</Text>
-          <Text>
-            {row.status} · {row.collection_mode} · {row.currency} {row.total_minor}
-          </Text>
-          <Text size="caption">{row.lab_display_name}</Text>
-          <Button size="sm" variant="secondary" onClick={() => (window.location.href = `/lab/bookings/${row.id}`)}>
-            Details
-          </Button>
-          {row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED' ? (
-            <Button
-              size="sm"
-              variant="tertiary"
-              onClick={() => void cancelLabBooking(getAccessToken() ?? '', row.id).then(load)}
-            >
-              Cancel
-            </Button>
-          ) : null}
-        </Card>
-      ))}
-    </CustomerShell>
+      <ul className="mg-order-list">
+        {rows.map((row) => (
+          <li key={row.id}>
+            <MgCard className="mg-order-card">
+              <div className="mg-order-card-top">
+                <div>
+                  <p className="mg-list-title">{row.lines[0]?.title ?? 'Lab booking'}</p>
+                  <p className="mg-list-meta">
+                    {row.collection_mode} · {formatMoney(row.total_minor, row.currency)}
+                  </p>
+                  <p className="mg-order-track-hint">{row.lab_display_name}</p>
+                </div>
+                <span className="mg-status">{labBookingStatusLabel(row.status)}</span>
+              </div>
+              <div className="mg-list-actions">
+                <MgBtn size="sm" variant="secondary" href={`/lab/bookings/${row.id}`}>
+                  Details
+                </MgBtn>
+                {row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED' ? (
+                  <MgBtn size="sm" variant="ghost" onClick={() => void cancelLabBooking(getAccessToken() ?? '', row.id).then(load)}>
+                    Cancel
+                  </MgBtn>
+                ) : null}
+              </div>
+            </MgCard>
+          </li>
+        ))}
+      </ul>
+    </Page>
   );
 }
 
@@ -126,6 +165,8 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
   const [physicalLoading, setPhysicalLoading] = useState(false);
   const [physicalError, setPhysicalError] = useState<'network' | 'forbidden' | 'unavailable' | 'generic' | null>(null);
   const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [error, setError] = useState<'network' | 'forbidden' | 'generic' | null>(null);
 
   const load = useCallback(async () => {
@@ -169,44 +210,123 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
     }
   }, [load, session.status]);
 
+  async function retryPay(scenario: 'success' | 'failed') {
+    const token = getAccessToken();
+    if (!token || !row) {
+      return;
+    }
+    setBusy(true);
+    setFormError(null);
+    try {
+      const paid = await payLabBooking(token, row.id, newIdempotencyKey('lab-repay'), scenario);
+      if (paid.status === 'CAPTURED') {
+        await load();
+        return;
+      }
+      setFormError(`Sandbox payment ended as ${paid.status}.`);
+      await load();
+    } catch (err) {
+      if (err instanceof LabCustomerApiError) {
+        setFormError(err.message);
+      } else {
+        setFormError('Payment could not be completed.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (session.status === 'expired') {
     return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
   }
 
+  if (session.status !== 'authenticated') {
+    return (
+      <Page>
+        <MgBackLink href="/lab/bookings">← Back to bookings</MgBackLink>
+        <EmptyState title="Sign in required" description="Login to view your lab bookings." action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }} />
+      </Page>
+    );
+  }
+
+  const lifecycle = row && collection ? labLifecycleSummary(row.status, collection) : null;
+  const trackIndex = row ? labTrackStepIndex(row.status, collection) : -1;
+
   return (
-    <CustomerShell apiReachable={true} countryLabel="session">
-      <Button variant="tertiary" size="sm" onClick={() => (window.location.href = '/lab/bookings')}>
-        Back to bookings
-      </Button>
+    <Page>
+      <MgBackLink href="/lab/bookings">← Back to bookings</MgBackLink>
       {loading ? <LoadingState label="Loading booking…" /> : null}
       {error === 'network' ? <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} /> : null}
       {error === 'forbidden' ? <PermissionDeniedState /> : null}
       {error === 'generic' ? <EmptyState title="Booking unavailable" description="Could not load this booking." /> : null}
       {row ? (
-        <Card>
-          <Heading level={2}>{row.lines[0]?.title ?? 'Lab booking'}</Heading>
-          <Text>Status: {row.status}</Text>
-          <Text>
-            {row.collection_mode} · {row.currency} {row.total_minor}
-          </Text>
-          <Text size="caption">{row.lab_display_name}</Text>
-          {row.slot_starts_at ? <Text>Slot: {new Date(row.slot_starts_at).toLocaleString()}</Text> : null}
-          {row.lab_location ? <Text>Center: {row.lab_location.name}</Text> : null}
-          <Text size="caption">
-            Sandbox={String(row.sandbox)} · Creates order={String(row.boundary?.creates_order ?? false)} · Specimen=
-            {String(row.boundary?.creates_specimen ?? false)}
-          </Text>
-          {(row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED') && (
-            <Button
-              variant="secondary"
+        <MgCard className="mg-order-hero">
+          <h2 className="mg-section-title">{row.lines[0]?.title ?? 'Lab booking'}</h2>
+          <span className="mg-status">{labBookingStatusLabel(row.status)}</span>
+          {lifecycle ? (
+            <p className="mg-list-meta">
+              {lifecycle.headline}
+              {lifecycle.detail ? ` — ${lifecycle.detail}` : ''}
+            </p>
+          ) : null}
+          <p className="mg-text-muted">
+            {row.collection_mode} · {formatMoney(row.total_minor, row.currency)}
+          </p>
+          <p className="mg-text-muted">{row.lab_display_name}</p>
+          {row.slot_starts_at ? <p className="mg-detail-datetime">Slot: {new Date(row.slot_starts_at).toLocaleString()}</p> : null}
+          {row.lab_location ? <p className="mg-text-muted">Center: {row.lab_location.name}</p> : null}
+          {trackIndex >= 0 ? (
+            <div className="mg-track" aria-label="Lab booking progress">
+              {LAB_TRACK_STEPS.map((step, index) => (
+                <div
+                  key={step}
+                  className={`mg-track-step${index <= trackIndex ? ' is-done' : ''}${index === trackIndex ? ' is-current' : ''}`}
+                >
+                  <span className="mg-track-dot" aria-hidden />
+                  <span className="mg-track-label">{step}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </MgCard>
+      ) : null}
+      {row && (row.status === 'BOOKED' || row.status === 'PAYMENT_FAILED') ? (
+        <MgCard>
+          <h2 className="mg-section-title">Complete booking</h2>
+          <p className="mg-text-muted">
+            Sandbox payment only. Live lab network settlement remains external-gated until a provider is selected.
+          </p>
+          {formError ? <p className="mg-text-muted">{formError}</p> : null}
+          {busy ? <LoadingState label="Processing sandbox payment…" /> : null}
+          <div className="mg-toolbar">
+            <MgBtn disabled={busy} onClick={() => void retryPay('success')}>
+              Pay (sandbox success)
+            </MgBtn>
+            <MgBtn variant="secondary" disabled={busy} onClick={() => void retryPay('failed')}>
+              Simulate payment failure
+            </MgBtn>
+            <MgBtn
+              variant="ghost"
+              disabled={busy}
               onClick={() => void cancelLabBooking(getAccessToken() ?? '', row.id).then(load)}
             >
               Cancel booking
-            </Button>
-          )}
-          {collection ? (
-            <Card>
-              <Heading level={3}>Collection status</Heading>
+            </MgBtn>
+          </div>
+        </MgCard>
+      ) : null}
+      {row && collection ? (
+        <MgCard>
+          <h2 className="mg-section-title">Collection status</h2>
+              {collection.phlebotomist ? (
+                <div className="mg-phlebo-track">
+                  <strong>{collection.phlebotomist.eta_label}</strong>
+                  {collection.phlebotomist.live_tracking ? (
+                    <span className="mg-phlebo-live">Live tracking</span>
+                  ) : null}
+                  <Text size="caption">Status: {collection.phlebotomist.status.replaceAll('_', ' ')}</Text>
+                </div>
+              ) : null}
               {collection.collection_started ? (
                 <>
                   <Text>Status: {collection.status}</Text>
@@ -234,10 +354,19 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
                         setReportLoading(true);
                         setReportError(null);
                         setReport(null);
-                        void fetchLabReport(token, id)
+                        void fetchLabReportStatus(token, id)
+                          .then((statusBody) => {
+                            if (!statusBody.report_available) {
+                              setReportError('unavailable');
+                              return;
+                            }
+                            return fetchLabReport(token, id);
+                          })
                           .then((body) => {
-                            setReport(body);
-                            setReportError(null);
+                            if (body) {
+                              setReport(body);
+                              setReportError(null);
+                            }
                           })
                           .catch((err) => {
                             if (err instanceof LabCustomerApiError) {
@@ -268,6 +397,14 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
                   ) : (
                     <Text size="caption">Final report not available yet.</Text>
                   )}
+                  <div className="mg-toolbar">
+                    <MgBtn href="/doctors" variant="secondary">
+                      Discuss report with a doctor
+                    </MgBtn>
+                    <MgBtn href="/pharmacist" variant="ghost">
+                      Ask a pharmacist
+                    </MgBtn>
+                  </div>
                   {reportError === 'forbidden' ? <PermissionDeniedState /> : null}
                   {reportError === 'unavailable' ? (
                     <EmptyState
@@ -286,10 +423,19 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
                           }
                           setReportLoading(true);
                           setReportError(null);
-                          void fetchLabReport(token, id)
+                          void fetchLabReportStatus(token, id)
+                            .then((statusBody) => {
+                              if (!statusBody.report_available) {
+                                setReportError('unavailable');
+                                return;
+                              }
+                              return fetchLabReport(token, id);
+                            })
                             .then((body) => {
-                              setReport(body);
-                              setReportError(null);
+                              if (body) {
+                                setReport(body);
+                                setReportError(null);
+                              }
                             })
                             .catch((err) => {
                               if (err instanceof LabCustomerApiError) {
@@ -345,6 +491,7 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
                   {report.results.map((line) => (
                     <Text key={line.analyte_name} size="caption">
                       {line.analyte_name}: {line.value} {line.unit ?? ''}
+                      {line.reference_range ? ` (ref ${line.reference_range})` : ''}
                     </Text>
                   ))}
                   <Text size="caption">{report.note}</Text>
@@ -483,10 +630,8 @@ export function LabBookingDetailScreen({ id }: { id: string }) {
                   ) : null}
                 </Card>
               ) : null}
-            </Card>
-          ) : null}
-        </Card>
+        </MgCard>
       ) : null}
-    </CustomerShell>
+    </Page>
   );
 }

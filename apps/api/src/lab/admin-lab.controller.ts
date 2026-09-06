@@ -77,4 +77,13 @@ export class AdminLabController {
   listPhysicalReports(@Query('lab_org_id') labOrgId?: string) {
     return this.physicalReports.listAdminMetadata(labOrgId);
   }
+
+  @Get('collections')
+  @RequirePermissions('partner:manage')
+  listCollections(@CurrentPrincipal() principal: Principal, @Query('lab_org_id') labOrgId: string) {
+    if (!labOrgId) {
+      throw Errors.validation('lab_org_id is required.');
+    }
+    return this.collections.listLabCollections(principal, labOrgId);
+  }
 }

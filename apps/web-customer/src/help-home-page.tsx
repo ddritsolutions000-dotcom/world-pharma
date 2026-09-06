@@ -2,17 +2,11 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { useCountries } from '@world-pharma/shell-web';
+import { useSelectedCountry } from './use-selected-country';
 import {
-  Button,
-  Card,
   EmptyState,
-  FormField,
-  Heading,
-  Input,
   LoadingState,
   NetworkErrorState,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import {
   fetchHelpArticles,
@@ -23,12 +17,12 @@ import {
   type HelpBanner,
 } from './help-api';
 import { HelpShell } from './help-shell';
+import { MgBtn, MgCard, MgInput, PageIntro, Section } from './ui/mg-ui';
 
 type ViewState = 'idle' | 'loading' | 'network' | 'error';
 
 export function HelpHomeScreen() {
-  const { countries } = useCountries();
-  const country = countries[0]?.iso_alpha2 ?? 'XX';
+  const { country } = useSelectedCountry();
   const locale = 'en';
   const [categories, setCategories] = useState<string[]>([]);
   const [articles, setArticles] = useState<HelpArticleSummary[]>([]);
@@ -70,32 +64,25 @@ export function HelpHomeScreen() {
   };
 
   return (
-    <HelpShell title="Help Center">
-      <Text tone="secondary">
-        Browse published help articles and FAQs. Content is operational only — not medical advice.
-      </Text>
-
-      <Card>
-        <div className="wp-stack">
-          <Heading level={2}>Search help</Heading>
-          <FormField label="Search">
-            {({ id }) => (
-              <Input
-                id={id}
-                value={searchQ}
-                onChange={(e) => setSearchQ(e.target.value)}
-                placeholder="Search articles"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    onSearch();
-                  }
-                }}
-              />
-            )}
-          </FormField>
-          <Button onClick={onSearch}>Search</Button>
+    <HelpShell title="Help Center" subtitle="FAQs for orders, refunds, lab tests, and account.">
+      <PageIntro>
+        <p>
+          Search our knowledge base or browse topics below. See <Link href="/faq">published FAQs</Link>. For urgent
+          delivery issues, open a support ticket from your account.
+        </p>
+      </PageIntro>
+      <MgCard className="mg-help-search">
+        <h2 className="mg-section-title">Search help</h2>
+        <div className="mg-toolbar">
+          <MgInput
+            value={searchQ}
+            onChange={setSearchQ}
+            placeholder="Search articles — e.g. refund, delivery"
+            label="Search help"
+          />
+          <MgBtn onClick={onSearch}>Search</MgBtn>
         </div>
-      </Card>
+      </MgCard>
 
       {viewState === 'loading' ? <LoadingState label="Loading help content" /> : null}
       {viewState === 'network' ? (
@@ -106,62 +93,63 @@ export function HelpHomeScreen() {
       ) : null}
 
       {viewState === 'idle' && banners.length > 0 ? (
-        <section className="wp-stack" aria-label="Announcements">
-          <Heading level={2}>Announcements</Heading>
-          {banners.map((banner) => (
-            <Card key={banner.id}>
-              <Heading level={3}>{banner.title}</Heading>
-              <Text tone="secondary">{banner.body}</Text>
-            </Card>
-          ))}
-        </section>
+        <Section title="Announcements">
+          <ul className="mg-discovery-grid">
+            {banners.map((banner) => (
+              <li key={banner.id}>
+                <article className="mg-discovery-card">
+                  <span className="mg-discovery-type">Notice</span>
+                  <h3>{banner.title}</h3>
+                  <p>{banner.body}</p>
+                </article>
+              </li>
+            ))}
+          </ul>
+        </Section>
       ) : null}
 
       {viewState === 'idle' ? (
-        <section className="wp-stack" aria-label="Categories">
-          <Heading level={2}>Categories</Heading>
+        <Section title="Browse by topic">
           {categories.length === 0 ? (
             <EmptyState title="No categories yet" description="Published help categories will appear here." />
           ) : (
-            <ul className="wp-stack">
+            <div className="mg-chip-grid">
               {categories.map((slug) => (
-                <li key={slug}>
-                  <Link href={`/help/c/${encodeURIComponent(slug)}?country=${country}&locale=${locale}`}>
-                    <Button variant="secondary">{slug}</Button>
+                <Link
+                  key={slug}
+                  href={`/help/c/${encodeURIComponent(slug)}?country=${country}&locale=${locale}`}
+                  className="mg-chip"
+                >
+                  {slug.replace(/-/g, ' ')}
+                </Link>
+              ))}
+            </div>
+          )}
+        </Section>
+      ) : null}
+
+      {viewState === 'idle' ? (
+        <Section title="Popular articles">
+          {articles.length === 0 ? (
+            <EmptyState title="No articles yet" description="Published help articles will appear here." />
+          ) : (
+            <ul className="mg-discovery-grid">
+              {articles.map((article) => (
+                <li key={article.id}>
+                  <Link
+                    href={`/help/a/${encodeURIComponent(article.slug)}?country=${country}&locale=${locale}`}
+                    className="mg-discovery-link"
+                  >
+                    <article className="mg-discovery-card">
+                      <span className="mg-discovery-type">{article.category_slug?.replace(/-/g, ' ') ?? 'Help'}</span>
+                      <h3>{article.title}</h3>
+                    </article>
                   </Link>
                 </li>
               ))}
             </ul>
           )}
-        </section>
-      ) : null}
-
-      {viewState === 'idle' ? (
-        <section className="wp-stack" aria-label="Featured articles">
-          <Heading level={2}>Featured articles</Heading>
-          {articles.length === 0 ? (
-            <EmptyState title="No articles yet" description="Published help articles will appear here." />
-          ) : (
-            <ul className="wp-stack">
-              {articles.map((article) => (
-                <li key={article.id}>
-                  <Card>
-                    <Heading level={3}>
-                      <Link href={`/help/a/${encodeURIComponent(article.slug)}?country=${country}&locale=${locale}`}>
-                        {article.title}
-                      </Link>
-                    </Heading>
-                    {article.category_slug ? (
-                      <Text size="caption" tone="secondary">
-                        {article.category_slug}
-                      </Text>
-                    ) : null}
-                  </Card>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        </Section>
       ) : null}
     </HelpShell>
   );

@@ -13,6 +13,7 @@ describe('InventoryAdminPanel', () => {
       </ThemeProvider>,
     );
     expect(screen.getByRole('heading', { name: 'Inventory' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load inventory' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /checkout|pay|dhl/i })).not.toBeInTheDocument();
   });
 });

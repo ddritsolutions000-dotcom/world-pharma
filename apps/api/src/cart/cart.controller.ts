@@ -136,12 +136,12 @@ export class CartController {
     @CurrentPrincipal() principal: Principal,
     @Query('country') country: string,
     @Headers('idempotency-key') idempotencyKey: string,
-    @Body() body: { affiliate_code?: string },
+    @Body() body: { affiliate_code?: string; click_id?: string },
   ) {
     if (!country) {
       throw Errors.validation('country is required.');
     }
-    return this.carts.startCheckout(principal, country, idempotencyKey, body.affiliate_code);
+    return this.carts.startCheckout(principal, country, idempotencyKey, body.affiliate_code, body.click_id);
   }
 
   @Post('checkout/sessions/:id/fulfillment')
@@ -170,8 +170,9 @@ export class CartController {
     @CurrentPrincipal() principal: Principal,
     @Param('id') id: string,
     @Headers('idempotency-key') idempotencyKey: string,
+    @Body() body?: { loyalty_points?: number },
   ) {
-    return this.carts.quoteSession(principal, id, idempotencyKey, false);
+    return this.carts.quoteSession(principal, id, idempotencyKey, false, body?.loyalty_points ?? 0);
   }
 
   @Post('checkout/sessions/:id/validate')

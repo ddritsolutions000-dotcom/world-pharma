@@ -1,0 +1,19 @@
+{
+  "sprint": "S464",
+  "started": "2026-09-05T18:38:36.179Z",
+  "finished": "2026-09-05T18:46:10.730Z",
+  "browser": "playwright + channel=chrome (system Google Chrome)",
+  "runtime": "DEVELOPMENT/SANDBOX",
+  "application_code_changed": "NO",
+  "feature_work": "NO",
+  "pages_inspected": 221,
+  "findings_total": 29,
+  "findings_by_severity": {
+    "P0": 1,
+    "P1": 3,
+    "P2": 0,
+    "P3": 25
+  },
+  "console_errors": 218,
+  "overflow_pages": 1
+}

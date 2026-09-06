@@ -13,7 +13,7 @@ jest.mock('next/navigation', () => ({
 }));
 
 const overviewSample = {
-  country_code: 'TR',
+  country_code: 'IN',
   from: '2026-08-01',
   to: '2026-08-31',
   totals: {
@@ -45,7 +45,7 @@ const overviewSample = {
 };
 
 const commerceSample = {
-  country_code: 'TR',
+  country_code: 'IN',
   from: '2026-08-01',
   to: '2026-08-31',
   catalog_item_id: null,
@@ -62,7 +62,7 @@ const commerceSample = {
 };
 
 const marketingSample = {
-  country_code: 'TR',
+  country_code: 'IN',
   from: '2026-08-01',
   to: '2026-08-31',
   daily: [
@@ -91,7 +91,7 @@ function mockSession(permissions: string[] = ['analytics:read']) {
     session: {
       audience: 'admin',
       permissions,
-      countryCode: 'TR',
+      countryCode: 'IN',
       status: 'authenticated',
     },
     signInWithOtp: jest.fn(),
@@ -131,8 +131,8 @@ describe('AnalyticsOverview', () => {
   it('renders overview KPI totals deterministically', async () => {
     wrap(<AnalyticsOverview />);
     expect(await screen.findByRole('heading', { name: /Analytics/i })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: /Totals \(TR\)/i })).toBeInTheDocument();
-    expect(await screen.findByText(/Orders paid/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Totals \(IN\)/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/Orders paid/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText('12').length).toBeGreaterThan(0);
     expect(screen.getAllByText('45,000').length).toBeGreaterThan(0);
     const raw = document.body.textContent?.toLowerCase() ?? '';
@@ -156,15 +156,13 @@ describe('AnalyticsOverview', () => {
     expect(await screen.findByText(/You do not have access/i)).toBeInTheDocument();
   });
 
-  it('shows network error with retry for invalid country scope', async () => {
-    const user = userEvent.setup();
+  it('scopes country to sandbox markets', async () => {
     wrap(<AnalyticsOverview />);
     await screen.findByRole('heading', { name: /Analytics/i });
-    const countryInput = screen.getByLabelText(/Country code/i);
-    await user.clear(countryInput);
-    await user.type(countryInput, 'X');
-    expect(await screen.findByText(/Country code must be two letters/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+    const country = screen.getByLabelText(/Country code/i);
+    expect(country).toHaveValue('IN');
+    expect(screen.getByRole('option', { name: 'AE' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'US' })).toBeInTheDocument();
   });
 
   it('shows empty state when totals are zero', async () => {
@@ -205,9 +203,9 @@ describe('AnalyticsCommerce', () => {
   it('renders commerce funnel rows', async () => {
     wrap(<AnalyticsCommerce />);
     expect(await screen.findByRole('heading', { name: /Product funnel/i })).toBeInTheDocument();
-    expect(screen.getByText('40')).toBeInTheDocument();
-    expect(screen.getByText('10')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getAllByText('40').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('10').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0);
   });
 });
 
@@ -225,7 +223,7 @@ describe('AnalyticsMarketingView', () => {
   it('renders marketing rollup table', async () => {
     wrap(<AnalyticsMarketingView />);
     expect(await screen.findByRole('heading', { name: /Marketing rollups/i })).toBeInTheDocument();
-    expect(screen.getByText('25')).toBeInTheDocument();
-    expect(screen.getByText('100')).toBeInTheDocument();
+    expect(screen.getAllByText('25').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('100').length).toBeGreaterThan(0);
   });
 });

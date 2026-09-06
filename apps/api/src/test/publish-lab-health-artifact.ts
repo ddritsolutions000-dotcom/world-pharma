@@ -17,6 +17,7 @@ import { PolicyCache } from '../policy/cache';
 import { emptyPolicyDocument } from '../policy/empty-pack';
 import { activateLabPartner, enableLabPartnerPack } from './lab-partner';
 import { nextPolicyPackVersion } from './next-policy-pack-version';
+import { bootstrapSuperAdminByEmail } from './sign-in';
 
 export type LabHealthFixture = {
   country: { id: string; isoAlpha2: string };
@@ -37,24 +38,13 @@ export async function publishLabHealthArtifactFixture(
     audience?: 'admin' | 'customer' | 'doctor',
   ) => Promise<{ token: string; personId: string }>,
 ): Promise<LabHealthFixture> {
-  const admin = await signIn(`r9c-admin-${suffix}@example.com`, 'admin');
+  const admin = await bootstrapSuperAdminByEmail(app, prisma, `r9c-admin-${suffix}@example.com`);
   const labUser = await signIn(`r9c-lab-${suffix}@example.com`);
   const labStaff = await signIn(`r9c-staff-${suffix}@example.com`);
   const pathologist = await signIn(`r9c-path-${suffix}@example.com`);
   const customerA = await signIn(`r9c-ca-${suffix}@example.com`);
   const customerB = await signIn(`r9c-cb-${suffix}@example.com`);
   const rider = await signIn(`r9c-rider-${suffix}@example.com`);
-
-  const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-  await prisma.membership.create({
-    data: {
-      id: uuidv7(),
-      personId: admin.personId,
-      roleId: superAdmin!.id,
-      scope: 'platform',
-      status: 'ACTIVE',
-    },
-  });
 
   const enabledDoc = emptyPolicyDocument();
   enableLabPartnerPack(enabledDoc, { home: true, center: true });

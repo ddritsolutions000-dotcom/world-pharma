@@ -99,6 +99,10 @@ export function LabCapabilitiesPanel({
         </Text>
         {view.blocked_reason ? <Text tone="secondary">{view.blocked_reason}</Text> : null}
         {view.next_action ? <Text>{view.next_action}</Text> : null}
+        <Text size="caption">
+          Settlement: sandbox payable ledger facts may be recorded on published reports. live_payout remains false — no
+          lab-initiated payouts in sandbox.
+        </Text>
         {view.state === 'REQUIRES_ATTESTATION' ? (
           <Button disabled={busy} onClick={() => void attest()}>
             Attest sandbox participation

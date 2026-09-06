@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import type { AppEnv } from '@world-pharma/config';
 import { ProblemFilter } from './problem.filter';
 import { requestIdMiddleware } from './request-id.middleware';
+import { isAllowedApiHost, parseTrustedProxySetting, type TrustedProxySetting } from './client-ip';
 
 export function allowedOrigins(env: AppEnv): string[] {
   if (env.CORS_ALLOWED_ORIGINS.trim()) {
@@ -12,7 +13,21 @@ export function allowedOrigins(env: AppEnv): string[] {
   if (env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') {
     return [];
   }
-  return ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3002', 'http://127.0.0.1:3002', 'http://localhost:3003', 'http://127.0.0.1:3003', 'http://localhost:3004', 'http://127.0.0.1:3004'];
+  const origins: string[] = [];
+  for (let port = 3000; port <= 3011; port += 1) {
+    origins.push(`http://localhost:${port}`, `http://127.0.0.1:${port}`);
+  }
+  for (let port = 3000; port <= 3011; port += 1) {
+    origins.push(`http://vendor.demo.com:${port}`);
+  }
+  origins.push('http://vendor.demo.com');
+  for (const port of [8081, 8082, 8091, 8092]) {
+    origins.push(`http://localhost:${port}`, `http://127.0.0.1:${port}`);
+  }
+  for (let port = 19000; port <= 19020; port += 1) {
+    origins.push(`http://localhost:${port}`, `http://127.0.0.1:${port}`);
+  }
+  return origins;
 }
 
 const PERMISSIONS_POLICY =
@@ -20,6 +35,14 @@ const PERMISSIONS_POLICY =
 const MAX_URL_LENGTH = 8192;
 
 export function configureApi(app: INestApplication, env: AppEnv): void {
+  const trust = parseTrustedProxySetting(env.TRUSTED_PROXIES);
+  if (trust !== false) {
+    const expressApp = app.getHttpAdapter().getInstance() as {
+      set: (key: string, value: TrustedProxySetting) => void;
+    };
+    expressApp.set('trust proxy', trust);
+  }
+
   app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -49,6 +72,22 @@ export function configureApi(app: INestApplication, env: AppEnv): void {
     }
     next();
   });
+  // Optional Host allowlist — only when PUBLIC_API_HOSTS is explicitly configured.
+  if (env.PUBLIC_API_HOSTS.trim()) {
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (!isAllowedApiHost(req.headers.host, env.PUBLIC_API_HOSTS)) {
+        res.status(400).type('application/problem+json').json({
+          type: 'https://worldpharma.example/problems/invalid-host',
+          title: 'Invalid Host',
+          status: 400,
+          detail: 'Host header is not allowed for this API.',
+          code: 'INVALID_HOST',
+        });
+        return;
+      }
+      next();
+    });
+  }
   app.enableCors({
     origin: allowedOrigins(env),
     credentials: true,

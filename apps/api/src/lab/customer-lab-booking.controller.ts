@@ -25,6 +25,7 @@ const createSchema = z
     slot_ends_at: z.string().datetime().optional(),
     timezone: z.string().min(1).optional(),
     country: z.string().length(2),
+    family_member_id: z.string().uuid().nullable().optional(),
   })
   .strict();
 
@@ -123,6 +124,7 @@ export class CustomerLabBookingController {
       timezone: parsed.data.timezone,
       countryCode: parsed.data.country,
       idempotencyKey,
+      familyMemberId: parsed.data.family_member_id,
     });
   }
 

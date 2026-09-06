@@ -31,7 +31,9 @@ export class MockCarrierAdapter extends CarrierPort {
   }
 
   async createShipment(input: CarrierBookRequest): Promise<CarrierBookResponse> {
-    const providerRef = `mock_${input.shipmentId}`;
+    const carrierTag = (input.carrierCode ?? this.code).toLowerCase();
+    const providerRef = `${carrierTag}_${input.shipmentId}`;
+    const trackingPrefix = (input.carrierCode ?? 'MOCK').replace(/_/g, '').slice(0, 6).toUpperCase();
     switch (input.scenario) {
       case 'QUOTE_FAILURE':
       case 'BOOK_FAILURE':
@@ -46,7 +48,7 @@ export class MockCarrierAdapter extends CarrierPort {
           submitted: true,
           accepted: true,
           providerRef,
-          trackingNumber: `MOCK${input.shipmentId.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+          trackingNumber: `${trackingPrefix}${input.shipmentId.replace(/-/g, '').slice(0, 12).toUpperCase()}`,
         };
     }
   }

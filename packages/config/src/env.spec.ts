@@ -36,6 +36,16 @@ describe('parseEnv', () => {
     ).toThrow(/CORS_ALLOWED_ORIGINS/);
   });
 
+  it('requires METRICS_TOKEN in production', () => {
+    expect(() =>
+      parseEnv({
+        ...base,
+        NODE_ENV: 'production',
+        CORS_ALLOWED_ORIGINS: 'https://admin.example',
+      }),
+    ).toThrow(/METRICS_TOKEN/);
+  });
+
   it('rejects OTP reveal in production', () => {
     expect(() =>
       parseEnv({
@@ -44,6 +54,22 @@ describe('parseEnv', () => {
         AUTH_DEV_REVEAL_OTP: 'true',
       }),
     ).toThrow(/AUTH_DEV_REVEAL_OTP/);
+  });
+
+  it('rejects AUTH_MFA_ENABLED=false in production', () => {
+    expect(() =>
+      parseEnv({
+        ...base,
+        NODE_ENV: 'production',
+        CORS_ALLOWED_ORIGINS: 'https://admin.example',
+        AUTH_MFA_ENABLED: 'false',
+      }),
+    ).toThrow(/AUTH_MFA_ENABLED/);
+  });
+
+  it('defaults AUTH_MFA_ENABLED to false in development', () => {
+    const env = parseEnv({ ...base, NODE_ENV: 'development' });
+    expect(env.AUTH_MFA_ENABLED).toBe(false);
   });
 
   it('treats staging like production for CORS and OTP reveal', () => {
@@ -62,5 +88,13 @@ describe('parseEnv', () => {
         AUTH_DEV_REVEAL_OTP: 'true',
       }),
     ).toThrow(/AUTH_DEV_REVEAL_OTP/);
+    expect(() =>
+      parseEnv({
+        ...base,
+        NODE_ENV: 'staging',
+        CORS_ALLOWED_ORIGINS: 'https://staging.example',
+        METRICS_TOKEN: 'staging-metrics-token-min-16',
+      }),
+    ).not.toThrow();
   });
 });

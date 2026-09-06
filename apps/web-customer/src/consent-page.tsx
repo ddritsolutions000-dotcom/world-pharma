@@ -4,16 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
-  FormField,
-  Heading,
   LoadingState,
   NetworkErrorState,
   PermissionDeniedState,
   SessionExpiredState,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import {
   CONSENT_PURPOSES,
@@ -25,8 +20,9 @@ import {
   type CareDoctor,
   type ConsentGrant,
 } from './consent-api';
-
-const DEFAULT_COUNTRY = 'DQ';
+import { useSelectedCountry } from './use-selected-country';
+import { AccountPage } from './ui/account-hub-nav';
+import { MgBtn, MgCard, Section } from './ui/mg-ui';
 
 function formatWhen(iso: string | null | undefined) {
   if (!iso) {
@@ -39,15 +35,9 @@ function formatWhen(iso: string | null | undefined) {
   }
 }
 
-function statusTone(status: string): 'secondary' | undefined {
-  if (status === 'ACTIVE') {
-    return undefined;
-  }
-  return 'secondary';
-}
-
 export function ConsentScreen() {
   const { session, getAccessToken, signOut, expire } = useSession();
+  const { country: countryCode, countryName } = useSelectedCountry();
   const [grants, setGrants] = useState<ConsentGrant[]>([]);
   const [doctors, setDoctors] = useState<CareDoctor[]>([]);
   const [loading, setLoading] = useState(false);
@@ -58,7 +48,6 @@ export function ConsentScreen() {
   const [grantPartnerId, setGrantPartnerId] = useState('');
   const [grantPurpose, setGrantPurpose] = useState('consultation');
   const [grantScopes, setGrantScopes] = useState<string[]>(CONSENT_SCOPES.map((row) => row.value));
-  const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY);
 
   const onUnauthorized = useCallback(() => expire(), [expire]);
 
@@ -110,7 +99,11 @@ export function ConsentScreen() {
   }
 
   if (session.status !== 'authenticated') {
-    return <EmptyState title="Sign in required" description="Sign in to manage consent grants." />;
+    return (
+      <AccountPage title="Consent" subtitle="Control clinical data access.">
+        <EmptyState title="Sign in required" description="Sign in to manage consent grants." />
+      </AccountPage>
+    );
   }
 
   if (session.audience !== 'customer') {
@@ -118,7 +111,11 @@ export function ConsentScreen() {
   }
 
   if (loading) {
-    return <LoadingState label="Loading consent grants" />;
+    return (
+      <AccountPage title="Consent" subtitle="Control clinical data access.">
+        <LoadingState label="Loading consent grants" />
+      </AccountPage>
+    );
   }
 
   if (error === 'forbidden') {
@@ -126,7 +123,11 @@ export function ConsentScreen() {
   }
 
   if (error === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+    return (
+      <AccountPage title="Consent" subtitle="Control clinical data access.">
+        <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />
+      </AccountPage>
+    );
   }
 
   async function handleGrant() {
@@ -172,148 +173,127 @@ export function ConsentScreen() {
   const activeGrants = grants.filter((row) => row.status === 'ACTIVE');
 
   return (
-    <section>
-      <Heading level={1}>Consent management</Heading>
-      <Text tone="secondary">
-        View and manage consent grants for clinical access. Purposes and eligibility are governed by your country
-        policy pack — not by this screen.
-      </Text>
-      <Link href="/account/privacy">
-        <Button variant="tertiary" size="sm">
-          Privacy &amp; security
-        </Button>
-      </Link>
-      <Link href="/account">
-        <Button variant="tertiary" size="sm">
-          Back to account
-        </Button>
-      </Link>
+    <AccountPage title="Consent" subtitle="Grant doctors access to your health records when needed.">
+      <p className="mg-toolbar">
+        <Link href="/account/privacy" className="mg-btn mg-btn--ghost mg-btn--sm">
+          Privacy & security
+        </Link>
+      </p>
 
       {policyUnavailable ? (
-        <Card>
-          <Text tone="secondary">
-            Doctor directory or clinical services are unavailable for the selected country. Consent cannot be granted
-            until country policy permits clinical access.
-          </Text>
-        </Card>
+        <MgCard flat>
+          <p className="mg-list-meta">
+            Doctor directory is unavailable for the selected country. Consent cannot be granted until clinical services
+            are enabled in your region.
+          </p>
+        </MgCard>
       ) : null}
 
-      <Heading level={2}>Grant consent</Heading>
-      <FormField label="Country code">
-        {({ id }) => (
-          <input
-            id={id}
-            className="wp-input"
-            value={countryCode}
-            onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
-            onBlur={() => void load()}
-          />
-        )}
-      </FormField>
-      <FormField label="Doctor">
-        {({ id }) => (
-          <select
-            id={id}
-            className="wp-input"
-            value={grantPartnerId}
-            disabled={!doctors.length || policyUnavailable}
-            onChange={(e) => setGrantPartnerId(e.target.value)}
-          >
-            {!doctors.length ? <option value="">No doctors available</option> : null}
-            {doctors.map((doc) => (
-              <option key={doc.partner_id} value={doc.partner_id}>
-                {doc.display_name}
-                {doc.specialties?.length ? ` (${doc.specialties.join(', ')})` : ''}
-              </option>
-            ))}
-          </select>
-        )}
-      </FormField>
-      <FormField label="Purpose">
-        {({ id }) => (
-          <select
-            id={id}
-            className="wp-input"
-            value={grantPurpose}
-            disabled={policyUnavailable}
-            onChange={(e) => setGrantPurpose(e.target.value)}
-          >
-            {CONSENT_PURPOSES.map((row) => (
-              <option key={row.value} value={row.value}>
-                {row.label}
-              </option>
-            ))}
-          </select>
-        )}
-      </FormField>
-      <FormField label="Health record scope">
-        {() => (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {CONSENT_SCOPES.map((row) => {
-              const selected = grantScopes.includes(row.value);
-              return (
-                <Button
-                  key={row.value}
-                  type="button"
-                  variant={selected ? 'primary' : 'secondary'}
-                  size="sm"
-                  disabled={policyUnavailable}
-                  onClick={() =>
-                    setGrantScopes((current) =>
-                      selected ? current.filter((value) => value !== row.value) : [...current, row.value],
-                    )
-                  }
-                >
+      <Section title="Grant consent">
+        <MgCard className="mg-form-card">
+          <p className="mg-list-meta">{`Market: ${countryName} (${countryCode})`}</p>
+          <label className="mg-field">
+            <span className="mg-field-label">Doctor</span>
+            <select
+              className="mg-input"
+              value={grantPartnerId}
+              disabled={!doctors.length || policyUnavailable}
+              onChange={(e) => setGrantPartnerId(e.target.value)}
+            >
+              {!doctors.length ? <option value="">No doctors available</option> : null}
+              {doctors.map((doc) => (
+                <option key={doc.partner_id} value={doc.partner_id}>
+                  {doc.display_name}
+                  {doc.specialties?.length ? ` (${doc.specialties.join(', ')})` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="mg-field">
+            <span className="mg-field-label">Purpose</span>
+            <select
+              className="mg-input"
+              value={grantPurpose}
+              disabled={policyUnavailable}
+              onChange={(e) => setGrantPurpose(e.target.value)}
+            >
+              {CONSENT_PURPOSES.map((row) => (
+                <option key={row.value} value={row.value}>
                   {row.label}
-                </Button>
-              );
-            })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="mg-field">
+            <span className="mg-field-label">Health record scope</span>
+            <div className="mg-toolbar">
+              {CONSENT_SCOPES.map((row) => {
+                const selected = grantScopes.includes(row.value);
+                return (
+                  <MgBtn
+                    key={row.value}
+                    variant={selected ? 'primary' : 'secondary'}
+                    size="sm"
+                    onClick={() =>
+                      setGrantScopes((current) =>
+                        selected ? current.filter((value) => value !== row.value) : [...current, row.value],
+                      )
+                    }
+                  >
+                    {row.label}
+                  </MgBtn>
+                );
+              })}
+            </div>
           </div>
-        )}
-      </FormField>
-      <Button disabled={!!busyId || policyUnavailable || !grantPartnerId || grantScopes.length === 0} onClick={() => void handleGrant()}>
-        {busyId === 'grant' ? 'Granting…' : 'Grant consent'}
-      </Button>
+          <MgBtn
+            disabled={!!busyId || policyUnavailable || !grantPartnerId || grantScopes.length === 0}
+            onClick={() => void handleGrant()}
+          >
+            {busyId === 'grant' ? 'Granting…' : 'Grant consent'}
+          </MgBtn>
+        </MgCard>
+      </Section>
 
-      <Heading level={2}>Your consent grants</Heading>
-      {grants.length === 0 ? (
-        <EmptyState
-          title="No consent grants"
-          description="Active grants for clinical access will appear here after you grant consent to a doctor."
-        />
-      ) : (
-        grants.map((row) => (
-          <Card key={row.id}>
-            <Text>{row.recipient_display_name ?? `Partner ${row.recipient_partner_id.slice(0, 8)}`}</Text>
-            <Text size="caption">Purpose: {row.purpose}</Text>
-            {Array.isArray(row.scope) && row.scope.length ? (
-              <Text size="caption">Scope: {(row.scope as string[]).join(', ')}</Text>
-            ) : null}
-            <Text size="caption" tone={statusTone(row.status)}>
-              Status: {row.status}
-            </Text>
-            <Text size="caption">Granted: {formatWhen(row.granted_at)}</Text>
-            <Text size="caption">Expires: {formatWhen(row.expires_at)}</Text>
-            {row.revoked_at ? <Text size="caption">Revoked: {formatWhen(row.revoked_at)}</Text> : null}
-            {row.status === 'ACTIVE' ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={!!busyId}
-                onClick={() => void handleRevoke(row.id)}
-              >
-                {busyId === row.id ? 'Revoking…' : 'Revoke'}
-              </Button>
-            ) : null}
-          </Card>
-        ))
-      )}
+      <Section title="Your consent grants">
+        {grants.length === 0 ? (
+          <EmptyState
+            title="No consent grants"
+            description="Active grants for clinical access will appear here after you grant consent to a doctor."
+          />
+        ) : (
+          <ul className="mg-order-list">
+            {grants.map((row) => (
+              <li key={row.id}>
+                <MgCard>
+                  <h3 className="mg-list-title">
+                    {row.recipient_display_name ?? `Partner ${row.recipient_partner_id.slice(0, 8)}`}
+                  </h3>
+                  <p className="mg-list-meta">Purpose: {row.purpose}</p>
+                  {Array.isArray(row.scope) && row.scope.length ? (
+                    <p className="mg-list-meta">Scope: {(row.scope as string[]).join(', ')}</p>
+                  ) : null}
+                  <p className="mg-list-meta">
+                    Status: {row.status} · Granted: {formatWhen(row.granted_at)}
+                  </p>
+                  {row.revoked_at ? <p className="mg-list-meta">Revoked: {formatWhen(row.revoked_at)}</p> : null}
+                  {row.status === 'ACTIVE' ? (
+                    <MgBtn variant="secondary" size="sm" disabled={!!busyId} onClick={() => void handleRevoke(row.id)}>
+                      {busyId === row.id ? 'Revoking…' : 'Revoke'}
+                    </MgBtn>
+                  ) : null}
+                </MgCard>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
 
       {activeGrants.length === 0 && grants.length > 0 ? (
-        <Text tone="secondary">No active grants. Revoked or expired grants remain listed for your reference.</Text>
+        <p className="mg-list-meta">No active grants. Revoked or expired grants remain listed for your reference.</p>
       ) : null}
 
-      {message ? <Text>{message}</Text> : null}
-    </section>
+      {message ? <p className="mg-page-subtitle">{message}</p> : null}
+    </AccountPage>
   );
 }

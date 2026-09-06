@@ -1,4 +1,5 @@
 import { apiBaseUrl } from '@world-pharma/shell-core';
+import { affiliateCodeForCheckout } from './affiliate-attribution';
 
 const base = () => apiBaseUrl(typeof process === 'undefined' ? {} : process.env);
 
@@ -24,25 +25,54 @@ async function call(path: string, init: RequestInit & { token?: string | null } 
   return body;
 }
 
+export function notifyCartChanged() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event('wp-cart-changed'));
+}
+
 export function fetchCart(token: string, country: string) {
   return call(`/api/v1/me/cart?country=${encodeURIComponent(country)}`, { token });
 }
 
-export function addCartItem(token: string, country: string, offerId: string, qty: number, idempotencyKey: string) {
-  return call(`/api/v1/me/cart/items?country=${encodeURIComponent(country)}`, {
+export async function addCartItem(token: string, country: string, offerId: string, qty: number, idempotencyKey: string) {
+  const body = await call(`/api/v1/me/cart/items?country=${encodeURIComponent(country)}`, {
     method: 'POST',
     token,
     headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ offer_id: offerId, qty }),
   });
+  notifyCartChanged();
+  return body;
+}
+
+export async function updateCartItem(token: string, itemId: string, qty: number, idempotencyKey: string) {
+  const body = await call(`/api/v1/me/cart/items/${itemId}`, {
+    method: 'PATCH',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ qty }),
+  });
+  notifyCartChanged();
+  return body;
+}
+
+export async function removeCartItem(token: string, itemId: string, idempotencyKey: string) {
+  const body = await call(`/api/v1/me/cart/items/${itemId}`, {
+    method: 'DELETE',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+  notifyCartChanged();
+  return body;
 }
 
 export function startCheckout(token: string, country: string, idempotencyKey: string) {
+  const affiliate_code = affiliateCodeForCheckout(country);
   return call(`/api/v1/me/checkout/sessions?country=${encodeURIComponent(country)}`, {
     method: 'POST',
     token,
     headers: { 'Idempotency-Key': idempotencyKey },
-    body: JSON.stringify({}),
+    body: JSON.stringify(affiliate_code ? { affiliate_code } : {}),
   });
 }
 
@@ -62,12 +92,20 @@ export function removeCheckoutPromo(token: string, sessionId: string) {
   });
 }
 
-export function quoteCheckout(token: string, sessionId: string, idempotencyKey: string) {
+export function quoteCheckout(token: string, sessionId: string, idempotencyKey: string, loyaltyPoints = 0) {
   return call(`/api/v1/me/checkout/sessions/${sessionId}/quote`, {
     method: 'POST',
     token,
     headers: { 'Idempotency-Key': idempotencyKey },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ loyalty_points: loyaltyPoints }),
+  });
+}
+
+export function attachCheckoutAddress(token: string, sessionId: string, addressId: string) {
+  return call(`/api/v1/me/checkout/sessions/${sessionId}/fulfillment`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify({ address_id: addressId }),
   });
 }
 
@@ -90,12 +128,29 @@ export function fetchPaymentIntent(token: string, intentId: string) {
   return call(`/api/v1/me/payments/intents/${intentId}`, { token });
 }
 
+export function completeUpiPayment(token: string, intentId: string, idempotencyKey: string) {
+  return call(`/api/v1/me/payments/intents/${intentId}/complete-upi`, {
+    method: 'POST',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
 export function fetchPaymentMethods(country: string) {
   return call(`/api/v1/payments/methods?country=${encodeURIComponent(country)}`);
 }
 
 export function fetchOrders(token: string) {
   return call('/api/v1/me/orders', { token });
+}
+
+export function createOrderFromPayment(token: string, paymentIntentId: string, idempotencyKey: string) {
+  return call('/api/v1/me/orders', {
+    method: 'POST',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ payment_intent_id: paymentIntentId }),
+  });
 }
 
 export function fetchShipments(token: string) {
@@ -106,8 +161,116 @@ export function fetchShipment(token: string, id: string) {
   return call(`/api/v1/me/shipments/${id}`, { token });
 }
 
+export type CustomerShipmentDetail = {
+  id: string;
+  status: string;
+  tracking_number?: string | null;
+  service_level?: string | null;
+  sandbox?: boolean;
+  message?: string;
+  timeline: Array<{ status: string; at: string; description?: string | null }>;
+  latest_event?: { status: string; at: string } | null;
+  live_tracking?: boolean;
+  expected_delivery?: string | null;
+  attempts: Array<{ attempt_no: number; status: string; reason?: string | null; at?: string | null }>;
+  pod?: {
+    delivered?: boolean;
+    otp_recorded?: boolean;
+    photo_attached?: boolean;
+    signature_attached?: boolean;
+    sandbox?: boolean;
+    note?: string;
+  } | null;
+};
+
+export type CustomerOrderShipment = {
+  id: string;
+  status: string;
+  tracking_number?: string | null;
+  carrier?: string;
+  sandbox?: boolean;
+  pod?: {
+    delivered?: boolean;
+    otp_recorded?: boolean;
+    photo_attached?: boolean;
+    signature_attached?: boolean;
+    sandbox?: boolean;
+    note?: string;
+  } | null;
+};
+
 export function fetchOrder(token: string, idOrNumber: string) {
   return call(`/api/v1/me/orders/${idOrNumber}`, { token });
+}
+
+export type LiveTrackShipment = {
+  shipment_id: string;
+  job_id: string | null;
+  job_status: string | null;
+  assignee_id: string | null;
+  last_lat: number | null;
+  last_lng: number | null;
+  last_event_type: string | null;
+  last_event_at: string | null;
+  pickup: {
+    postal_code: string | null;
+    city: string | null;
+    lat: number | null;
+    lng: number | null;
+  } | null;
+  drop: { postal_code: string | null; city: string | null } | null;
+};
+
+export type LiveTrackingPayload = {
+  sandbox: true;
+  shipments: LiveTrackShipment[];
+  message: string;
+};
+
+/** Poll while rider job is active — sandbox GPS / presence, not live carrier tiles. */
+export function fetchOrderLiveTracking(token: string, idOrNumber: string) {
+  return call(`/api/v1/me/orders/${encodeURIComponent(idOrNumber)}/tracking/live`, {
+    token,
+  }) as Promise<LiveTrackingPayload>;
+}
+
+export type ReorderResult = {
+  order_id: string;
+  order_number: string;
+  added: Array<{
+    offer_id: string;
+    title: string;
+    qty: number;
+    current_sell_minor?: string;
+    rx_required?: boolean;
+  }>;
+  unavailable: Array<{
+    offer_id: string;
+    title: string;
+    qty: number;
+    reason_code: string;
+    reason: string;
+  }>;
+  cart: unknown;
+  sandbox?: boolean;
+  message?: string;
+};
+
+export async function reorderOrder(
+  token: string,
+  orderId: string,
+  countryCode: string,
+  idempotencyKey: string,
+  postalCode?: string,
+) {
+  const body = await call(`/api/v1/me/orders/${orderId}/reorder`, {
+    method: 'POST',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ country_code: countryCode, postal_code: postalCode }),
+  });
+  notifyCartChanged();
+  return body as ReorderResult;
 }
 
 export type WishlistItem = {
@@ -151,37 +314,115 @@ export function requestOrderCancel(token: string, orderId: string, idempotencyKe
   });
 }
 
+export type ReturnReasonCode =
+  | 'WRONG_ITEM'
+  | 'DAMAGED'
+  | 'DELIVERY_FAILURE'
+  | 'CUSTOMER_REFUSAL'
+  | 'OTHER_POLICY_ALLOWED';
+
+export function requestOrderReturn(
+  token: string,
+  orderId: string,
+  input: { reason: ReturnReasonCode; note?: string },
+  idempotencyKey = `return-${orderId}`,
+) {
+  return call(`/api/v1/me/orders/${orderId}/returns`, {
+    method: 'POST',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+export function requestOrderRefund(token: string, orderId: string, idempotencyKey = `refund-${orderId}`) {
+  return call(`/api/v1/me/orders/${orderId}/refund`, {
+    method: 'POST',
+    token,
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({}),
+  });
+}
+
 export type CartItem = {
   id: string;
+  offer_id?: string;
   title: string;
   qty: number;
   sell_minor: string | null;
   currency: string;
+  image_url?: string | null;
+  seller_org_id?: string;
+  seller_display_name?: string;
+  rx_required?: boolean;
 };
 
 export type CustomerCart = {
   items?: CartItem[];
   seller_org_id?: string;
+  seller_display_name?: string;
+  single_seller_cart?: boolean;
   skip_inventory_hold?: boolean;
   dispensing_case_id?: string | null;
   dispense_event_id?: string | null;
 };
 
+export type CheckoutQuotePayload = {
+  sell_minor?: string;
+  subtotal_minor?: string;
+  discount_minor?: string;
+  platform_fee_minor?: string;
+  packaging_fee_minor?: string;
+  handling_fee_minor?: string;
+  payment_convenience_fee_minor?: string;
+  delivery_fee_minor?: string;
+  carrier_actual_cost_minor?: string;
+  delivery_subsidy_minor?: string;
+  tax_minor?: string;
+  shipping_minor?: string;
+  total_minor?: string;
+  promo?: { code?: string; discount_minor?: string };
+  loyalty?: { points_applied?: number; discount_minor?: string };
+  care_plan?: {
+    plan_code?: string;
+    name?: string;
+    discount_bps?: number;
+    discount_minor?: string;
+    free_delivery?: boolean;
+  };
+};
+
+export type CheckoutAddress = {
+  id: string;
+  recipient_name?: string;
+  city?: string;
+  line1?: string;
+  line2?: string | null;
+  postal_code?: string | null;
+};
+
 export type CheckoutSession = {
   id?: string;
   status?: string;
+  seller_org_id?: string;
+  seller_display_name?: string;
+  single_seller_checkout?: boolean;
   skip_inventory_hold?: boolean;
   dispensing_case_id?: string | null;
   dispense_event_id?: string | null;
+  address?: CheckoutAddress | null;
   quote?: {
     total_minor?: string;
     sell_minor?: string;
     discount_minor?: string;
+    tax_minor?: string;
+    shipping_minor?: string;
     currency?: string;
     shipping_status?: string;
     tax_status?: string;
     expires_at?: string;
     promo?: { code?: string; discount_minor?: string };
+    payload?: CheckoutQuotePayload;
   };
   payment_message?: string;
 };
@@ -191,12 +432,77 @@ export type CustomerOrder = {
   order_number: string;
   status: string;
   currency: string;
+  goods_minor?: string;
+  discount_minor?: string;
+  tax_minor?: string;
+  shipping_minor?: string;
   total_minor: string;
+  sandbox?: boolean;
+  seller_org_id?: string;
+  seller_name?: string | null;
   prescription_id?: string | null;
   dispensing_case_id?: string | null;
   dispense_event_id?: string | null;
   rx_inventory_consumed_at_dispense?: boolean;
-  payment?: { payment_intent_id?: string };
+  payment?: { payment_intent_id?: string; status?: string };
+  payment_intent_id?: string | null;
+  payment_status?: string;
+  delivery_status?: string | null;
+  return_status?: string | null;
+  reorder_eligible?: boolean;
+  shipments?: CustomerOrderShipment[];
+  returns?: Array<{
+    id: string;
+    status?: string;
+    reason: string;
+    note?: string | null;
+    created_at?: string;
+    createdAt?: string;
+    pickup_slot_start?: string | null;
+    pickup_slot_end?: string | null;
+    shipment_id?: string | null;
+    tracking_number?: string | null;
+  }>;
+  timeline?: Array<{
+    status: string;
+    from_status?: string | null;
+    reason?: string | null;
+    at: string;
+  }>;
+  pod?: {
+    shipments: Array<{
+      shipment_id: string;
+      delivered?: boolean;
+      otp_recorded?: boolean;
+      photo_attached?: boolean;
+      signature_attached?: boolean;
+      sandbox?: boolean;
+      note?: string;
+    }>;
+    sandbox?: boolean;
+  } | null;
+  history?: Array<{
+    fromStatus?: string | null;
+    toStatus: string;
+    reason?: string | null;
+    createdAt: string;
+  }>;
+  tracking?: {
+    live?: LiveTrackingPayload | null;
+  };
+  items?: Array<{
+    id: string;
+    sku: string;
+    title?: string;
+    qty: number;
+    unit_minor: string;
+    line_minor: string;
+    offer_id?: string;
+    variant_id?: string;
+    catalog_item_id?: string | null;
+    product_slug?: string | null;
+    rx_required?: boolean;
+  }>;
 };
 
 export type ProductReview = {
@@ -283,6 +589,7 @@ export type RecommendationProduct = {
   category_name: string;
   in_stock: boolean;
   href: string;
+  image_url?: string | null;
 };
 
 export type ItemRecommendationsResponse = {

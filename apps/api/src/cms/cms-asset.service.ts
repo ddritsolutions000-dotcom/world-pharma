@@ -12,7 +12,21 @@ import {
   PrivateObjectStore,
 } from '../partner/object-store';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
+import { helpMediaPath, isCmsStoreKey, isPublicCmsMediaContentType } from './cms-public-media';
 import { assertUuid, resolveCountryByCode } from './cms-country';
+
+const CMS_ASSET_FOLDER_PATTERN = /^[a-z0-9][a-z0-9/_-]{0,63}$/;
+
+function normalizeCmsAssetFolder(raw: string | undefined): string | null {
+  const value = raw?.trim().toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (!CMS_ASSET_FOLDER_PATTERN.test(value)) {
+    throw Errors.validation('Invalid media folder name');
+  }
+  return value;
+}
 
 @Injectable()
 export class CmsAssetService {
@@ -32,6 +46,8 @@ export class CmsAssetService {
       content_base64?: string;
       content_type?: string;
       original_name?: string;
+      alt_text?: string;
+      folder?: string;
       idempotency_key?: string;
     },
   ) {
@@ -57,6 +73,8 @@ export class CmsAssetService {
       throw Errors.validation('Asset exceeds size limit');
     }
 
+    const altText = body.alt_text?.trim().slice(0, 500) || null;
+    const folder = normalizeCmsAssetFolder(body.folder);
     const contentItemId = body.content_item_id?.trim();
     if (contentItemId) {
       assertUuid(contentItemId, 'content item id');
@@ -93,6 +111,8 @@ export class CmsAssetService {
           contentType: stored.contentType,
           byteSize: stored.byteSize,
           checksumSha256: stored.checksumSha256,
+          altText,
+          folder,
           createdByPersonId: principal.personId,
         },
       });
@@ -117,7 +137,111 @@ export class CmsAssetService {
         content_type: asset.contentType,
         byte_size: asset.byteSize,
         checksum_sha256: asset.checksumSha256,
+        alt_text: asset.altText,
+        folder: asset.folder,
         created_at: asset.createdAt.toISOString(),
+        public_path: helpMediaPath(asset.id, country.isoAlpha2),
+      };
+    });
+  }
+
+  async listAssets(principal: Principal, countryCode?: string, folder?: string) {
+    const country = await resolveCountryByCode(this.prisma, countryCode);
+    const folderFilter = folder === undefined ? undefined : normalizeCmsAssetFolder(folder);
+    return runWithTenant(workerTenantContext({ countryId: country.id, personId: principal.personId }), async () => {
+      const rows = await this.prisma.cmsContentAsset.findMany({
+        where: {
+          countryId: country.id,
+          ...(folderFilter === undefined ? {} : { folder: folderFilter }),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+        select: {
+          id: true,
+          contentItemId: true,
+          contentType: true,
+          byteSize: true,
+          altText: true,
+          folder: true,
+          createdAt: true,
+        },
+      });
+      return {
+        data: rows.map((row) => ({
+          asset_id: row.id,
+          content_item_id: row.contentItemId,
+          content_type: row.contentType,
+          byte_size: row.byteSize,
+          alt_text: row.altText,
+          folder: row.folder,
+          created_at: row.createdAt.toISOString(),
+          public_path: helpMediaPath(row.id, country.isoAlpha2),
+        })),
+      };
+    });
+  }
+
+  async servePublished(assetId: string, countryCode?: string) {
+    assertUuid(assetId, 'asset id');
+    const country = await resolveCountryByCode(this.prisma, countryCode);
+    return runWithTenant(workerTenantContext({ countryId: country.id }), async () => {
+      const asset = await this.prisma.cmsContentAsset.findFirst({
+        where: { id: assetId, countryId: country.id },
+        include: {
+          contentItem: {
+            select: {
+              id: true,
+              contentType: true,
+              searchDocument: { select: { published: true } },
+            },
+          },
+        },
+      });
+      if (!asset?.contentItemId || !asset.contentItem) {
+        throw Errors.notFound('Media not found');
+      }
+      if (!isCmsStoreKey(asset.storageKey)) {
+        throw Errors.notFound('Media not found');
+      }
+      if (!isPublicCmsMediaContentType(asset.contentItem.contentType)) {
+        throw Errors.notFound('Media not found');
+      }
+      if (!asset.contentItem.searchDocument?.published) {
+        throw Errors.notFound('Media not found');
+      }
+      const object = await this.objects.get(asset.storageKey);
+      return { bytes: object.bytes, contentType: asset.contentType };
+    });
+  }
+
+  async updateAsset(
+    principal: Principal,
+    assetId: string,
+    body: { country_code?: string; alt_text?: string; folder?: string },
+  ) {
+    assertUuid(assetId, 'asset id');
+    const country = await resolveCountryByCode(this.prisma, body.country_code);
+    const altText = body.alt_text === undefined ? undefined : body.alt_text.trim().slice(0, 500) || null;
+    const folder = body.folder === undefined ? undefined : normalizeCmsAssetFolder(body.folder);
+    return runWithTenant(workerTenantContext({ countryId: country.id, personId: principal.personId }), async () => {
+      const asset = await this.prisma.cmsContentAsset.findFirst({
+        where: { id: assetId, countryId: country.id },
+      });
+      if (!asset) {
+        throw Errors.notFound('CMS asset not found');
+      }
+      const updated = await this.prisma.cmsContentAsset.update({
+        where: { id: assetId },
+        data: {
+          ...(altText === undefined ? {} : { altText }),
+          ...(folder === undefined ? {} : { folder }),
+        },
+      });
+      return {
+        asset_id: updated.id,
+        alt_text: updated.altText,
+        folder: updated.folder,
+        public_path: helpMediaPath(updated.id, country.isoAlpha2),
       };
     });
   }

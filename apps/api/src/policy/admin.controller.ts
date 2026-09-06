@@ -23,6 +23,56 @@ export class PolicyAdminController {
     return this.admin.list(country);
   }
 
+  @Get('catalog')
+  @RequirePermissions('policy:read')
+  catalog() {
+    return this.admin.catalog();
+  }
+
+  @Post('validate')
+  @HttpCode(200)
+  @RequirePermissions('policy:publish')
+  validateDocument(
+    @Body() body: { country_code?: string; document?: unknown },
+  ) {
+    if (!body.country_code || body.document === undefined) {
+      throw Errors.validation('country_code and document are required');
+    }
+    return this.admin.validateDraftDocument(body.country_code, body.document);
+  }
+
+  @Post('rollback')
+  @HttpCode(200)
+  @RequirePermissions('policy:publish')
+  rollback(
+    @Body() body: { country_code?: string },
+    @CurrentPrincipal() principal: Principal,
+  ) {
+    if (!body.country_code) {
+      throw Errors.validation('country_code is required');
+    }
+    return this.admin.rollback(body.country_code, principal.personId);
+  }
+
+  @Get(':id/diff')
+  @RequirePermissions('policy:read')
+  diff(@Param('id') id: string) {
+    return this.admin.diff(id);
+  }
+
+  @Post(':id/validate')
+  @HttpCode(200)
+  @RequirePermissions('policy:publish')
+  validateStored(@Param('id') id: string, @CurrentPrincipal() principal: Principal) {
+    return this.admin.validateStoredDraft(id, principal.personId);
+  }
+
+  @Get(':id')
+  @RequirePermissions('policy:read')
+  get(@Param('id') id: string) {
+    return this.admin.get(id);
+  }
+
   @Post()
   @HttpCode(200)
   @RequirePermissions('policy:publish')
@@ -52,18 +102,5 @@ export class PolicyAdminController {
   @RequirePermissions('policy:publish')
   retire(@Param('id') id: string, @CurrentPrincipal() principal: Principal) {
     return this.admin.retire(id, principal.personId);
-  }
-
-  @Post('rollback')
-  @HttpCode(200)
-  @RequirePermissions('policy:publish')
-  rollback(
-    @Body() body: { country_code?: string },
-    @CurrentPrincipal() principal: Principal,
-  ) {
-    if (!body.country_code) {
-      throw Errors.validation('country_code is required');
-    }
-    return this.admin.rollback(body.country_code, principal.personId);
   }
 }

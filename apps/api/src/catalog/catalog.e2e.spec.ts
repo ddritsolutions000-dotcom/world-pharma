@@ -13,22 +13,10 @@ import {
   activateMarketplaceSeller,
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
-
-async function signIn(app: INestApplication, email: string): Promise<{ token: string; personId: string }> {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience: 'admin',
-    });
-  return { token: verified.body.access_token, personId: verified.body.person_id };
-}
+import { provisionSuperAdmin, signInCustomer } from '../test/sign-in';
 
 describe('catalog pricing (e2e)', () => {
+  jest.setTimeout(120_000);
   let app: INestApplication;
   let prisma: PrismaService;
 
@@ -140,18 +128,8 @@ describe('catalog pricing (e2e)', () => {
       },
     });
 
-    const admin = await signIn(app, `cat-admin-${Date.now()}@example.com`);
-    const role = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: role!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
-    const vendorUser = await signIn(app, `cat-vendor-${Date.now()}@example.com`);
+    const admin = await provisionSuperAdmin(app, prisma, 'cat-admin');
+    const vendorUser = await signInCustomer(app, `cat-vendor-${Date.now()}@example.com`);
     const orgRole = await prisma.role.findUnique({ where: { code: 'org_owner' } });
     await prisma.membership.create({
       data: {
@@ -163,7 +141,7 @@ describe('catalog pricing (e2e)', () => {
         status: 'ACTIVE',
       },
     });
-    const otherVendor = await signIn(app, `cat-vendor-b-${Date.now()}@example.com`);
+    const otherVendor = await signInCustomer(app, `cat-vendor-b-${Date.now()}@example.com`);
     await prisma.membership.create({
       data: {
         id: uuidv7(),

@@ -8,13 +8,26 @@ export {
   type SessionStore,
 } from './session';
 export { apiBaseUrl, apiFetch, createCorrelationId } from './http';
-export { requestOtp, verifyOtp, signInWithOtp, type OtpVerifyResult } from './auth';
+export {
+  requestOtp,
+  loginWithPassword,
+  verifyOtp,
+  verifyMfaLogin,
+  signInWithOtp,
+  fetchCurrentUser,
+  fetchBootstrap,
+  hydrateSessionPermissions,
+  type OtpVerifyResult,
+  type CurrentUserResult,
+  type BootstrapSnapshot,
+} from './auth';
 export {
   apiCall,
   refreshAccessToken,
   logoutSession,
   loadStoredSession,
   saveStoredSession,
+  COOKIE_SESSION_TOKEN,
   type ApiCallResult,
   type StoredSession,
 } from './api-call';
@@ -40,3 +53,8 @@ export {
   type NativeVideoMediaCapability,
   type NativeVideoMediaSession,
 } from './native-video-media';
+export {
+  clinicalReportNextAction,
+  clinicalReportStatusLabel,
+  type ClinicalReportNextAction,
+} from './clinical-status-labels';

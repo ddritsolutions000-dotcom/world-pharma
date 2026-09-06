@@ -2,13 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card, EmptyState, Heading, LoadingState, Text } from '@world-pharma/ui-kit/web';
-import {
-  completeLabProcessing,
-  failLabProcessing,
-  fetchLabProcessing,
-  startLabProcessing,
-  type LabProcessingRow,
-} from './lab-api';
+import { completeLabProcessing, failLabProcessing, fetchLabProcessing, startLabProcessing, type LabProcessingRow } from './lab-api';
+import { labOpsStatusLabel } from './lab-ops-labels';
 
 export function LabProcessingPanel({
   organizationId,
@@ -22,6 +17,7 @@ export function LabProcessingPanel({
   const [rows, setRows] = useState<LabProcessingRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -40,16 +36,20 @@ export function LabProcessingPanel({
   }, [load]);
 
   const selected = rows.find((row) => row.id === selectedId) ?? null;
-  const run = (fn: () => Promise<unknown>) => {
+  const run = (actionKey: string, fn: () => Promise<unknown>) => {
+    setBusy(actionKey);
     void fn()
       .then(() => load())
-      .catch(onError);
+      .catch(onError)
+      .finally(() => setBusy(null));
   };
 
   return (
     <Card>
       <Heading level={2}>Processing</Heading>
-      <Text tone="secondary">Bench processing lifecycle. No result values or pathology in R7-D.</Text>
+      <Text tone="secondary">
+        Bench processing after accession. Complete processing to enqueue pathology result entry (sandbox data only).
+      </Text>
       <Button size="sm" variant="secondary" onClick={() => void load()}>
         Refresh processing
       </Button>
@@ -60,7 +60,7 @@ export function LabProcessingPanel({
       {rows.map((row) => (
         <Card key={row.id}>
           <Text>
-            {row.accession_number} · {row.test_title} · {row.status}
+            {row.accession_number} · {row.test_title} · {labOpsStatusLabel(row.status)}
           </Text>
           <Button size="sm" variant="secondary" onClick={() => setSelectedId(row.id)}>
             Open
@@ -73,27 +73,37 @@ export function LabProcessingPanel({
           <Button size="sm" variant="tertiary" onClick={() => setSelectedId(null)}>
             Close
           </Button>
-          <Text>Status: {selected.status}</Text>
+          <Text>Status: {labOpsStatusLabel(selected.status)}</Text>
           <Text size="caption">Barcode: {selected.container_barcode ?? '—'}</Text>
           {selected.status === 'QUEUED' || selected.status === 'ON_HOLD' ? (
-            <Button size="sm" onClick={() => run(() => startLabProcessing(token, organizationId, selected.id))}>
-              Start processing
+            <Button
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => run(`start-${selected.id}`, () => startLabProcessing(token, organizationId, selected.id))}
+            >
+              {busy === `start-${selected.id}` ? 'Starting…' : 'Start processing'}
             </Button>
           ) : null}
           {selected.status === 'IN_PROGRESS' ? (
             <>
               <Button
                 size="sm"
-                onClick={() => run(() => completeLabProcessing(token, organizationId, selected.id))}
+                disabled={busy !== null}
+                onClick={() =>
+                  run(`complete-${selected.id}`, () => completeLabProcessing(token, organizationId, selected.id))
+                }
               >
-                Complete processing
+                {busy === `complete-${selected.id}` ? 'Completing…' : 'Complete processing'}
               </Button>
               <Button
                 size="sm"
                 variant="danger"
-                onClick={() => run(() => failLabProcessing(token, organizationId, selected.id))}
+                disabled={busy !== null}
+                onClick={() =>
+                  run(`fail-${selected.id}`, () => failLabProcessing(token, organizationId, selected.id))
+                }
               >
-                Mark failed
+                {busy === `fail-${selected.id}` ? 'Updating…' : 'Mark failed'}
               </Button>
             </>
           ) : null}

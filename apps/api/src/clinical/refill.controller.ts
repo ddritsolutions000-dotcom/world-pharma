@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Headers, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Param, Post, UseGuards } from '@nestjs/common';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
 import { RequireAudiences } from '../identity/require-audiences';
+import { PermissionsGuard } from '../identity/permissions.guard';
+import { RequirePermissions } from '../identity/require-permissions';
 import { RefillService } from './refill.service';
 
 @Controller()
@@ -21,6 +23,12 @@ export class CustomerRefillController {
   @RequireAudiences('customer')
   list(@CurrentPrincipal() principal: Principal) {
     return this.refills.listCustomerRequests(principal);
+  }
+
+  @Get('customer/subscriptions')
+  @RequireAudiences('customer')
+  listSubscriptions(@CurrentPrincipal() principal: Principal) {
+    return this.refills.listCustomerSubscriptions(principal);
   }
 
   @Post('customer/refill-requests')
@@ -54,6 +62,12 @@ export class CustomerRefillController {
   @RequireAudiences('customer')
   subscription(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
     return this.refills.getOrCreateSubscriptionView(principal, id);
+  }
+
+  @Post('customer/prescriptions/:id/subscription/enable')
+  @RequireAudiences('customer')
+  enable(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.refills.enableSubscription(principal, id);
   }
 
   @Post('customer/prescriptions/:id/subscription/pause')
@@ -101,13 +115,21 @@ export class DoctorRefillController {
 }
 
 @Controller('admin/refill-requests')
-@UseGuards(JwtAuthGuard, AudienceGuard)
+@UseGuards(JwtAuthGuard, AudienceGuard, PermissionsGuard)
 @RequireAudiences('admin')
 export class AdminRefillController {
   constructor(private readonly refills: RefillService) {}
 
   @Get()
+  @RequirePermissions('prescription:read')
   list() {
     return this.refills.adminList();
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @RequirePermissions('prescription:read')
+  cancel(@CurrentPrincipal() principal: Principal, @Param('id') id: string) {
+    return this.refills.adminCancel(principal, id);
   }
 }

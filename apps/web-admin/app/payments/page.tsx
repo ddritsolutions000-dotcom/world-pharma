@@ -3,9 +3,8 @@ import { PaymentsAdminPanel } from '../../src/payments-admin';
 
 export default function PaymentsPage() {
   return (
-    <>
-      <AdminShell />
+    <AdminShell currentNav="payments">
       <PaymentsAdminPanel />
-    </>
+    </AdminShell>
   );
 }

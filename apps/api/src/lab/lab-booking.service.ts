@@ -3,12 +3,14 @@ import {
   CatalogItemKind,
   CatalogLifecycle,
   ConversionEventKind,
+  KycCaseStatus,
   LabBookingStatus,
   LabCollectionMode,
   LocationKind,
   OfferOwnership,
   OfferStatus,
   OrganizationKind,
+  PartnerStatus,
   Prisma,
 } from '@prisma/client';
 import { uuidv7 } from '@world-pharma/shared';
@@ -21,8 +23,11 @@ import { assertLabOrgAccess } from '../catalog/access';
 import { PolicyResolver } from '../policy/resolver';
 import { ConversionEventService } from '../crm/conversion-event.service';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
+import { HealthSubjectService } from '../health/health-subject.service';
+import { HealthcarePartnerReadinessService } from '../healthcare/healthcare-partner-readiness.service';
 import { LabCapabilityService } from './lab-capability.service';
 import { SampleCollectionService } from './sample-collection.service';
+import { evaluateLabPartnerBookingEligibility } from './lab-partner-production-workflow-closure';
 
 function minorJson(value: bigint): string {
   return value.toString();
@@ -42,6 +47,7 @@ type CreateBookingInput = {
   timezone?: string;
   countryCode: string;
   idempotencyKey: string;
+  familyMemberId?: string | null;
 };
 
 @Injectable()
@@ -54,6 +60,8 @@ export class LabBookingService {
     private readonly security: SecurityEventsService,
     private readonly collections: SampleCollectionService,
     private readonly conversionEvents: ConversionEventService,
+    private readonly healthSubjects: HealthSubjectService,
+    private readonly healthcareReadiness: HealthcarePartnerReadinessService,
   ) {}
 
   async browseCatalog(countryCode: string, query?: { q?: string; cursor?: string; limit?: number }) {
@@ -203,10 +211,41 @@ export class LabBookingService {
     }
 
     const country = await this.resolveCountry(input.countryCode);
+    const subject = await this.healthSubjects.resolve(principal, country.isoAlpha2, input.familyMemberId);
     const qty = Math.max(1, Math.min(input.qty ?? 1, 10));
     const elig = await this.capabilities.evaluate(input.labOrgId);
     if (elig.state !== 'ELIGIBLE' || !elig.booking_enabled) {
       throw Errors.serviceDisabled(elig.blocked_reason ?? 'Lab booking is not available for this laboratory.');
+    }
+    await this.healthcareReadiness.assertBookingAllowed({
+      kind: 'LAB',
+      countryCode: country.isoAlpha2,
+      organizationId: input.labOrgId,
+    });
+    const partner = await this.prisma.partner.findFirst({
+      where: { organizationId: input.labOrgId },
+      select: { id: true, status: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const kyc = partner
+      ? await this.prisma.kycCase.findFirst({
+          where: { partnerId: partner.id },
+          orderBy: { createdAt: 'desc' },
+          select: { status: true, expiresAt: true },
+        })
+      : null;
+    const bookingGate = evaluateLabPartnerBookingEligibility({
+      partnerStatus: (partner?.status as PartnerStatus | undefined) ?? null,
+      kycStatus: (kyc?.status as KycCaseStatus | undefined) ?? null,
+      kycExpiresAt: kyc?.expiresAt ?? null,
+    });
+    if (!bookingGate.allowed) {
+      throw Errors.problem(
+        403,
+        bookingGate.blocker ?? 'PARTNER_NOT_ACTIVE',
+        'Lab booking blocked',
+        bookingGate.detail,
+      );
     }
     if (elig.country_code && elig.country_code !== country.isoAlpha2) {
       throw Errors.forbidden('Lab organization is not in the selected country.');
@@ -331,6 +370,7 @@ export class LabBookingService {
           addressSnapshot: addressSnapshot ?? undefined,
           idempotencyKey: input.idempotencyKey.trim(),
           sandbox: true,
+          subjectFamilyMemberId: subject.familyMemberId,
           lines: {
             create: [
               {
@@ -400,7 +440,13 @@ export class LabBookingService {
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
-    return { data: await Promise.all(rows.map((row) => this.presentCustomer(row))) };
+    // Sequential present: nested worker runWithTenant uses SAVEPOINTs on the request
+    // transaction; concurrent Promise.all raced PostgreSQL savepoint stacks (S154).
+    const data = [];
+    for (const row of rows) {
+      data.push(await this.presentCustomer(row));
+    }
+    return { data };
   }
 
   async getCustomerBooking(principal: Principal, id: string) {
@@ -760,6 +806,7 @@ export class LabBookingService {
       collection_mode: booking.collectionMode,
       country_code: booking.country.isoAlpha2,
       customer_person_id: booking.customerPersonId,
+      subject_family_member_id: booking.subjectFamilyMemberId ?? null,
       lab_org_id: booking.labOrgId,
       lab_display_name: labDisplayName,
       lab_location: booking.labLocation

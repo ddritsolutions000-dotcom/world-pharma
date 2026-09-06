@@ -5,6 +5,8 @@ import { PrismaService } from '../app/prisma.service';
 import { OutboxService } from '../events/outbox.service';
 import { PolicyResolver } from '../policy/resolver';
 import { ErxRouter } from './erx-router';
+import { assertProductionErxTransmissionAllowed } from './erx-production-activation-path';
+import { readHealthcareEnvironment } from '../healthcare/healthcare-environment';
 
 export type ErxSubmissionView = {
   id: string;
@@ -37,6 +39,9 @@ export class ErxSubmissionService {
     countryCode: string;
     actorPersonId: string;
   }): Promise<ErxSubmissionView | null> {
+    if (readHealthcareEnvironment() === 'production') {
+      assertProductionErxTransmissionAllowed('erx.submitForIssuedVersion');
+    }
     const resolved = await this.policy.resolvePublished(input.countryCode);
     const document = resolved?.document ?? null;
     if (!this.policy.isRxErxEnabled(document)) {

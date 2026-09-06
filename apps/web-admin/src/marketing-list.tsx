@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { classifyAdminViewState } from './admin-http';
+import { AdminViewLoadError } from './admin-request-error';
 import { useCallback, useEffect, useState } from 'react';
 import { useSession } from '@world-pharma/shell-web';
 import {
@@ -11,8 +13,8 @@ import {
   Heading,
   Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
+  Select,
   Text,
 } from '@world-pharma/ui-kit/web';
 import {
@@ -24,15 +26,16 @@ import {
   type MarketingCampaign,
   type MarketingSegment,
 } from './marketing-api';
+import { workingCountry, MARKET_COUNTRY_CODES } from './working-country';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
 
 export function MarketingHub() {
   const { getAccessToken, session } = useSession();
   const [campaigns, setCampaigns] = useState<MarketingCampaign[]>([]);
   const [segments, setSegments] = useState<MarketingSegment[]>([]);
   const [viewState, setViewState] = useState<ViewState>('idle');
-  const [countryCode, setCountryCode] = useState('XX');
+  const [countryCode, setCountryCode] = useState(() => workingCountry(session.countryCode));
   const [segmentCode, setSegmentCode] = useState('');
   const [segmentName, setSegmentName] = useState('');
   const [campaignCode, setCampaignCode] = useState('');
@@ -62,7 +65,7 @@ export function MarketingHub() {
         setViewState('forbidden');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [countryCode, getAccessToken]);
 
@@ -124,26 +127,33 @@ export function MarketingHub() {
   if (viewState === 'forbidden') {
     return <PermissionDeniedState />;
   }
-  if (viewState === 'network' && campaigns.length === 0 && segments.length === 0) {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
-  }
 
   return (
     <div className="wp-stack">
-      <Heading level={1}>Marketing</Heading>
-      <Text tone="secondary">
-        Consent-gated in-app campaigns only. Sends require durable marketing opt-in; suppressions always win.
-        No clinical payloads, SMS/WhatsApp production, or external ESP in R12-B.
-      </Text>
+      <header className="wp-page-header">
+        <Heading level={1}>Marketing</Heading>
+        <p className="wp-page-intro">
+          Consent-gated in-app campaigns only. Sends require durable marketing opt-in; suppressions always win.
+        </p>
+      </header>
 
-      <Card>
-        <FormField label="Country code">
+      <div className="wp-toolbar">
+        <FormField label="Country">
           {({ id }) => (
-            <Input id={id} value={countryCode} onChange={(e) => setCountryCode(e.target.value.toUpperCase())} />
+            <Select id={id} value={countryCode} onChange={(e) => setCountryCode(workingCountry(e.target.value))}>
+              {MARKET_COUNTRY_CODES.map((iso) => (
+                <option key={iso} value={iso}>
+                  {iso}
+                </option>
+              ))}
+            </Select>
           )}
         </FormField>
-        <Button onClick={() => void load()}>Refresh</Button>
-      </Card>
+        <Button variant="secondary" onClick={() => void load()}>
+          Refresh
+        </Button>
+      </div>
+      <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />
 
       {canSend ? (
         <Card>
@@ -166,14 +176,14 @@ export function MarketingHub() {
           <div className="wp-stack">
             <FormField label="Segment">
               {({ id }) => (
-                <select id={id} value={campaignSegmentId} onChange={(e) => setCampaignSegmentId(e.target.value)}>
+                <Select id={id} value={campaignSegmentId} onChange={(e) => setCampaignSegmentId(e.target.value)}>
                   <option value="">Select segment</option>
                   {segments.map((row) => (
                     <option key={row.id} value={row.id}>
                       {row.name} ({row.code})
                     </option>
                   ))}
-                </select>
+                </Select>
               )}
             </FormField>
             <FormField label="Campaign code">
@@ -201,16 +211,32 @@ export function MarketingHub() {
         {campaigns.length === 0 ? (
           <EmptyState title="No campaigns" description="Create a segment first, then a campaign." />
         ) : (
-          <ul className="wp-stack">
-            {campaigns.map((row) => (
-              <li key={row.id}>
-                <Link href={`/marketing/campaigns/${row.id}?country=${countryCode}`}>
-                  {row.name} ({row.code})
-                </Link>
-                <Text tone="secondary"> — {row.status}</Text>
-              </li>
-            ))}
-          </ul>
+          <div className="wp-admin-table-wrap">
+            <table className="wp-table">
+              <thead>
+                <tr>
+                  <th>Campaign</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      {row.name} ({row.code})
+                    </td>
+                    <td>
+                      <span className="wp-status">{row.status}</span>
+                    </td>
+                    <td>
+                      <Link href={`/marketing/campaigns/${row.id}?country=${countryCode}`}>Open</Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
@@ -219,16 +245,32 @@ export function MarketingHub() {
         {segments.length === 0 ? (
           <EmptyState title="No segments" description="Segments use non-clinical rules v1 only." />
         ) : (
-          <ul className="wp-stack">
-            {segments.map((row) => (
-              <li key={row.id}>
-                <Link href={`/marketing/segments/${row.id}?country=${countryCode}`}>
-                  {row.name} ({row.code})
-                </Link>
-                <Text tone="secondary"> — {row.status}</Text>
-              </li>
-            ))}
-          </ul>
+          <div className="wp-admin-table-wrap">
+            <table className="wp-table">
+              <thead>
+                <tr>
+                  <th>Segment</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {segments.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      {row.name} ({row.code})
+                    </td>
+                    <td>
+                      <span className="wp-status">{row.status}</span>
+                    </td>
+                    <td>
+                      <Link href={`/marketing/segments/${row.id}?country=${countryCode}`}>Open</Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
     </div>

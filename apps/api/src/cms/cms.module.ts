@@ -12,10 +12,13 @@ import { CmsAuditService } from './cms-audit.service';
 import { CmsContentService } from './cms-content.service';
 import { CmsSearchService } from './cms-search.service';
 import { HelpCenterController } from './help-center.controller';
+import { CustomerHealthContentController } from './customer-health-content.controller';
+import { PublicHealthContentController } from './public-health-content.controller';
+import { HealthContentService } from './health-content.service';
 
 @Module({
   imports: [IdentityModule, EventsModule, PartnerModule, forwardRef(() => PlatformModule)],
-  controllers: [AdminCmsController, HelpCenterController, AdminSupportController],
+  controllers: [AdminCmsController, HelpCenterController, AdminSupportController, CustomerHealthContentController, PublicHealthContentController],
   providers: [
     PrismaService,
     CmsAuditService,
@@ -23,6 +26,7 @@ import { HelpCenterController } from './help-center.controller';
     CmsSearchService,
     CmsAssetService,
     AdminSupportService,
+    HealthContentService,
   ],
   exports: [CmsContentService, CmsSearchService],
 })

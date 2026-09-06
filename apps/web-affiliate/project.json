@@ -27,6 +27,12 @@
       "options": {
         "command": "tsc --noEmit -p apps/web-affiliate/tsconfig.json"
       }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "jest --config apps/web-affiliate/jest.config.cts"
+      }
     }
   }
 }

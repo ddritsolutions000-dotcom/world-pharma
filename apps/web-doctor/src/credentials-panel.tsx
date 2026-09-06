@@ -10,8 +10,6 @@ import {
   Heading,
   Input,
   LoadingState,
-  NetworkErrorState,
-  PermissionDeniedState,
   Text,
 } from '@world-pharma/ui-kit/web';
 import {
@@ -19,12 +17,13 @@ import {
   submitDoctorCredential,
   type DoctorCredential,
 } from './doctor-api';
+import { DoctorLoadFailure, mapDoctorApiFailure, type DoctorLoadError } from './doctor-load-state';
 
 export function DoctorCredentialsPanel() {
   const { getAccessToken, session, expire } = useSession();
   const [rows, setRows] = useState<DoctorCredential[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<'network' | 'forbidden' | 'error' | null>(null);
+  const [error, setError] = useState<DoctorLoadError | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [credentialType, setCredentialType] = useState('');
@@ -44,7 +43,7 @@ export function DoctorCredentialsPanel() {
     setError(null);
     const result = await fetchDoctorCredentials({ token, onUnauthorized });
     if (!result.ok) {
-      setError(result.kind === 'forbidden' ? 'forbidden' : result.kind === 'network' ? 'network' : 'error');
+      setError(mapDoctorApiFailure(result.kind));
       setRows([]);
     } else {
       setRows(result.data.credentials ?? []);
@@ -88,14 +87,8 @@ export function DoctorCredentialsPanel() {
   if (loading) {
     return <LoadingState label="Loading credentials" />;
   }
-  if (error === 'forbidden') {
-    return <PermissionDeniedState />;
-  }
-  if (error === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
-  }
-  if (error === 'error') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (error) {
+    return <DoctorLoadFailure error={error} onRetry={() => void load()} />;
   }
 
   return (

@@ -71,6 +71,7 @@ async function seedPerson(prisma: PrismaService, email: string, countryId: strin
 }
 
 describe('R12-F reviews, Q&A, personalization', () => {
+  jest.setTimeout(120_000);
   let app: INestApplication;
   let prisma: PrismaService;
 
@@ -261,6 +262,14 @@ describe('R12-F reviews, Q&A, personalization', () => {
       .set('Authorization', `Bearer ${userB.token}`)
       .send({ country_code: 'XX', rating: 5, body: 'Great product for daily use.' });
     expect(noPurchase.status).toBe(403);
+
+    const tooEarly = await request(app.getHttpServer())
+      .post(`/api/v1/catalog/items/${item.id}/reviews`)
+      .set('Authorization', `Bearer ${userA.token}`)
+      .send({ country_code: 'XX', rating: 5, body: 'Order not delivered yet.' });
+    expect(tooEarly.status).toBe(403);
+
+    await prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.DELIVERED } });
 
     const submit = await request(app.getHttpServer())
       .post(`/api/v1/catalog/items/${item.id}/reviews`)

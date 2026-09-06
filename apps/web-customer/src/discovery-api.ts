@@ -21,6 +21,15 @@ export interface DiscoveryResultItem {
   slug: string | null;
   href: string | null;
   in_stock?: boolean;
+  rx_required?: boolean;
+  min_sell_minor?: string | null;
+  max_discount_pct?: number | null;
+  avg_rating?: number | null;
+  review_count?: number;
+  manufacturer?: string | null;
+  composition?: string | null;
+  brand?: string | null;
+  category?: string | null;
   content_type?: string;
   category_slug?: string | null;
   online_capable?: boolean;
@@ -29,6 +38,8 @@ export interface DiscoveryResultItem {
   organization_id?: string | null;
   location_id?: string | null;
 }
+
+export type DiscoveryCommerceSort = 'relevance' | 'price_asc' | 'price_desc' | 'rating' | 'discount';
 
 export interface DiscoverySearchResponse {
   country: string;
@@ -68,6 +79,10 @@ function buildDiscoveryParams(input: {
   specialty?: string;
   city?: string;
   labOrgId?: string;
+  manufacturer?: string;
+  rx?: boolean;
+  in_stock?: boolean;
+  sort?: DiscoveryCommerceSort;
 }) {
   const params = new URLSearchParams({ country: input.country });
   if (input.q) {
@@ -100,6 +115,18 @@ function buildDiscoveryParams(input: {
   if (input.labOrgId) {
     params.set('lab_org_id', input.labOrgId);
   }
+  if (input.manufacturer) {
+    params.set('manufacturer', input.manufacturer);
+  }
+  if (input.rx !== undefined) {
+    params.set('rx', input.rx ? 'true' : 'false');
+  }
+  if (input.in_stock !== undefined) {
+    params.set('in_stock', input.in_stock ? 'true' : 'false');
+  }
+  if (input.sort) {
+    params.set('sort', input.sort);
+  }
   return params;
 }
 
@@ -115,6 +142,10 @@ export async function fetchDiscoverySearch(input: {
   specialty?: string;
   city?: string;
   labOrgId?: string;
+  manufacturer?: string;
+  rx?: boolean;
+  in_stock?: boolean;
+  sort?: DiscoveryCommerceSort;
 }): Promise<DiscoverySearchResponse> {
   const params = buildDiscoveryParams(input);
   const res = await fetch(`${base()}/api/v1/discovery/search?${params.toString()}`);

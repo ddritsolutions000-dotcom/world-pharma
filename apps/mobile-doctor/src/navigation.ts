@@ -8,7 +8,9 @@ export type DoctorMobileTab =
   | 'availability'
   | 'appointments'
   | 'prescriptions'
+  | 'refill-requests'
   | 'patients'
+  | 'inbox'
   | 'settings';
 
 export type DoctorMobileScreen =
@@ -22,10 +24,13 @@ export type DoctorMobileScreen =
   | 'appointment-detail'
   | 'prescriptions'
   | 'prescription-detail'
+  | 'refill-requests'
   | 'patients'
   | 'patient-health'
   | 'health-artifact'
   | 'settings'
+  | 'inbox'
+  | 'support'
   | 'expired';
 
 export function doctorMobileScreen(
@@ -58,13 +63,9 @@ export function doctorMobileScreen(
 }
 
 export const DOCTOR_TABS: Array<{ id: DoctorMobileTab; label: string }> = [
-  { id: 'dashboard', label: 'Home' },
-  { id: 'patients', label: 'Patients' },
-  { id: 'profile', label: 'Profile' },
-  { id: 'credentials', label: 'Credentials' },
-  { id: 'organizations', label: 'Orgs' },
-  { id: 'availability', label: 'Availability' },
-  { id: 'appointments', label: 'Appts' },
+  { id: 'dashboard', label: 'Today' },
+  { id: 'appointments', label: 'Queue' },
   { id: 'prescriptions', label: 'Rx' },
-  { id: 'settings', label: 'Settings' },
+  { id: 'patients', label: 'Patients' },
+  { id: 'settings', label: 'More' },
 ];

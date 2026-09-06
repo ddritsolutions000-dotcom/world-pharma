@@ -4,6 +4,7 @@ import { uuidv7 } from '@world-pharma/shared';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
 import { RbacService } from '../identity/rbac.service';
+import { RateLimitService } from '../identity/rate-limit.service';
 import { SecurityEventsService } from '../identity/security-events.service';
 import { PolicyResolver } from '../policy/resolver';
 import { assertKycTransition } from './kyc-state';
@@ -14,6 +15,10 @@ import {
   PrivateObjectStore,
   sanitizeFilename,
 } from './object-store';
+import {
+  assertKycBytesMatchContentType,
+  isAllowedJoinDocumentTypeCode,
+} from './join-document-rules';
 
 const BLOCKED_OWNER_UPLOAD = new Set<PartnerStatus>([
   PartnerStatus.SUSPENDED,
@@ -32,6 +37,7 @@ export class KycService {
     private readonly objects: PrivateObjectStore,
     private readonly rbac: RbacService,
     private readonly scanner: MalwareScanner,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   async openCase(input: {
@@ -80,6 +86,15 @@ export class KycService {
     return row?.required_documents ?? [];
   }
 
+  async requiredFields(countryCode: string, partnerTypeCode: string): Promise<string[]> {
+    const pack = await this.policy.resolvePublished(countryCode);
+    if (!pack) {
+      return [];
+    }
+    const row = pack.document.partner_types[partnerTypeCode as keyof typeof pack.document.partner_types];
+    return row?.required_fields ?? [];
+  }
+
   async transition(input: {
     kycCaseId: string;
     to: KycCaseStatus;
@@ -101,6 +116,11 @@ export class KycService {
       await this.assertCan(input.actorId, kyc.partner, 'review');
     }
     assertKycTransition(kyc.status, input.to);
+    // Sprint 43: operator verification is INTERNAL_VERIFIED only — never claim live provider.
+    const verificationLevel =
+      input.to === KycCaseStatus.VERIFIED
+        ? 'INTERNAL_VERIFIED'
+        : kyc.verificationLevel;
     const updated = await this.prisma.kycCase.update({
       where: { id: kyc.id },
       data: {
@@ -110,6 +130,7 @@ export class KycService {
         submittedAt: input.to === KycCaseStatus.SUBMITTED ? new Date() : kyc.submittedAt,
         verifiedAt: input.to === KycCaseStatus.VERIFIED ? new Date() : kyc.verifiedAt,
         rejectedAt: input.to === KycCaseStatus.REJECTED ? new Date() : kyc.rejectedAt,
+        verificationLevel,
       },
     });
     await this.events.emit({
@@ -117,9 +138,23 @@ export class KycService {
       outcome: 'success',
       personId: input.actorId,
       requestId: input.requestId,
-      metadata: { kyc_case_id: kyc.id, to: input.to },
+      metadata: {
+        kyc_case_id: kyc.id,
+        to: input.to,
+        verification_class:
+          input.to === KycCaseStatus.VERIFIED ? 'INTERNAL_VERIFIED' : undefined,
+        live_provider: 'EXTERNAL_GATED',
+      },
     });
-    return updated;
+    return {
+      ...updated,
+      verification_class: updated.verificationLevel,
+      live_provider: 'EXTERNAL_GATED' as const,
+      note:
+        updated.status === KycCaseStatus.VERIFIED
+          ? 'INTERNAL_VERIFIED by operator — not EXTERNAL_PROVIDER_VERIFIED'
+          : undefined,
+    };
   }
 
   async uploadDocument(input: {
@@ -139,11 +174,29 @@ export class KycService {
       throw Errors.notFound('KYC case not found');
     }
     await this.assertCan(input.actorId, kyc.partner, 'upload');
+    const uploadHit = await this.rateLimit.hit(`upload:kyc:${input.actorId}`, 40, 900);
+    if (!uploadHit.allowed) {
+      throw Errors.rateLimited(uploadHit.retryAfter);
+    }
     if (!ALLOWED_KYC_CONTENT_TYPES.has(input.contentType)) {
       throw Errors.validation('Unsupported document type');
     }
     if (input.bytes.length > MAX_KYC_BYTES) {
       throw Errors.validation('Document exceeds size limit');
+    }
+    try {
+      assertKycBytesMatchContentType(input.bytes, input.contentType);
+    } catch {
+      throw Errors.validation('File content does not match declared content type.');
+    }
+    const country = await this.prisma.country.findUnique({ where: { id: kyc.countryId } });
+    const required = await this.requiredDocuments(
+      country?.isoAlpha2 ?? 'XX',
+      kyc.partner.partnerTypeCode,
+    );
+    const typeGate = isAllowedJoinDocumentTypeCode(input.documentTypeCode, required);
+    if (!typeGate.ok) {
+      throw Errors.validation(typeGate.reason ?? 'Invalid document_type_code');
     }
     const scan = await this.scanner.scan(input.bytes, input.contentType);
     if (!scan.clean) {
@@ -155,12 +208,21 @@ export class KycService {
       prefix: `kyc/${kyc.id}`,
     });
     const safeName = sanitizeFilename(input.originalName);
+    // Retire prior versions of the same type so completeness uses the latest upload.
+    await this.prisma.partnerDocument.updateMany({
+      where: {
+        kycCaseId: kyc.id,
+        documentTypeCode: input.documentTypeCode.trim(),
+        status: { not: KycDocumentStatus.RETIRED },
+      },
+      data: { status: KycDocumentStatus.RETIRED },
+    });
     const doc = await this.prisma.partnerDocument.create({
       data: {
         id: uuidv7(),
         kycCaseId: kyc.id,
         countryId: kyc.countryId,
-        documentTypeCode: input.documentTypeCode,
+        documentTypeCode: input.documentTypeCode.trim(),
         objectKey: stored.key,
         contentType: input.contentType,
         byteSize: stored.byteSize,
@@ -293,6 +355,86 @@ export class KycService {
       metadata: { document_id: doc.id },
     });
     return { bytes: bytes.bytes, contentType: doc.contentType, originalName: doc.originalName };
+  }
+
+  /** Issue a short-lived private access ticket — never returns file bytes or a public URL. */
+  async issueDocumentAccessTicket(input: {
+    documentId: string;
+    actorId: string;
+    ttlSeconds?: number;
+    requestId?: string;
+  }) {
+    const doc = await this.prisma.partnerDocument.findUnique({
+      where: { id: input.documentId },
+      include: { kycCase: { include: { partner: true } } },
+    });
+    if (!doc) {
+      throw Errors.notFound('Document not found');
+    }
+    await this.assertCan(input.actorId, doc.kycCase.partner, 'view');
+    const ttl = input.ttlSeconds ?? 300;
+    const signed = await this.objects.signAccess(doc.objectKey, ttl);
+    await this.events.emit({
+      type: 'KYC_DOCUMENT_VIEWED',
+      outcome: 'success',
+      personId: input.actorId,
+      requestId: input.requestId,
+      metadata: {
+        document_id: doc.id,
+        access: 'ticket_issued',
+        expires_at: signed.expiresAt.toISOString(),
+      },
+    });
+    return {
+      document_id: doc.id,
+      content_type: doc.contentType,
+      original_name: doc.originalName,
+      byte_size: doc.byteSize,
+      access_ticket: signed.ticket,
+      expires_at: signed.expiresAt.toISOString(),
+      watermark: 'CONFIDENTIAL — VIEW AUDITED',
+      public_url: null as null,
+      note: 'Private object ticket — not a public URL. Fetch bytes via content endpoint with this ticket.',
+    };
+  }
+
+  /** Redeem a ticket for document bytes (JWT + permission still required on the controller). */
+  async readDocumentWithTicket(input: {
+    documentId: string;
+    ticket: string;
+    actorId: string;
+    requestId?: string;
+  }) {
+    const doc = await this.prisma.partnerDocument.findUnique({
+      where: { id: input.documentId },
+      include: { kycCase: { include: { partner: true } } },
+    });
+    if (!doc) {
+      throw Errors.notFound('Document not found');
+    }
+    await this.assertCan(input.actorId, doc.kycCase.partner, 'view');
+    const key = this.objects.resolveTicket(input.ticket);
+    if (!key || key !== doc.objectKey) {
+      throw Errors.problem(
+        401,
+        'DOCUMENT_TICKET_INVALID',
+        'Access ticket invalid',
+        'Document access ticket is missing, expired, or does not match this document.',
+      );
+    }
+    const bytes = await this.objects.get(doc.objectKey);
+    await this.events.emit({
+      type: 'KYC_DOCUMENT_DOWNLOADED',
+      outcome: 'success',
+      personId: input.actorId,
+      requestId: input.requestId,
+      metadata: { document_id: doc.id, access: 'ticket_redeemed' },
+    });
+    return {
+      bytes: bytes.bytes,
+      contentType: doc.contentType,
+      originalName: doc.originalName ?? 'document',
+    };
   }
 
   private async assertCan(

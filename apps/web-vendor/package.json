@@ -4,10 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3004",
+    "dev:demo": "next dev --hostname 0.0.0.0 --port 3004",
     "build": "next build",
-    "start": "next start --port 3004"
+    "start": "next start --port 3004",
+    "start:demo": "next start --hostname vendor.demo.com --port 3004"
   },
   "dependencies": {
+    "@world-pharma/shared": "workspace:*",
     "@world-pharma/shell-core": "workspace:*",
     "@world-pharma/shell-web": "workspace:*",
     "@world-pharma/ui-kit": "workspace:*",

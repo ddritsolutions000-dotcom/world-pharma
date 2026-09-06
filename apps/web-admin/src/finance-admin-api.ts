@@ -1,6 +1,6 @@
 'use client';
 
-import { apiBaseUrl } from '@world-pharma/shell-core';
+import { adminApiRoot, adminAuthHeaders } from './admin-http';
 
 export type FinanceBreakAction = {
   id: string;
@@ -85,18 +85,18 @@ function breaksUrl(query: FinanceBreakListQuery = {}): string {
     params.set('limit', String(query.limit));
   }
   const qs = params.toString();
-  return `${apiBaseUrl()}/api/v1/admin/finance/breaks${qs ? `?${qs}` : ''}`;
+  return `${adminApiRoot()}/api/v1/admin/finance/breaks${qs ? `?${qs}` : ''}`;
 }
 
 export async function fetchFinanceBreaks(token: string, query: FinanceBreakListQuery = {}) {
   return fetch(breaksUrl(query), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: adminAuthHeaders(token),
   });
 }
 
 export async function fetchFinanceBreakDetail(token: string, breakId: string) {
-  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/breaks/${breakId}`, {
+    headers: adminAuthHeaders(token),
   });
 }
 
@@ -106,9 +106,9 @@ export async function investigateFinanceBreak(
   idempotencyKey: string,
   note?: string,
 ) {
-  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}/investigate`, {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/breaks/${breakId}/investigate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: adminAuthHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ idempotency_key: idempotencyKey, note }),
   });
 }
@@ -119,9 +119,9 @@ export async function resolveFinanceBreak(
   idempotencyKey: string,
   note?: string,
 ) {
-  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}/resolve`, {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/breaks/${breakId}/resolve`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: adminAuthHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ idempotency_key: idempotencyKey, note }),
   });
 }
@@ -132,9 +132,9 @@ export async function closeFinanceBreak(
   idempotencyKey: string,
   note?: string,
 ) {
-  return fetch(`${apiBaseUrl()}/api/v1/admin/finance/breaks/${breakId}/close`, {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/breaks/${breakId}/close`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: adminAuthHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ idempotency_key: idempotencyKey, note }),
   });
 }
@@ -155,8 +155,8 @@ export async function fetchFinanceSchedules(token: string, countryId?: string) {
   if (countryId) {
     params.set('country_id', countryId);
   }
-  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-schedules?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const res = await fetch(`${adminApiRoot()}/api/v1/admin/finance/settlement-import-schedules?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
   });
   return res;
 }
@@ -165,9 +165,9 @@ export async function createFinanceSchedule(
   token: string,
   body: { country_id: string; provider_code: string; currency: string; enabled?: boolean },
 ) {
-  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-schedules`, {
+  const res = await fetch(`${adminApiRoot()}/api/v1/admin/finance/settlement-import-schedules`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: adminAuthHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
   return res;
@@ -178,9 +178,9 @@ export async function updateFinanceSchedule(
   scheduleId: string,
   body: { currency?: string; enabled?: boolean },
 ) {
-  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-schedules/${scheduleId}`, {
+  const res = await fetch(`${adminApiRoot()}/api/v1/admin/finance/settlement-import-schedules/${scheduleId}`, {
     method: 'PATCH',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: adminAuthHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
   return res;
@@ -191,8 +191,110 @@ export async function fetchFinanceWorkerRuns(token: string, countryId?: string) 
   if (countryId) {
     params.set('country_id', countryId);
   }
-  const res = await fetch(`${apiBaseUrl()}/api/v1/admin/finance/settlement-import-worker/runs?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const res = await fetch(`${adminApiRoot()}/api/v1/admin/finance/settlement-import-worker/runs?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
   });
   return res;
+}
+
+export async function fetchFinancePayables(token: string) {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/payables`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export async function fetchAffiliateLiabilities(token: string, countryCode?: string) {
+  const params = new URLSearchParams();
+  if (countryCode) {
+    params.set('country_code', countryCode);
+  }
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/affiliate-liabilities?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export async function fetchDoctorEarningsAdmin(token: string, countryCode?: string) {
+  const params = new URLSearchParams();
+  if (countryCode) {
+    params.set('country_code', countryCode);
+  }
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/doctor-earnings?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export async function fetchLabEarningsAdmin(token: string, countryCode?: string) {
+  const params = new URLSearchParams();
+  if (countryCode) {
+    params.set('country_code', countryCode);
+  }
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/lab-earnings?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export async function fetchSettlementBatches(token: string, countryCode?: string) {
+  const params = new URLSearchParams();
+  if (countryCode) {
+    params.set('country_code', countryCode);
+  }
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/settlements?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export async function fetchFinanceReconciliation(token: string, countryCode?: string) {
+  const params = new URLSearchParams();
+  if (countryCode) {
+    params.set('country_code', countryCode);
+  }
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/reconciliation/overview?${params.toString()}`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export type PartnerWithdrawAdminRow = {
+  id: string;
+  status: string;
+  amount_minor: string;
+  currency: string;
+  destination_hint: string | null;
+  partner_type: string;
+  partner_id: string;
+  created_at: string;
+  payout_account: {
+    method: string;
+    account_holder_name: string;
+    account_number_masked: string | null;
+    upi_id_masked: string | null;
+  } | null;
+};
+
+export function fetchPartnerWithdraws(token: string, status?: string) {
+  const q = status ? `?status=${encodeURIComponent(status)}` : '';
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/partner-withdraws${q}`, {
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export function approvePartnerWithdraw(token: string, id: string) {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/partner-withdraws/${id}/approve`, {
+    method: 'POST',
+    headers: adminAuthHeaders(token),
+  });
+}
+
+export function rejectPartnerWithdraw(token: string, id: string, note?: string) {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/partner-withdraws/${id}/reject`, {
+    method: 'POST',
+    headers: { ...adminAuthHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function executePartnerWithdraw(token: string, id: string) {
+  return fetch(`${adminApiRoot()}/api/v1/admin/finance/partner-withdraws/${id}/execute`, {
+    method: 'POST',
+    headers: adminAuthHeaders(token),
+  });
 }

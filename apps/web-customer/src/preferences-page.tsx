@@ -4,30 +4,28 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@world-pharma/shell-web';
 import {
-  Button,
-  Card,
   EmptyState,
-  Heading,
   LoadingState,
   NetworkErrorState,
   PermissionDeniedState,
   SessionExpiredState,
-  Text,
 } from '@world-pharma/ui-kit/web';
 import {
   fetchNotificationPreferences,
   updateNotificationPreferences,
   type NotificationPreferences,
 } from './account-api';
+import { AccountPage } from './ui/account-hub-nav';
+import { MgBtn, MgCard } from './ui/mg-ui';
 
-const PREF_KEYS: Array<{ key: keyof NotificationPreferences; label: string }> = [
-  { key: 'email_enabled', label: 'Email notifications' },
-  { key: 'push_enabled', label: 'Push notifications' },
-  { key: 'sms_enabled', label: 'SMS notifications' },
-  { key: 'order_updates', label: 'Order updates' },
-  { key: 'appointment_updates', label: 'Appointment updates' },
-  { key: 'delivery_updates', label: 'Delivery updates' },
-  { key: 'marketing', label: 'Marketing' },
+const PREF_KEYS: Array<{ key: keyof NotificationPreferences; label: string; hint: string }> = [
+  { key: 'email_enabled', label: 'Email', hint: 'Order and appointment updates by email' },
+  { key: 'push_enabled', label: 'Push notifications', hint: 'Alerts on your phone' },
+  { key: 'sms_enabled', label: 'SMS', hint: 'Delivery and OTP-related texts' },
+  { key: 'order_updates', label: 'Order updates', hint: 'Status changes for medicine orders' },
+  { key: 'appointment_updates', label: 'Appointment updates', hint: 'Doctor visit reminders' },
+  { key: 'delivery_updates', label: 'Delivery updates', hint: 'Shipment and courier alerts' },
+  { key: 'marketing', label: 'Offers & reminders', hint: 'Refill reminders and promotions' },
 ];
 
 export function PreferencesScreen() {
@@ -69,7 +67,15 @@ export function PreferencesScreen() {
   }
 
   if (session.status !== 'authenticated') {
-    return <EmptyState title="Sign in required" description="Sign in to manage notification preferences." />;
+    return (
+      <AccountPage title="Alerts" subtitle="Choose how we notify you.">
+        <EmptyState
+          title="Sign in required"
+          description="Sign in to manage notification preferences."
+          action={{ label: 'Sign in', onClick: () => (window.location.href = '/login') }}
+        />
+      </AccountPage>
+    );
   }
 
   if (session.audience !== 'customer') {
@@ -77,7 +83,11 @@ export function PreferencesScreen() {
   }
 
   if (loading) {
-    return <LoadingState label="Loading preferences" />;
+    return (
+      <AccountPage title="Alerts" subtitle="Choose how we notify you.">
+        <LoadingState label="Loading preferences" />
+      </AccountPage>
+    );
   }
 
   if (error === 'forbidden') {
@@ -85,11 +95,19 @@ export function PreferencesScreen() {
   }
 
   if (error === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: load }} />;
+    return (
+      <AccountPage title="Alerts" subtitle="Choose how we notify you.">
+        <NetworkErrorState action={{ label: 'Retry', onClick: load }} />
+      </AccountPage>
+    );
   }
 
   if (!prefs) {
-    return <EmptyState title="Preferences unavailable" description="Could not load notification settings." />;
+    return (
+      <AccountPage title="Alerts" subtitle="Choose how we notify you.">
+        <EmptyState title="Preferences unavailable" description="Could not load notification settings." />
+      </AccountPage>
+    );
   }
 
   async function toggle(key: keyof NotificationPreferences) {
@@ -111,32 +129,35 @@ export function PreferencesScreen() {
   }
 
   return (
-    <section>
-      <Heading level={1}>Notification preferences</Heading>
-      <Text tone="secondary">
-        Choose which updates you receive. Marketing is off by default. When enabled, you may receive reorder and refill
-        reminders (commerce-only). Open prescriptions for refill requests.
-      </Text>
-      <Link href="/account">
-        <Button variant="tertiary" size="sm">
-          Back to account
-        </Button>
-      </Link>
-      <Link href="/prescriptions">
-        <Button variant="tertiary" size="sm">
+    <AccountPage title="Alerts" subtitle="Control order, appointment, and delivery notifications.">
+      <p className="mg-toolbar">
+        <Link href="/prescriptions" className="mg-btn mg-btn--ghost mg-btn--sm">
           Prescriptions & refill requests
-        </Button>
-      </Link>
-      {PREF_KEYS.map(({ key, label }) => (
-        <Card key={key}>
-          <Text>{label}</Text>
-          <Text size="caption">{prefs[key] ? 'On' : 'Off'}</Text>
-          <Button disabled={saving} variant="secondary" size="sm" onClick={() => void toggle(key)}>
-            Toggle
-          </Button>
-        </Card>
-      ))}
-      {message ? <Text>{message}</Text> : null}
-    </section>
+        </Link>
+      </p>
+      <ul className="mg-order-list">
+        {PREF_KEYS.map(({ key, label, hint }) => (
+          <li key={key}>
+            <MgCard>
+              <div className="mg-pref-row">
+                <div>
+                  <h3 className="mg-list-title">{label}</h3>
+                  <p className="mg-list-meta">{hint}</p>
+                </div>
+                <div className="mg-pref-actions">
+                  <span className={`mg-pill ${prefs[key] ? 'mg-pill--on' : ''}`}>
+                    {prefs[key] ? 'On' : 'Off'}
+                  </span>
+                  <MgBtn disabled={saving} variant="secondary" size="sm" onClick={() => void toggle(key)}>
+                    Toggle
+                  </MgBtn>
+                </div>
+              </div>
+            </MgCard>
+          </li>
+        ))}
+      </ul>
+      {message ? <p className="mg-page-subtitle">{message}</p> : null}
+    </AccountPage>
   );
 }

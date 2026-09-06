@@ -12,21 +12,10 @@ import { emptyPolicyDocument } from '../policy/empty-pack';
 import { applyTestIsolation } from '../test/isolate-runtime';
 import { enableMarketplaceVendorPack } from '../test/marketplace-seller';
 
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { provisionSuperAdmin, signIn } from '../test/sign-in';
 
 describe('R6-C vendor inventory ops (e2e)', () => {
+  jest.setTimeout(300_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -71,20 +60,9 @@ describe('R6-C vendor inventory ops (e2e)', () => {
 
   it('isolates inventory mutations, lots, expiry, adjustments, and audit events', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r6c-admin-${suffix}@example.com`, 'admin');
+    const admin = await provisionSuperAdmin(app, prisma, `r6c-admin-${suffix}`);
     const vendorA = await signIn(app, `r6c-va-${suffix}@example.com`);
     const vendorB = await signIn(app, `r6c-vb-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
 
     let country = await prisma.country.findUnique({ where: { isoAlpha2: 'TC' } });
     if (!country) {

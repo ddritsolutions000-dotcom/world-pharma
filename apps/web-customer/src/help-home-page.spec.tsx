@@ -46,7 +46,7 @@ describe('HelpHomeScreen', () => {
   it('renders help home with categories and articles', async () => {
     wrap(<HelpHomeScreen />);
     expect(await screen.findByRole('heading', { name: 'Help Center' })).toBeInTheDocument();
-    expect((await screen.findAllByText('getting-started')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/getting started/i)).length).toBeGreaterThan(0);
     expect(await screen.findByText('Welcome guide')).toBeInTheDocument();
   });
 

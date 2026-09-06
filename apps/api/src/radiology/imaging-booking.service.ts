@@ -4,10 +4,12 @@ import {
   CatalogLifecycle,
   ConversionEventKind,
   ImagingBookingStatus,
+  KycCaseStatus,
   LocationKind,
   OfferOwnership,
   OfferStatus,
   OrganizationKind,
+  PartnerStatus,
   Prisma,
 } from '@prisma/client';
 import { uuidv7 } from '@world-pharma/shared';
@@ -20,9 +22,12 @@ import { assertImagingOrgAccess } from '../catalog/access';
 import { PolicyResolver } from '../policy/resolver';
 import { ConversionEventService } from '../crm/conversion-event.service';
 import { workerTenantContext } from '../tenancy/build-tenant-context';
+import { HealthSubjectService } from '../health/health-subject.service';
+import { HealthcarePartnerReadinessService } from '../healthcare/healthcare-partner-readiness.service';
 import { RadiologyCapabilityService } from './radiology-capability.service';
 import { ImagingStudyService } from './imaging-study.service';
 import { InterpretationService } from './interpretation.service';
+import { evaluateImagingPartnerClinicalEligibility } from './imaging-pacs-dicom-production-workflow-closure';
 
 function minorJson(value: bigint): string {
   return value.toString();
@@ -40,6 +45,7 @@ type CreateBookingInput = {
   idempotencyKey: string;
   prepAcknowledged?: boolean;
   referralReference?: string;
+  familyMemberId?: string | null;
 };
 
 type EligibilityInput = {
@@ -60,6 +66,8 @@ export class ImagingBookingService {
     private readonly studies: ImagingStudyService,
     private readonly interpretation: InterpretationService,
     private readonly conversionEvents: ConversionEventService,
+    private readonly healthSubjects: HealthSubjectService,
+    private readonly healthcareReadiness: HealthcarePartnerReadinessService,
   ) {}
 
   async browseCatalog(countryCode: string, query?: { q?: string; cursor?: string; limit?: number }) {
@@ -241,10 +249,41 @@ export class ImagingBookingService {
     }
 
     const country = await this.resolveCountry(input.countryCode);
+    const subject = await this.healthSubjects.resolve(principal, country.isoAlpha2, input.familyMemberId);
     const qty = Math.max(1, Math.min(input.qty ?? 1, 10));
     const elig = await this.capabilities.evaluate(input.imagingOrgId);
     if (elig.state !== 'ELIGIBLE' || !elig.booking_enabled) {
       throw Errors.serviceDisabled(elig.blocked_reason ?? 'Imaging booking is not available for this center.');
+    }
+    await this.healthcareReadiness.assertBookingAllowed({
+      kind: 'IMAGING_CENTER',
+      countryCode: country.isoAlpha2,
+      organizationId: input.imagingOrgId,
+    });
+    const partner = await this.prisma.partner.findFirst({
+      where: { organizationId: input.imagingOrgId },
+      select: { id: true, status: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const kyc = partner
+      ? await this.prisma.kycCase.findFirst({
+          where: { partnerId: partner.id },
+          orderBy: { createdAt: 'desc' },
+          select: { status: true, expiresAt: true },
+        })
+      : null;
+    const partnerGate = evaluateImagingPartnerClinicalEligibility({
+      partnerStatus: (partner?.status as PartnerStatus | undefined) ?? null,
+      kycStatus: (kyc?.status as KycCaseStatus | undefined) ?? null,
+      kycExpiresAt: kyc?.expiresAt ?? null,
+    });
+    if (!partnerGate.allowed) {
+      throw Errors.problem(
+        403,
+        partnerGate.blocker ?? 'PARTNER_NOT_ACTIVE',
+        'Imaging booking blocked',
+        partnerGate.detail,
+      );
     }
     if (elig.country_code && elig.country_code !== country.isoAlpha2) {
       throw Errors.forbidden('Imaging organization is not in the selected country.');
@@ -346,6 +385,7 @@ export class ImagingBookingService {
           referralReference: referralRef,
           idempotencyKey: input.idempotencyKey.trim(),
           sandbox: true,
+          subjectFamilyMemberId: subject.familyMemberId,
           lines: {
             create: [
               {
@@ -424,7 +464,13 @@ export class ImagingBookingService {
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
-    return { data: await Promise.all(rows.map((row) => this.presentCustomer(row))) };
+    // Sequential present: nested worker runWithTenant uses SAVEPOINTs on the request
+    // transaction; concurrent Promise.all raced PostgreSQL savepoint stacks (S154).
+    const data = [];
+    for (const row of rows) {
+      data.push(await this.presentCustomer(row));
+    }
+    return { data };
   }
 
   async getCustomerBooking(principal: Principal, id: string) {
@@ -866,6 +912,7 @@ export class ImagingBookingService {
       status: booking.status,
       country_code: booking.country.isoAlpha2,
       customer_person_id: booking.customerPersonId,
+      subject_family_member_id: booking.subjectFamilyMemberId ?? null,
       imaging_org_id: booking.imagingOrgId,
       imaging_display_name: imagingDisplayName,
       imaging_location: imagingLocation

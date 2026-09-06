@@ -9,23 +9,21 @@ import {
   EmptyState,
   FormField,
   LoadingState,
-  NetworkErrorState,
-  PermissionDeniedState,
-  SessionExpiredState,
   Text,
 } from '@world-pharma/ui-kit/web';
 import { fetchDoctorHealthPatients, type DoctorHealthPatient } from './health-api';
+import { DoctorLoadFailure, mapDoctorApiFailure, type DoctorLoadError } from './doctor-load-state';
 import { shortPatientId } from './health-utils';
 
 const DEFAULT_COUNTRY = 'XX';
 
 export function DoctorPatientPickerPanel() {
-  const { session, getAccessToken, signOut, expire } = useSession();
+  const { session, getAccessToken, expire } = useSession();
   const [patients, setPatients] = useState<DoctorHealthPatient[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<'network' | 'forbidden' | null>(null);
+  const [error, setError] = useState<DoctorLoadError | null>(null);
 
   const onUnauthorized = useCallback(() => expire(), [expire]);
 
@@ -40,10 +38,9 @@ export function DoctorPatientPickerPanel() {
     const result = await fetchDoctorHealthPatients({ token, onUnauthorized, countryCode });
     if (result.ok) {
       setPatients(result.data.patients ?? []);
-    } else if (result.kind === 'forbidden') {
-      setError('forbidden');
-    } else if (result.kind !== 'unauthorized') {
-      setError('network');
+    } else {
+      setError(mapDoctorApiFailure(result.kind));
+      setPatients([]);
     }
     setLoading(false);
   }, [countryCode, getAccessToken, onUnauthorized, session.status]);
@@ -53,19 +50,20 @@ export function DoctorPatientPickerPanel() {
   }, [load]);
 
   if (session.status === 'expired') {
-    return <SessionExpiredState action={{ label: 'Sign in again', onClick: () => signOut() }} />;
+    return (
+      <DoctorLoadFailure
+        error="unauthorized"
+        onRetry={() => void load()}
+      />
+    );
   }
 
   if (loading) {
     return <LoadingState label="Loading patients" />;
   }
 
-  if (error === 'forbidden') {
-    return <PermissionDeniedState />;
-  }
-
-  if (error === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (error) {
+    return <DoctorLoadFailure error={error} onRetry={() => void load()} />;
   }
 
   return (

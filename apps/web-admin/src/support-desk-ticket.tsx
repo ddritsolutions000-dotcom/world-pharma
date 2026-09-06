@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { AdminViewLoadError } from './admin-request-error';
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { adminApiRoot, adminAuthHeaders, classifyAdminViewState } from './admin-http';
 import { useSession } from '@world-pharma/shell-web';
 import {
   Button,
@@ -12,7 +14,6 @@ import {
   Heading,
   Input,
   LoadingState,
-  NetworkErrorState,
   PermissionDeniedState,
   Select,
   Text,
@@ -31,17 +32,22 @@ import {
   type SupportQueue,
   type SupportTicketDetail,
 } from './support-desk-api';
+import { supportTicketStatusLabel } from './support-ticket-status-labels';
+import { listCrmCustomers } from './crm-api';
+import { presentPartnerPeople, type PersonPickRow } from './eligibility-admin-present';
+import { workingCountry } from './working-country';
 
-type ViewState = 'loading' | 'idle' | 'forbidden' | 'not_found' | 'network';
+type ViewState = 'loading' | 'idle' | 'forbidden' | 'not_found' | 'network' | 'error';
 
 export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
   const searchParams = useSearchParams();
   const { getAccessToken, session } = useSession();
-  const countryCode = searchParams.get('country') ?? 'XX';
+  const countryCode = workingCountry(searchParams.get('country') ?? session.countryCode);
   const [ticket, setTicket] = useState<SupportTicketDetail | null>(null);
   const [queues, setQueues] = useState<SupportQueue[]>([]);
   const [viewState, setViewState] = useState<ViewState>('loading');
   const [assigneeId, setAssigneeId] = useState('');
+  const [people, setPeople] = useState<PersonPickRow[]>([]);
   const [nextStatus, setNextStatus] = useState('');
   const [escalateQueueId, setEscalateQueueId] = useState('');
   const [messageBody, setMessageBody] = useState('');
@@ -66,7 +72,39 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
       ]);
       setTicket(detail);
       setQueues(queueBody.data ?? []);
-      setAssigneeId(detail.assignee_person_id ?? '');
+      const nextPeople: PersonPickRow[] = [];
+      if (detail.person_id) {
+        nextPeople.push({ id: detail.person_id, label: 'Ticket customer' });
+      }
+      if (detail.assignee_person_id) {
+        nextPeople.push({ id: detail.assignee_person_id, label: 'Current assignee' });
+      }
+      try {
+        const crm = await listCrmCustomers(token, { country_code: countryCode });
+        for (const row of crm.data ?? []) {
+          nextPeople.push({
+            id: row.person_id,
+            label: row.identifiers[0]?.masked_value ?? `${row.person_id.slice(0, 8)}…`,
+          });
+        }
+      } catch {
+        /* optional */
+      }
+      const partnerRes = await fetch(
+        `${adminApiRoot()}/api/v1/admin/partners/applications`,
+        { headers: adminAuthHeaders(token) },
+      );
+      if (partnerRes.ok) {
+        nextPeople.push(...presentPartnerPeople(await partnerRes.json()));
+      }
+      const unique: PersonPickRow[] = [];
+      for (const row of nextPeople) {
+        if (row.id && !unique.some((item) => item.id === row.id)) {
+          unique.push(row);
+        }
+      }
+      setPeople(unique);
+      setAssigneeId(detail.assignee_person_id || unique[0]?.id || '');
       const next = allowedNextStatuses(detail.status);
       setNextStatus(next[0] ?? '');
       setViewState('idle');
@@ -81,7 +119,7 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
           return;
         }
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [countryCode, getAccessToken, ticketId]);
 
@@ -141,8 +179,8 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
       </div>
     );
   }
-  if (viewState === 'network' && !ticket) {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if ((viewState === 'network' || viewState === 'error') && !ticket) {
+    return <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />;
   }
   if (!ticket) {
     return null;
@@ -153,41 +191,43 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
 
   return (
     <div className="wp-stack">
-      <Heading level={1}>{ticket.subject}</Heading>
-      <Link href={`/support?country=${countryCode}`}>
-        <Button variant="secondary">Back to queue</Button>
-      </Link>
+      <header className="wp-page-header">
+        <Heading level={1}>{ticket.subject}</Heading>
+        <p className="wp-page-intro">
+          Queue {ticket.queue_name} ({ticket.queue_code}) · Customer {ticket.person_id.slice(0, 8)}…
+        </p>
+      </header>
+      <div className="wp-toolbar">
+        <Link href={`/support?country=${countryCode}`}>
+          <Button variant="secondary">Back to queue</Button>
+        </Link>
+      </div>
 
       <Card>
         <div className="wp-stack">
-          <Text tone="secondary">
-            Status: <strong>{ticket.status}</strong> · Queue: {ticket.queue_name} ({ticket.queue_code})
-          </Text>
-          <Text tone="secondary">Customer person: {ticket.person_id.slice(0, 8)}…</Text>
+          <span className="wp-status">{supportTicketStatusLabel(ticket.status)}</span>
           {ticket.reference_type ? (
-            <Text tone="secondary">
+            <p className="wp-text-muted">
               Reference: {ticket.reference_type} {ticket.reference_id}
-            </Text>
+            </p>
           ) : (
-            <Text tone="secondary">No structured reference</Text>
+            <p className="wp-text-muted">No structured reference</p>
           )}
           {ticket.assignee_person_id ? (
-            <Text tone="secondary">Assignee: {ticket.assignee_person_id}</Text>
+            <p className="wp-text-muted">Assignee: {ticket.assignee_person_id.slice(0, 8)}…</p>
           ) : (
-            <Text tone="secondary">Unassigned</Text>
+            <p className="wp-text-muted">Unassigned</p>
           )}
-          <Text tone="secondary">
+          <p className="wp-text-muted">
             Created {new Date(ticket.created_at).toLocaleString()} · Updated{' '}
             {new Date(ticket.updated_at).toLocaleString()}
-          </Text>
-          {closed ? (
-            <Text tone="secondary">This ticket is closed and cannot be modified.</Text>
-          ) : null}
+          </p>
+          {closed ? <p className="wp-text-muted">This ticket is closed and cannot be modified.</p> : null}
         </div>
       </Card>
 
       <Card>
-        <Heading level={2}>Messages</Heading>
+        <h2 className="wp-section-title">Messages</h2>
         {ticket.messages.length === 0 ? (
           <EmptyState title="No messages" description="Customer or agent messages will appear here." />
         ) : (
@@ -212,12 +252,22 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
       ) : (
         <>
           <Card>
-            <Heading level={2}>Assign</Heading>
+            <h2 className="wp-section-title">Assign</h2>
             <div className="wp-stack">
-              <FormField label="Assignee person ID">
-                {({ id }) => (
-                  <Input id={id} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} />
-                )}
+              <FormField label="Assignee">
+                {({ id }) =>
+                  people.length ? (
+                    <Select id={id} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}>
+                      {people.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.label}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input id={id} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} />
+                  )
+                }
               </FormField>
               <Button
                 disabled={busy || !assigneeId.trim()}
@@ -240,7 +290,7 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
           </Card>
 
           <Card>
-            <Heading level={2}>Status</Heading>
+            <h2 className="wp-section-title">Status</h2>
             <div className="wp-stack">
               <FormField label="Next status">
                 {({ id }) => (
@@ -274,7 +324,7 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
           </Card>
 
           <Card>
-            <Heading level={2}>Escalate queue</Heading>
+            <h2 className="wp-section-title">Escalate queue</h2>
             <div className="wp-stack">
               <FormField label="Target queue">
                 {({ id }) => (
@@ -309,7 +359,7 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
           </Card>
 
           <Card>
-            <Heading level={2}>Reply / note</Heading>
+            <h2 className="wp-section-title">Reply / note</h2>
             <div className="wp-stack">
               <FormField label="Visibility">
                 {({ id }) => (
@@ -356,8 +406,8 @@ export function SupportDeskTicket({ ticketId }: { ticketId: string }) {
         </>
       )}
 
-      {actionError ? <Text tone="secondary">{actionError}</Text> : null}
-      {actionMessage ? <Text tone="secondary">{actionMessage}</Text> : null}
+      {actionError ? <p className="wp-text-muted">{actionError}</p> : null}
+      {actionMessage ? <p className="wp-text-muted">{actionMessage}</p> : null}
     </div>
   );
 }

@@ -24,6 +24,7 @@ export class HealthConsultProjectionService {
       countryCode: string;
       publishedAt: Date;
       title?: string;
+      subjectFamilyMemberId?: string | null;
     },
   ) {
     const resolved = await this.policy.resolvePublished(input.countryCode);
@@ -38,6 +39,7 @@ export class HealthConsultProjectionService {
       return existing;
     }
 
+    const subjectFamilyMemberId = input.subjectFamilyMemberId ?? null;
     const artifactId = uuidv7();
     const title = input.title?.trim() || 'Consultation summary';
     const artifact = await tx.healthArtifact.create({
@@ -51,6 +53,7 @@ export class HealthConsultProjectionService {
         publishedAt: input.publishedAt,
         sandbox: true,
         status: HealthArtifactStatus.ACTIVE,
+        subjectFamilyMemberId,
       },
     });
 
@@ -63,6 +66,7 @@ export class HealthConsultProjectionService {
       title,
       occurredAt: input.publishedAt,
       sandbox: true,
+      subjectFamilyMemberId,
     });
 
     return artifact;

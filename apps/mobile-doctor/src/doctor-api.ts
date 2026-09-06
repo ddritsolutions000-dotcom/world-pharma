@@ -119,8 +119,37 @@ export function appointmentAction(
   token: string,
   appointmentId: string,
   action: 'check-in' | 'start' | 'complete' | 'confirm',
+  body?: Record<string, unknown>,
 ) {
-  return call(`api/v1/doctor/appointments/${appointmentId}/${action}`, token, { method: 'POST' });
+  return call(`api/v1/doctor/appointments/${appointmentId}/${action}`, token, {
+    method: 'POST',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+export function cancelAppointment(token: string, appointmentId: string, reasonCode = 'doctor_cancelled') {
+  return call(`api/v1/doctor/appointments/${appointmentId}/cancel`, token, {
+    method: 'POST',
+    body: JSON.stringify({ reason_code: reasonCode }),
+  });
+}
+
+export function markAppointmentNoShow(token: string, appointmentId: string) {
+  return call(`api/v1/doctor/appointments/${appointmentId}/no-show`, token, { method: 'POST' });
+}
+
+export type DoctorEarningsSummary = {
+  sandbox: true;
+  completed_consult_count: number;
+  doctor_payable_minor: string;
+  gross_minor: string;
+  currency: string;
+  settlement_status: string;
+  message: string;
+};
+
+export function fetchEarningsSummary(token: string) {
+  return call<DoctorEarningsSummary>('api/v1/doctor/earnings/summary', token);
 }
 
 export function fetchCredentials(token: string) {
@@ -157,6 +186,44 @@ export function fetchNotificationPreferences(token: string) {
     push_enabled?: boolean;
     appointment_updates?: boolean;
   }>('api/v1/me/notifications/preferences', token);
+}
+
+export type DoctorInboxItem = {
+  id: string;
+  title: string;
+  body: string;
+  read: boolean;
+  created_at: string;
+  reference_type?: string;
+  reference_id?: string;
+};
+
+export function fetchDoctorInbox(token: string) {
+  return call<{ data: DoctorInboxItem[] }>('api/v1/me/notifications/inbox', token);
+}
+
+export function markDoctorInboxRead(token: string, id: string) {
+  return call(`api/v1/me/notifications/inbox/${id}/read`, token, { method: 'POST' });
+}
+
+export type DoctorSupportTicket = {
+  id: string;
+  subject: string;
+  body: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function fetchDoctorSupportTickets(token: string) {
+  return call<{ data: DoctorSupportTicket[] }>('api/v1/support/tickets', token);
+}
+
+export function createDoctorSupportTicket(token: string, input: { subject: string; body: string }) {
+  return call<DoctorSupportTicket>('api/v1/support/tickets', token, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 export type PrescriptionLineInput = {

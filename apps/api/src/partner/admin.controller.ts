@@ -1,5 +1,6 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { InvitationKind, OrganizationKind, PartnerApplicationSource, PartnerStatus } from '@prisma/client';
+import type { Response } from 'express';
 import { Errors } from '../common/problem';
 import { CurrentPrincipal, type Principal } from '../identity/current-principal';
 import { JwtAuthGuard } from '../identity/jwt.guard';
@@ -11,6 +12,7 @@ import { InvitationService } from './invitation.service';
 import { KycService } from './kyc.service';
 import { OrganizationService } from './organization.service';
 import { PartnerService } from './partner.service';
+import { VendorActivationReadinessService } from './vendor-activation-readiness.service';
 
 @Controller('admin/partners')
 @UseGuards(JwtAuthGuard, AudienceGuard, PermissionsGuard)
@@ -21,6 +23,7 @@ export class PartnerAdminController {
     private readonly kyc: KycService,
     private readonly orgs: OrganizationService,
     private readonly invitations: InvitationService,
+    private readonly readiness: VendorActivationReadinessService,
   ) {}
 
   @Post('applications')
@@ -52,7 +55,7 @@ export class PartnerAdminController {
   @RequirePermissions('partner:manage')
   transition(
     @Param('id') id: string,
-    @Body() body: { to?: PartnerStatus; reason?: string },
+    @Body() body: { to?: PartnerStatus; reason?: string; requested_fields?: string[] },
     @CurrentPrincipal() principal: Principal,
   ) {
     if (!body.to || !body.reason) {
@@ -63,6 +66,7 @@ export class PartnerAdminController {
       to: body.to,
       actorId: principal.personId,
       reason: body.reason,
+      requested_fields: body.requested_fields,
     });
   }
 
@@ -134,18 +138,34 @@ export class PartnerAdminController {
     @Param('id') id: string,
     @CurrentPrincipal() principal: Principal,
   ) {
-    const result = await this.kyc.readDocument({
+    return this.kyc.issueDocumentAccessTicket({
       documentId: id,
       actorId: principal.personId,
-      permission: 'view',
     });
-    return {
-      content_type: result.contentType,
-      original_name: result.originalName,
-      byte_size: result.bytes.length,
-      content_base64: result.bytes.toString('base64'),
-      watermark: 'CONFIDENTIAL — VIEW AUDITED',
-    };
+  }
+
+  @Get('documents/:id/content')
+  @RequirePermissions('kyc:document_read')
+  async streamDocument(
+    @Param('id') id: string,
+    @Query('ticket') ticket: string | undefined,
+    @CurrentPrincipal() principal: Principal,
+    @Res() res: Response,
+  ) {
+    if (!ticket?.trim()) {
+      throw Errors.validation('ticket query parameter is required.');
+    }
+    const result = await this.kyc.readDocumentWithTicket({
+      documentId: id,
+      ticket: ticket.trim(),
+      actorId: principal.personId,
+    });
+    const safeName = (result.originalName || 'document').replace(/"/g, '');
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.status(200).send(result.bytes);
   }
 
   @Post('documents/:id/review')
@@ -185,6 +205,22 @@ export class PartnerAdminController {
     return this.partners.getApplicationForReview(id);
   }
 
+  @Get('applications/:id/onboarding')
+  @RequirePermissions('partner:manage')
+  onboarding(@Param('id') id: string) {
+    return this.readiness.evaluateByApplicationId(id);
+  }
+
+  @Post('applications/:id/provision-org')
+  @HttpCode(200)
+  @RequirePermissions('partner:manage')
+  provisionOrg(@Param('id') id: string, @CurrentPrincipal() principal: Principal) {
+    return this.partners.provisionOrganizationFromApplication({
+      applicationId: id,
+      actorId: principal.personId,
+    });
+  }
+
   @Post('applications/:id/activate')
   @HttpCode(200)
   @RequirePermissions('partner:manage')
@@ -198,9 +234,6 @@ export class PartnerAdminController {
     },
     @CurrentPrincipal() principal: Principal,
   ) {
-    if (!body.organization_id) {
-      throw Errors.validation('organization_id is required');
-    }
     return this.partners.activateApplication({
       applicationId: id,
       organizationId: body.organization_id,

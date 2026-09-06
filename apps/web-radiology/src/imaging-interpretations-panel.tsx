@@ -44,8 +44,8 @@ export function ImagingInterpretationsPanel({
     <Card>
       <Heading level={2}>Interpretation queue (ops)</Heading>
       <Text tone="secondary">
-        Operational metadata only — no clinical findings. Radiologists use the dedicated radiologist app. Customer
-        publication remains OFF (R8-E).
+        Operational metadata for radiologist worklist routing. Radiologists use the radiologist portal (port 3007).
+        Customer report publication follows R8-E after verify/sign-off — still no image viewer or DICOM download.
       </Text>
       <Button size="sm" variant="secondary" disabled={loading} onClick={() => void load()}>
         Refresh

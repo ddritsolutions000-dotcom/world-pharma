@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../identity/jwt.guard';
 import { AudienceGuard } from '../identity/audience.guard';
 import { RequireAudiences } from '../identity/require-audiences';
 import { ImagingStudyService } from './imaging-study.service';
+import { ImagingIngestService } from './imaging-ingest.service';
 import { InterpretationService } from './interpretation.service';
 
 const checkInSchema = z.object({
@@ -37,6 +38,7 @@ export class RadiologyStudiesController {
   constructor(
     private readonly studies: ImagingStudyService,
     private readonly interpretation: InterpretationService,
+    private readonly ingest: ImagingIngestService,
   ) {}
 
   @Get('interpretations')
@@ -123,5 +125,18 @@ export class RadiologyStudiesController {
     return this.studies.failAcquisition(principal, parsed.data.imaging_org_id, id, {
       failure_code: parsed.data.failure_code,
     });
+  }
+
+  @Get('studies/:studyId/instances/:sopInstanceUid')
+  getInstance(
+    @CurrentPrincipal() principal: Principal,
+    @Param('studyId') studyId: string,
+    @Param('sopInstanceUid') sopInstanceUid: string,
+    @Query('imaging_org_id') imagingOrgId: string,
+  ) {
+    if (!imagingOrgId) {
+      throw Errors.validation('imaging_org_id is required');
+    }
+    return this.ingest.getAuthorizedInstanceObject(principal, imagingOrgId, studyId, sopInstanceUid);
   }
 }

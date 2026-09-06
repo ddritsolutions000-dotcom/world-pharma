@@ -10,6 +10,18 @@ declare module 'react' {
 
 declare module 'react/jsx-runtime';
 
+declare module 'expo' {
+  export function registerRootComponent(component: unknown): void;
+}
+
+declare module 'expo-constants' {
+  const Constants: {
+    expoConfig?: { hostUri?: string | null } | null;
+    linkingUri?: string | null;
+  };
+  export default Constants;
+}
+
 declare module 'expo-document-picker' {
   export function getDocumentAsync(options?: {
     type?: string | string[];

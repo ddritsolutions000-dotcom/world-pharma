@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { AdminViewLoadError } from './admin-request-error';
+import { classifyAdminViewState } from './admin-http';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useSession } from '@world-pharma/shell-web';
@@ -10,17 +12,18 @@ import {
   EmptyState,
   Heading,
   LoadingState,
-  NetworkErrorState,
+
   PermissionDeniedState,
   Text,
 } from '@world-pharma/ui-kit/web';
 import { getMarketingSegment, MarketingApiError, type MarketingSegment } from './marketing-api';
+import { workingCountry } from './working-country';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'not_found';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error' | 'not_found';
 
 export function MarketingSegmentDetail({ segmentId }: { segmentId: string }) {
   const searchParams = useSearchParams();
-  const countryCode = searchParams.get('country') ?? 'XX';
+  const countryCode = workingCountry(searchParams.get('country'));
   const { getAccessToken } = useSession();
   const [data, setData] = useState<MarketingSegment | null>(null);
   const [viewState, setViewState] = useState<ViewState>('loading');
@@ -44,7 +47,7 @@ export function MarketingSegmentDetail({ segmentId }: { segmentId: string }) {
         setViewState('not_found');
         return;
       }
-      setViewState('network');
+      setViewState(classifyAdminViewState(err));
     }
   }, [countryCode, getAccessToken, segmentId]);
 
@@ -61,8 +64,8 @@ export function MarketingSegmentDetail({ segmentId }: { segmentId: string }) {
   if (viewState === 'not_found') {
     return <EmptyState title="Segment not found" description="Check country code and segment id." />;
   }
-  if (viewState === 'network') {
-    return <NetworkErrorState action={{ label: 'Retry', onClick: () => void load() }} />;
+  if (viewState === 'network' || viewState === 'error') {
+    return <AdminViewLoadError viewState={viewState} onRetry={() => void load()} />;
   }
   if (!data) {
     return null;
@@ -79,7 +82,28 @@ export function MarketingSegmentDetail({ segmentId }: { segmentId: string }) {
       </Link>
       <Card>
         <Heading level={2}>Rules (non-clinical v1)</Heading>
-        <pre>{JSON.stringify(data.rules, null, 2)}</pre>
+        {data.rules && typeof data.rules === 'object' && !Array.isArray(data.rules) ? (
+          <div className="wp-admin-table-wrap">
+            <table className="wp-table">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(data.rules as Record<string, unknown>).map(([key, value]) => (
+                  <tr key={key}>
+                    <td>{key.replaceAll('_', ' ')}</td>
+                    <td>{typeof value === 'object' ? JSON.stringify(value) : String(value ?? '—')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Text tone="secondary">No rule rows on this segment.</Text>
+        )}
       </Card>
     </div>
   );

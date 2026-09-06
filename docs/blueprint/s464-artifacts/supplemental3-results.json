@@ -1,0 +1,123 @@
+[
+  {
+    "page": "product",
+    "shot": "s464-artifacts/screenshots/supp3__product_demo_paracetamol__desktop.png",
+    "text": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India (IN) United States (US) All Medicines Lab tests Doctors Need Help Inbox 9+ My account Orders Sign out Cart 24 Shop ▾ Healthcare ▾ Wellness ▾ Help Track order Account Home › Product › Demo Paracetamol 500 Continue shopping Demo Brand Paracetamol 500mg Tablets S60 ₹89 MRP ₹120 26% off Pack: 15 tablets 2 pharmacies sell this pack — compare price and stock before adding to cart PHARMACY PRICE STOCK Demo Pharmacy Store · selected ₹89 26% off Only 2 left Demo Care Pharmacy ₹94 23% off In stock Selected as the lowest pri",
+    "overflow": false
+  },
+  {
+    "page": "cart",
+    "shot": "s464-artifacts/screenshots/supp3__cart_with_item__desktop.png",
+    "text": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India (IN) United States (US) All Medicines Lab tests Doctors Need Help Inbox 9+ My account Orders Sign out Cart 24 Shop ▾ Healthcare ▾ Wellness ▾ Help Track order Account Home › Cart My Cart 24 items Fulfilled by Demo Pharma"
+  },
+  {
+    "page": "lab_detail",
+    "shot": "s464-artifacts/screenshots/supp3__lab_detail__desktop.png",
+    "text": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India (IN) United States (US) All Medicines Lab tests Doctors Need Help Inbox 9+ My account Orders Sign out Cart 24 Shop ▾ Healthcare ▾ Wellness ▾ Help Track order Account Home › Lab Tests › Demo Lipid Panel ← All lab tests L"
+  },
+  {
+    "page": "imaging_detail",
+    "shot": "s464-artifacts/screenshots/supp3__imaging_detail__desktop.png",
+    "text": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India (IN) United States (US) All Medicines Lab tests Doctors Need Help Inbox 9+ My account Orders Sign out Cart 24 Shop ▾ Healthcare ▾ Wellness ▾ Help Track order Account Home › X-Rays & Scans › Demo Chest Xray ← All imaging"
+  },
+  {
+    "page": "doctor_profile",
+    "shot": "s464-artifacts/screenshots/supp3__doctor_profile__desktop.png",
+    "text": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India (IN) United States (US) All Medicines Lab tests Doctors Need Help Inbox 9+ My account Orders Sign out Cart 24 Shop ▾ Healthcare ▾ Wellness ▾ Help Track order Account Home › Doctors › Details ← All doctors Dr. Demo Physi"
+  },
+  {
+    "page": "product_mobile",
+    "shot": "s464-artifacts/screenshots/supp3__product_demo_paracetamol__mobile.png",
+    "overflow": false,
+    "text": "🎉 Free delivery on eligible orders worldwide Care Plan Ask a pharmacist Offers Download App Order with Prescription + WorldPharma Enter postal code United Arab Emirates (AE) India (IN) United States (US) All Medicines Lab tests Doctors Need Help Inbox 9+ My account Orders Sign out 24 Menu Home › Pr"
+  },
+  {
+    "app": "affiliate",
+    "error": "locator.waitFor: Timeout 20000ms exceeded.\nCall log:\n  - waiting for getByLabel(/^Email$/i).or(getByLabel(/Work email|Email/i)).first() to be visible\n",
+    "shot": "s464-artifacts/screenshots/supp3_aff_fail.png"
+  },
+  {
+    "app": "vendor",
+    "t": "home",
+    "shot": "s464-artifacts/screenshots/supp3_vendor_home__desktop.png",
+    "sample": "Seller workspace Select organization 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care Pharmacy · IN Demo Pharmacy Store · AE Demo Pharmacy Store ·",
+    "overflow": false
+  },
+  {
+    "app": "vendor",
+    "t": "orders",
+    "shot": "s464-artifacts/screenshots/supp3_vendor_orders__desktop.png",
+    "sample": "Seller workspace Select organization 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care Pharmacy · IN Demo Pharmacy Store · AE Demo Pharmacy Store ·",
+    "overflow": false
+  },
+  {
+    "app": "vendor",
+    "t": "catalog",
+    "shot": "s464-artifacts/screenshots/supp3_vendor_catalog__desktop.png",
+    "sample": "Seller workspace Select organization 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care Pharmacy · IN Demo Pharmacy Store · AE Demo Pharmacy Store ·",
+    "overflow": false
+  },
+  {
+    "app": "vendor",
+    "t": "inventory",
+    "shot": "s464-artifacts/screenshots/supp3_vendor_inventory__desktop.png",
+    "sample": "Seller workspace Select organization 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care Pharmacy · IN Demo Pharmacy Store · AE Demo Pharmacy Store ·",
+    "overflow": false
+  },
+  {
+    "app": "vendor",
+    "t": "orders_mobile",
+    "shot": "s464-artifacts/screenshots/supp3_vendor_orders__mobile.png",
+    "overflow": false,
+    "sample": "☰ Seller workspace Select organization 🔔 8 Home Join Sign out WP World Pharma Seller Centre SELLING AS Select organization Demo Care Pharmacy · US Demo Care Pharmacy · AE Demo Care Pharmacy · IN Demo Pharmacy Store · AE Demo Pharmacy Store"
+  },
+  {
+    "app": "admin",
+    "r": "/orders",
+    "shot": "s464-artifacts/screenshots/supp3_admin__orders__desktop.png",
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics "
+  },
+  {
+    "app": "admin",
+    "r": "/catalog",
+    "shot": "s464-artifacts/screenshots/supp3_admin__catalog__desktop.png",
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics "
+  },
+  {
+    "app": "admin",
+    "r": "/payments",
+    "shot": "s464-artifacts/screenshots/supp3_admin__payments__desktop.png",
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics "
+  },
+  {
+    "app": "admin",
+    "r": "/countries",
+    "shot": "s464-artifacts/screenshots/supp3_admin__countries__desktop.png",
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics "
+  },
+  {
+    "app": "admin",
+    "r": "/provider-activation",
+    "shot": "s464-artifacts/screenshots/supp3_admin__provider_activation__desktop.png",
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics "
+  },
+  {
+    "app": "admin",
+    "r": "/launch-readiness",
+    "shot": "s464-artifacts/screenshots/supp3_admin__launch_readiness__desktop.png",
+    "sample": ""
+  },
+  {
+    "app": "admin",
+    "r": "/cms",
+    "shot": "s464-artifacts/screenshots/supp3_admin__cms__desktop.png",
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Dashboard Orders Partners Catalog Finance CMS CRM Support Inbox (1) Security Audit Storefront ↗ Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics "
+  },
+  {
+    "app": "admin",
+    "r": "mobile_home",
+    "shot": "s464-artifacts/screenshots/supp3_admin_home__mobile.png",
+    "overflow": false,
+    "sample": "Skip to content World Pharma Main Admin · Select country · sandbox Search ⌘K Account Sign out MODULES OVERVIEW – Dashboard Approvals Countries Storefront Analytics COMMERCE – Orders Catalog Inventory Marketplace Search index Substitutes Promo Loyalty Reviews C"
+  }
+]

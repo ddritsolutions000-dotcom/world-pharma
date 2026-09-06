@@ -25,6 +25,9 @@ export type CustomerAddress = {
   postal_code?: string | null;
   isDefault?: boolean;
   is_default?: boolean;
+  /** ISO alpha-2 from address list (preferred for checkout market matching). */
+  country_code?: string;
+  countryCode?: string;
 };
 
 export type NotificationPreferences = {
@@ -137,6 +140,49 @@ export function deleteAddress(
     onUnauthorized,
     method: 'DELETE',
   });
+}
+
+export type InboxItem = {
+  id: string;
+  channel: string;
+  title: string;
+  body: string;
+  read: boolean;
+  created_at: string;
+  reference_type?: string;
+  reference_id?: string;
+};
+
+export function fetchNotificationInbox(
+  opts: TokenOpts,
+): Promise<ApiCallResult<{ data: InboxItem[] }>> {
+  return call<{ data: InboxItem[] }>('api/v1/me/notifications/inbox', opts);
+}
+
+export function markNotificationRead(
+  opts: TokenOpts & { id: string },
+): Promise<ApiCallResult<{ data: InboxItem[] }>> {
+  return call<{ data: InboxItem[] }>(`api/v1/me/notifications/inbox/${opts.id}/read`, {
+    token: opts.token,
+    onUnauthorized: opts.onUnauthorized,
+    method: 'POST',
+  });
+}
+
+export function markAllNotificationsRead(
+  opts: TokenOpts,
+): Promise<ApiCallResult<{ data: InboxItem[] }>> {
+  return call<{ data: InboxItem[] }>('api/v1/me/notifications/inbox/read-all', {
+    token: opts.token,
+    onUnauthorized: opts.onUnauthorized,
+    method: 'POST',
+  });
+}
+
+export function fetchNotificationUnreadCount(
+  opts: TokenOpts,
+): Promise<ApiCallResult<{ count: number }>> {
+  return call<{ count: number }>('api/v1/me/notifications/unread-count', opts);
 }
 
 export function fetchNotificationPreferences(

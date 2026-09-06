@@ -5,6 +5,7 @@ export type CareDoctor = {
   partner_id?: string;
   display_name: string;
   specialties?: string[];
+  online_capable?: boolean;
 };
 
 export type AppointmentRow = {
@@ -40,6 +41,12 @@ function call<T>(
   });
 }
 
+export function fetchPublicCareDoctors(country: string) {
+  return apiCall<{ doctors: CareDoctor[] }>(
+    `api/v1/public/care/doctors?country_code=${encodeURIComponent(country)}`,
+  );
+}
+
 export function fetchCareDoctors(opts: TokenOpts & { country: string }) {
   return call<{ doctors: CareDoctor[] }>(
     `api/v1/care/doctors?country_code=${encodeURIComponent(opts.country)}`,
@@ -53,6 +60,24 @@ export function fetchDoctorSlots(
   const { profileId, country, from, to, ...rest } = opts;
   return call<{ slots: DoctorSlot[] }>(
     `api/v1/care/doctors/${profileId}/slots?country_code=${encodeURIComponent(country)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    rest,
+  );
+}
+
+export type DoctorPublicProfile = {
+  profile_id: string;
+  display_name: string;
+  specialties?: string[];
+  languages?: string[];
+  timezone?: string;
+  online_capable?: boolean;
+  bio?: string | null;
+};
+
+export function fetchDoctorProfile(opts: TokenOpts & { profileId: string; country: string }) {
+  const { profileId, country, ...rest } = opts;
+  return call<DoctorPublicProfile>(
+    `api/v1/care/doctors/${profileId}?country_code=${encodeURIComponent(country)}`,
     rest,
   );
 }
@@ -192,6 +217,13 @@ export type RxSubscriptionView = {
   message?: string;
 };
 
+export type RxSubscriptionListItem = RxSubscriptionView & {
+  prescription_id: string;
+  prescription_status: string;
+  prescription_version_number: number | null;
+  medicine_label: string | null;
+};
+
 export type RefillEligibility = {
   eligible: boolean;
   reason: string;
@@ -283,4 +315,35 @@ export function cancelRefillRequest(opts: TokenOpts & { requestId: string; idemp
 export function fetchRxSubscription(opts: TokenOpts & { id: string }) {
   const { id, ...rest } = opts;
   return call<RxSubscriptionView>(`api/v1/customer/prescriptions/${id}/subscription`, rest);
+}
+
+export function fetchCustomerSubscriptions(opts: TokenOpts) {
+  return call<{ subscriptions: RxSubscriptionListItem[] }>('api/v1/customer/subscriptions', opts);
+}
+
+export function enableRxSubscription(opts: TokenOpts & { id: string }) {
+  const { id, ...rest } = opts;
+  return call<RxSubscriptionView>(`api/v1/customer/prescriptions/${id}/subscription/enable`, {
+    ...rest,
+    method: 'POST',
+    body: {},
+  });
+}
+
+export function pauseRxSubscription(opts: TokenOpts & { id: string }) {
+  const { id, ...rest } = opts;
+  return call<RxSubscriptionView>(`api/v1/customer/prescriptions/${id}/subscription/pause`, {
+    ...rest,
+    method: 'POST',
+    body: {},
+  });
+}
+
+export function cancelRxSubscription(opts: TokenOpts & { id: string }) {
+  const { id, ...rest } = opts;
+  return call<RxSubscriptionView>(`api/v1/customer/prescriptions/${id}/subscription/cancel`, {
+    ...rest,
+    method: 'POST',
+    body: {},
+  });
 }

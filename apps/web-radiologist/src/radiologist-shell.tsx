@@ -1,13 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useSession } from '@world-pharma/shell-web';
+import { clinicalReportStatusLabel } from '@world-pharma/shell-core';
+import { useSession, PortalWorkspaceShell, PartnerInboxPanel, PartnerSupportPanel, PortalKpiCards } from '@world-pharma/shell-web';
 import {
   Button,
   Card,
   EmptyState,
   FormField,
-  HeaderBar,
   Heading,
   Input,
   LoadingState,
@@ -21,8 +21,11 @@ import {
   assignRadiologistCase,
   amendRadiologistReport,
   fetchRadiologistCase,
+  fetchRadiologistMe,
   fetchRadiologistOrganizations,
   fetchRadiologistVerifyQueue,
+  fetchRadiologistViewerFrameBlob,
+  fetchRadiologistViewerSession,
   fetchRadiologistWorklist,
   publishRadiologistReport,
   saveRadiologistFindings,
@@ -32,13 +35,24 @@ import {
   type RadiologistCaseDetail,
   type RadiologistOrg,
 } from './radiologist-api';
+import {
+  ImagingDiagnosticViewerPanel,
+  type DiagnosticViewerSession,
+} from './imaging-diagnostic-viewer';
+import { canRadiologistVerify } from './radiologist-sod';
 
-type ViewState = 'idle' | 'loading' | 'forbidden' | 'network' | 'error';
-type Tab = 'worklist' | 'verify';
+type ViewState = 'idle' | 'loading' | 'forbidden' | 'membership' | 'network' | 'error';
+type Tab = 'worklist' | 'verify' | 'inbox' | 'support';
+
+const RADIOLOGIST_TAB_LABELS: Record<Tab, string> = {
+  worklist: 'Worklist',
+  verify: 'Verify queue',
+  inbox: 'Inbox',
+  support: 'Support',
+};
 
 export function RadiologistShell() {
-  const { session, signInWithOtp, signOut, expire, getAccessToken } = useSession();
-  const [email, setEmail] = useState('');
+  const { session, signOut, expire, getAccessToken } = useSession();
   const [organizations, setOrganizations] = useState<RadiologistOrg[]>([]);
   const [organizationId, setOrganizationId] = useState('');
   const [tab, setTab] = useState<Tab>('worklist');
@@ -49,6 +63,13 @@ export function RadiologistShell() {
   const [summary, setSummary] = useState('');
   const [findingText, setFindingText] = useState('');
   const [amendReason, setAmendReason] = useState('');
+  const [personId, setPersonId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerSession, setViewerSession] = useState<DiagnosticViewerSession | null>(null);
+  const [viewerLoadState, setViewerLoadState] = useState<
+    'idle' | 'loading' | 'ready' | 'empty' | 'error' | 'forbidden'
+  >('idle');
 
   const handleApiError = useCallback(
     (err: unknown) => {
@@ -57,7 +78,13 @@ export function RadiologistShell() {
           expire();
           return;
         }
+        if (err.status === 403 && err.code === 'MEMBERSHIP_REQUIRED') {
+          setErrorMessage(err.message);
+          setViewState('membership');
+          return;
+        }
         if (err.status === 403) {
+          setErrorMessage(err.message);
           setViewState('forbidden');
           return;
         }
@@ -79,8 +106,12 @@ export function RadiologistShell() {
     try {
       const body = await fetchRadiologistOrganizations(token);
       setOrganizations(body.data);
-      if (!organizationId && body.data[0]) {
-        setOrganizationId(body.data[0].id);
+      if (!organizationId && body.data.length) {
+        const preferred =
+          body.data.find((o) => o.country_code === 'IN') ??
+          body.data.find((o) => o.country_code === 'XX') ??
+          body.data[0];
+        setOrganizationId(preferred.id);
       }
       setViewState('idle');
     } catch (err) {
@@ -91,6 +122,11 @@ export function RadiologistShell() {
   const loadCases = useCallback(async () => {
     const token = getAccessToken();
     if (!token || !organizationId) {
+      return;
+    }
+    if (tab === 'inbox' || tab === 'support') {
+      setViewState('idle');
+      setCases([]);
       return;
     }
     setViewState('loading');
@@ -128,9 +164,15 @@ export function RadiologistShell() {
 
   useEffect(() => {
     if (session?.status === 'authenticated') {
+      const token = getAccessToken();
+      if (token) {
+        void fetchRadiologistMe(token)
+          .then((body) => setPersonId(body.person_id))
+          .catch(() => setPersonId(null));
+      }
       void loadScope();
     }
-  }, [session?.status, loadScope]);
+  }, [session?.status, loadScope, getAccessToken]);
 
   useEffect(() => {
     if (session?.status === 'authenticated' && organizationId) {
@@ -138,7 +180,8 @@ export function RadiologistShell() {
     }
   }, [session?.status, organizationId, tab, loadCases]);
 
-  const run = (fn: () => Promise<unknown>) => {
+  const run = (actionKey: string, fn: () => Promise<unknown>) => {
+    setBusy(actionKey);
     void fn()
       .then(async () => {
         await loadCases();
@@ -151,8 +194,13 @@ export function RadiologistShell() {
           }
         }
       })
-      .catch(handleApiError);
+      .catch(handleApiError)
+      .finally(() => setBusy(null));
   };
+
+  const canVerifySelected =
+    selected?.version?.status === 'PENDING_VERIFY' &&
+    canRadiologistVerify(selected.version.entered_by, personId);
 
   if (session?.status === 'expired') {
     return (
@@ -164,54 +212,96 @@ export function RadiologistShell() {
 
   if (!session || session.status !== 'authenticated') {
     return (
-      <div className="path-body shell-main wp-stack">
-        <Heading level={1}>Radiologist</Heading>
-        <Card>
-          <FormField label="Email">
-            {({ id }) => <Input id={id} value={email} onChange={(e) => setEmail(e.target.value)} />}
-          </FormField>
-          <Button onClick={() => void signInWithOtp(email, 'partner_applicant')}>Sign in with OTP</Button>
-        </Card>
-      </div>
+      <PortalWorkspaceShell
+        portalId="radiologist"
+        brandTitle="Radiologist workspace"
+        portalLabel="Radiologist"
+        nav={[
+          { id: 'worklist', label: 'Worklist' },
+          { id: 'verify', label: 'Verify queue' },
+          { id: 'inbox', label: 'Inbox' },
+          { id: 'support', label: 'Support' },
+        ]}
+        currentNav="worklist"
+        audience="customer"
+      >
+        {null}
+      </PortalWorkspaceShell>
     );
   }
 
   const token = getAccessToken() ?? '';
+  const pendingCount = cases.filter((row) => row.status === 'PENDING_VERIFY' || row.status === 'DRAFT').length;
 
   return (
-    <div className="path-body shell-main wp-stack">
-      <HeaderBar title="Radiologist worklist">
-        <Button size="sm" variant="secondary" onClick={() => void signOut()}>
-          Sign out
-        </Button>
-      </HeaderBar>
+    <PortalWorkspaceShell
+      portalId="radiologist"
+      brandTitle="Radiologist workspace"
+      portalLabel="Radiologist"
+      nav={[
+        { id: 'worklist', label: 'Worklist' },
+        { id: 'verify', label: 'Verify queue' },
+        { id: 'inbox', label: 'Inbox' },
+        { id: 'support', label: 'Support' },
+      ]}
+      currentNav={tab}
+      onNavSelect={(id) => setTab(id as Tab)}
+      audience="customer"
+      breadcrumbs={[
+        { label: 'World Pharma' },
+        { label: 'Radiologist' },
+        { label: RADIOLOGIST_TAB_LABELS[tab] },
+      ]}
+    >
+      <header className="wp-page-header">
+        <Heading level={1}>{RADIOLOGIST_TAB_LABELS[tab]}</Heading>
+        <p className="wp-page-intro">
+          Interpret acquired studies, draft findings, and send reports for a second-reader verify before publication.
+        </p>
+      </header>
+      <p className="wp-sandbox-banner" role="status">
+        SANDBOX diagnostic viewer for sandbox studies. Production PACS remains EXTERNAL_GATED. Report text and images stay separate.
+      </p>
+      <PortalKpiCards
+        items={[
+          { label: 'Open cases', value: cases.length },
+          { label: 'Needs action', value: pendingCount },
+          { label: 'Imaging centers', value: organizations.length },
+        ]}
+      />
       <Card>
-        <Text tone="secondary">
-          Sandbox interpretation and digital report publication (R8-D/E). No image viewer, no DICOM download.
-        </Text>
         <FormField label="Imaging center">
           {({ id }) => (
             <select id={id} className="wp-input" value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}>
               <option value="">Select imaging center</option>
               {organizations.map((org) => (
                 <option key={org.id} value={org.id}>
-                  {org.display_name}
+                  {org.display_name} ({org.country_code})
                 </option>
               ))}
             </select>
           )}
         </FormField>
-        <div className="wp-stack" style={{ flexDirection: 'row', gap: '0.5rem' }}>
-          <Button size="sm" variant={tab === 'worklist' ? 'primary' : 'secondary'} onClick={() => setTab('worklist')}>
-            Worklist
-          </Button>
-          <Button size="sm" variant={tab === 'verify' ? 'primary' : 'secondary'} onClick={() => setTab('verify')}>
-            Verify queue
-          </Button>
-        </div>
       </Card>
+      {tab === 'inbox' ? <PartnerInboxPanel token={token} audienceLabel="radiologists" /> : null}
+      {tab === 'support' ? <PartnerSupportPanel token={token} audienceLabel="radiologists" /> : null}
+      {tab === 'worklist' || tab === 'verify' ? (
+      <div className="wp-work-layout">
+      <div className="wp-stack">
       {viewState === 'loading' ? <LoadingState label="Loading radiology work…" /> : null}
-      {viewState === 'forbidden' ? <PermissionDeniedState /> : null}
+      {viewState === 'membership' ? (
+        <PermissionDeniedState
+          title="Imaging center membership required"
+          description={
+            errorMessage ??
+            'You must be an active staff member of this imaging center before interpreting or publishing reports.'
+          }
+          action={{ label: 'Retry worklist', onClick: () => void loadCases() }}
+        />
+      ) : null}
+      {viewState === 'forbidden' ? (
+        <PermissionDeniedState title="Radiology action not allowed" description={errorMessage ?? undefined} />
+      ) : null}
       {viewState === 'network' ? (
         <NetworkErrorState action={{ label: 'Retry', onClick: () => void loadCases() }} />
       ) : null}
@@ -226,40 +316,114 @@ export function RadiologistShell() {
           description="Cases appear after acquisition is complete."
         />
       ) : null}
-      {cases.map((row) => (
-        <Card key={row.id}>
-          <Text>
-            {row.accession_number} · {row.study_title} · {row.status}
-          </Text>
-          <Button size="sm" variant="secondary" onClick={() => void openCase(row)}>
-            Review
-          </Button>
-        </Card>
-      ))}
+      {cases.length ? (
+        <table className="wp-data-table">
+          <thead>
+            <tr>
+              <th>Accession</th>
+              <th>Study</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {cases.map((row) => (
+              <tr key={row.id} className={selected?.id === row.id ? 'is-selected' : undefined}>
+                <td>{row.accession_number}</td>
+                <td>{row.study_title}</td>
+                <td>
+                  <span className="wp-status">{clinicalReportStatusLabel(row.status)}</span>
+                </td>
+                <td>
+                  <Button size="sm" variant="secondary" onClick={() => void openCase(row)}>
+                    Open viewer
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      </div>
       {selected ? (
         <Card>
           <Heading level={2}>Study review</Heading>
-          <Button size="sm" variant="tertiary" onClick={() => setSelected(null)}>
+          <Button size="sm" variant="tertiary" onClick={() => { setSelected(null); setViewerOpen(false); setViewerSession(null); }}>
             Close
           </Button>
           <Text>
             {selected.study_title} · {selected.modality_code ?? 'modality n/a'} · {selected.body_region_code ?? 'region n/a'}
           </Text>
+          <div className="wp-toolbar">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy !== null}
+              onClick={() =>
+                run(`viewer-${selected.imaging_study_id}`, async () => {
+                  const t = getAccessToken();
+                  if (!t) return;
+                  setViewerLoadState('loading');
+                  setViewerOpen(true);
+                  try {
+                    const body = await fetchRadiologistViewerSession(
+                      t,
+                      organizationId,
+                      selected.imaging_study_id,
+                    );
+                    setViewerSession(body);
+                    setViewerLoadState(body.series?.length ? 'ready' : 'empty');
+                  } catch (err) {
+                    if (err instanceof RadiologistApiError && err.status === 403) {
+                      setViewerLoadState('forbidden');
+                    } else {
+                      setViewerLoadState('error');
+                    }
+                    throw err;
+                  }
+                })
+              }
+            >
+              {busy === `viewer-${selected.imaging_study_id}` ? 'Opening…' : 'View study'}
+            </Button>
+          </div>
+          {viewerOpen ? (
+            <ImagingDiagnosticViewerPanel
+              session={viewerSession}
+              loadState={viewerLoadState}
+              onRetry={() => setViewerOpen(false)}
+              fetchFrameBlob={async (seriesId, frameIndex) => {
+                const t = getAccessToken();
+                if (!t) throw new RadiologistApiError('session_expired', 401);
+                return fetchRadiologistViewerFrameBlob(
+                  t,
+                  organizationId,
+                  selected.imaging_study_id,
+                  seriesId,
+                  frameIndex,
+                );
+              }}
+            />
+          ) : null}
           {selected.acquisition ? (
             <Card>
-              <Text size="caption">Sandbox acquisition metadata (not a medical image)</Text>
+              <Text size="caption">Sandbox acquisition metadata</Text>
               <Text size="caption">Ref: {selected.acquisition.sandbox_object_ref ?? 'pending'}</Text>
               <Text size="caption">{selected.acquisition.note}</Text>
             </Card>
           ) : null}
-          <Text>Status: {selected.version?.status ?? 'n/a'}</Text>
+          <Text>Status: {clinicalReportStatusLabel(selected.version?.status)}</Text>
           {selected.version?.findings.map((line) => (
             <Text key={`${line.finding_code}-${line.finding_text}`} size="caption">
               {line.finding_code}: {line.finding_text}
             </Text>
           ))}
-          <Button size="sm" onClick={() => run(() => assignRadiologistCase(token, organizationId, selected.id))}>
-            Accept assignment
+          <Button
+            size="sm"
+            disabled={Boolean(selected.assigned_radiologist_id) || busy !== null}
+            onClick={() => run(`assign-${selected.id}`, () => assignRadiologistCase(token, organizationId, selected.id))}
+          >
+            {busy === `assign-${selected.id}` ? 'Assigning…' : selected.assigned_radiologist_id ? 'Assigned' : 'Accept assignment'}
           </Button>
           {selected.version?.status === 'DRAFT' ? (
             <>
@@ -271,8 +435,9 @@ export function RadiologistShell() {
               </FormField>
               <Button
                 size="sm"
+                disabled={busy !== null}
                 onClick={() =>
-                  run(() =>
+                  run(`save-${selected.id}`, () =>
                     saveRadiologistFindings(token, organizationId, selected.id, {
                       summary,
                       findings: [{ finding_code: 'IMPRESSION', finding_text: findingText || 'Pending review' }],
@@ -280,32 +445,47 @@ export function RadiologistShell() {
                   )
                 }
               >
-                Save draft
+                {busy === `save-${selected.id}` ? 'Saving…' : 'Save draft'}
               </Button>
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => run(() => submitRadiologistReport(token, organizationId, selected.id))}
+                disabled={busy !== null}
+                onClick={() => run(`submit-${selected.id}`, () => submitRadiologistReport(token, organizationId, selected.id))}
               >
-                Submit for verify
+                {busy === `submit-${selected.id}` ? 'Submitting…' : 'Submit for verify'}
               </Button>
             </>
           ) : null}
           {selected.version?.status === 'PENDING_VERIFY' ? (
-            <Button size="sm" onClick={() => run(() => verifyRadiologistReport(token, organizationId, selected.id))}>
-              Verify / sign-off
-            </Button>
+            <>
+              {canVerifySelected ? (
+                <Button
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => run(`verify-${selected.id}`, () => verifyRadiologistReport(token, organizationId, selected.id))}
+                >
+                  {busy === `verify-${selected.id}` ? 'Verifying…' : 'Verify / sign-off'}
+                </Button>
+              ) : (
+                <Text size="caption">
+                  Separation of duties: the author cannot verify this report. Sign in as a different radiologist
+                  (e.g. sandbox-radiologist-reviewer@dev.local) and use the Verify queue tab.
+                </Text>
+              )}
+            </>
           ) : null}
           {selected.version?.status === 'VERIFIED' ? (
             <Button
               size="sm"
+              disabled={busy !== null}
               onClick={() =>
-                run(() =>
+                run(`publish-${selected.id}`, () =>
                   publishRadiologistReport(token, organizationId, selected.id, `pub-${selected.id}-${Date.now()}`),
                 )
               }
             >
-              Publish report to customer
+              {busy === `publish-${selected.id}` ? 'Publishing…' : 'Publish report to customer'}
             </Button>
           ) : null}
           {selected.version?.status === 'PUBLISHED' ? (
@@ -317,11 +497,12 @@ export function RadiologistShell() {
               <Button
                 size="sm"
                 variant="secondary"
+                disabled={busy !== null || !amendReason.trim()}
                 onClick={() =>
-                  run(() => amendRadiologistReport(token, organizationId, selected.id, amendReason.trim()))
+                  run(`amend-${selected.id}`, () => amendRadiologistReport(token, organizationId, selected.id, amendReason.trim()))
                 }
               >
-                Start amendment
+                {busy === `amend-${selected.id}` ? 'Starting…' : 'Start amendment'}
               </Button>
             </>
           ) : null}
@@ -330,6 +511,8 @@ export function RadiologistShell() {
           ) : null}
         </Card>
       ) : null}
-    </div>
+      </div>
+      ) : null}
+    </PortalWorkspaceShell>
   );
 }

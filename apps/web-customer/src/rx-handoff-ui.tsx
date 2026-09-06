@@ -1,7 +1,5 @@
 'use client';
 
-import { Card, Text } from '@world-pharma/ui-kit/web';
-
 export function RxHandoffBanner({
   skipInventoryHold,
   dispensingCaseId,
@@ -13,14 +11,8 @@ export function RxHandoffBanner({
     return null;
   }
   return (
-    <Card>
-      <Text size="caption" tone="secondary">
-        Prescription order — medicines were reserved when the pharmacy dispensed your prescription. Checkout completes
-        your commercial order (inventory hold skipped).
-      </Text>
-      {dispensingCaseId ? (
-        <Text size="caption">{`Dispensing case: ${dispensingCaseId.slice(0, 8)}…`}</Text>
-      ) : null}
-    </Card>
+    <div className="mg-rx-notice" role="status">
+      Prescription order — your medicines are reserved. Complete checkout to confirm delivery.
+    </div>
   );
 }

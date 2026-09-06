@@ -128,8 +128,9 @@ export function LabCatalogPanel({
   return (
     <div className="wp-stack">
       <Text tone="secondary">
-        LAB_TEST items use the shared catalog kernel with LAB_OWNED offers. Customers book and pay in
-        sandbox from the customer app. Collection, CoC, and pathology remain OFF.
+        LAB_TEST items use the shared catalog kernel with LAB_OWNED offers. Published tests appear on the customer store.
+        Run the live pipeline from Bookings → Collections → Transport → Accession → Processing → Pathology. Verify reports
+        in the pathologist portal when a case is assigned.
       </Text>
       <Card>
         <Heading level={2}>Create lab offering</Heading>

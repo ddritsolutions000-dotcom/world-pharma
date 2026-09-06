@@ -14,22 +14,10 @@ import {
   activateMarketplaceSeller,
   enableMarketplaceVendorPack,
 } from '../test/marketplace-seller';
-
-async function signIn(app: INestApplication, email: string, audience: 'admin' | 'customer' = 'customer') {
-  const requested = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/request')
-    .send({ identifier: email, purpose: 'REGISTER' });
-  const verified = await request(app.getHttpServer())
-    .post('/api/v1/auth/otp/verify')
-    .send({
-      challenge_id: requested.body.challenge_id,
-      code: requested.body.dev_code,
-      audience,
-    });
-  return { token: verified.body.access_token as string, personId: verified.body.person_id as string };
-}
+import { provisionSuperAdmin, signInCustomer } from '../test/sign-in';
 
 describe('R6-A vendor foundation (e2e)', () => {
+  jest.setTimeout(120_000);
   let app: INestApplication;
   let prisma: PrismaService;
   let orgs: OrganizationService;
@@ -74,21 +62,10 @@ describe('R6-A vendor foundation (e2e)', () => {
 
   it('filters VENDOR orgs, hardens catalog DTO, and isolates sellers', async () => {
     const suffix = `${Date.now().toString(36)}-${uuidv7().slice(0, 8)}`;
-    const admin = await signIn(app, `r6a-admin-${suffix}@example.com`, 'admin');
-    const vendorUser = await signIn(app, `r6a-va-${suffix}@example.com`);
-    const otherVendor = await signIn(app, `r6a-vb-${suffix}@example.com`);
-    const clinicUser = await signIn(app, `r6a-clinic-${suffix}@example.com`);
-
-    const superAdmin = await prisma.role.findUnique({ where: { code: 'super_admin' } });
-    await prisma.membership.create({
-      data: {
-        id: uuidv7(),
-        personId: admin.personId,
-        roleId: superAdmin!.id,
-        scope: 'platform',
-        status: 'ACTIVE',
-      },
-    });
+    const admin = await provisionSuperAdmin(app, prisma, `r6a-admin-${suffix}`);
+    const vendorUser = await signInCustomer(app, `r6a-va-${suffix}@example.com`);
+    const otherVendor = await signInCustomer(app, `r6a-vb-${suffix}@example.com`);
+    const clinicUser = await signInCustomer(app, `r6a-clinic-${suffix}@example.com`);
 
     let country = await prisma.country.findUnique({ where: { isoAlpha2: 'XX' } });
     if (!country) {

@@ -4,9 +4,11 @@ const base = () => apiBaseUrl(typeof process === 'undefined' ? {} : process.env)
 
 export class PathologistApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -20,7 +22,11 @@ async function call<T>(path: string, token: string, init: RequestInit = {}): Pro
   const res = await fetch(`${base()}${path}`, { ...init, headers });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new PathologistApiError((body as { detail?: string }).detail ?? 'request_failed', res.status);
+    throw new PathologistApiError(
+      (body as { detail?: string }).detail ?? 'request_failed',
+      res.status,
+      (body as { code?: string }).code,
+    );
   }
   return body as T;
 }

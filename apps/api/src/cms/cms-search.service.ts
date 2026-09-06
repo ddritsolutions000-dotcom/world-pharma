@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CmsContentType } from '@prisma/client';
+import { SITE_CHROME_SLUGS } from '@world-pharma/shared/site-chrome';
 import { uuidv7 } from '@world-pharma/shared';
 import { PrismaService } from '../app/prisma.service';
 import { Errors } from '../common/problem';
@@ -77,6 +78,8 @@ export class CmsSearchService {
         countryId,
         locale,
         published: true,
+        contentType: { not: CmsContentType.PACK_STRING },
+        slug: { notIn: [...SITE_CHROME_SLUGS] },
         OR: [
           { title: { contains: q, mode: 'insensitive' } },
           { body: { contains: q, mode: 'insensitive' } },
@@ -108,7 +111,8 @@ export class CmsSearchService {
         published: true,
         contentType: filters?.contentType,
         categorySlug: filters?.categorySlug,
-        NOT: { contentType: CmsContentType.BANNER },
+        slug: { notIn: [...SITE_CHROME_SLUGS] },
+        NOT: [{ contentType: CmsContentType.BANNER }, { contentType: CmsContentType.PACK_STRING }],
       },
       orderBy: [{ categorySlug: 'asc' }, { title: 'asc' }, { slug: 'asc' }],
       select: {
@@ -128,7 +132,12 @@ export class CmsSearchService {
       include: {
         contentItem: {
           select: {
+            title: true,
             summary: true,
+            body: true,
+            status: true,
+            publishedVersion: true,
+            updatedAt: true,
             publications: {
               orderBy: { publicationVersion: 'desc' },
               take: 1,
@@ -144,26 +153,29 @@ export class CmsSearchService {
         },
       },
     });
-    if (!row?.contentItem.publications[0]) {
+    if (!row) {
       return null;
     }
     const pub = row.contentItem.publications[0];
+    const title = pub?.title ?? row.contentItem.title;
+    const summary = pub?.summary ?? row.contentItem.summary;
+    const body = pub?.body ?? row.contentItem.body;
     return {
       id: row.contentItemId,
       slug: row.slug,
-      title: pub.title,
-      summary: pub.summary,
-      body: pub.body,
+      title,
+      summary,
+      body,
       content_type: row.contentType,
       category_slug: row.categorySlug,
       locale,
-      version: pub.publicationVersion,
-      published_at: pub.publishedAt.toISOString(),
+      version: pub?.publicationVersion ?? row.contentItem.publishedVersion,
+      published_at: (pub?.publishedAt ?? row.contentItem.updatedAt).toISOString(),
     };
   }
 
   async listBanners(countryId: string, locale: string) {
-    return this.prisma.cmsContentSearchDocument.findMany({
+    const rows = await this.prisma.cmsContentSearchDocument.findMany({
       where: {
         countryId,
         locale,
@@ -178,6 +190,27 @@ export class CmsSearchService {
         body: true,
       },
     });
+    const ids = rows.map((row) => row.contentItemId);
+    const assets = ids.length
+      ? await this.prisma.cmsContentAsset.findMany({
+          where: { contentItemId: { in: ids } },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, contentItemId: true },
+        })
+      : [];
+    const latest = new Map<string, string>();
+    for (const asset of assets) {
+      if (asset.contentItemId && !latest.has(asset.contentItemId)) {
+        latest.set(asset.contentItemId, asset.id);
+      }
+    }
+    return rows.map((row) => ({
+      contentItemId: row.contentItemId,
+      slug: row.slug,
+      title: row.title,
+      body: row.body,
+      asset_id: latest.get(row.contentItemId) ?? null,
+    }));
   }
 
   async listCategories(countryId: string, locale: string) {
